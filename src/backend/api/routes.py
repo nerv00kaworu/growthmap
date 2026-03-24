@@ -200,33 +200,63 @@ async def get_children(node_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/nodes/{node_id}/subtree")
 async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
-    """遞迴取得子樹（BFS）"""
+    """遞迴取得子樹（bulk-loaded to avoid per-node query fan-out）"""
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
 
-    async def build_tree(nid: str, depth: int = 0) -> dict:
-        n = await db.get(Node, nid)
-        result = await db.execute(
-            select(Edge.to_node_id).where(
-                Edge.from_node_id == nid,
-                Edge.relation_type == "child_of"
-            )
+    edge_rows = await db.execute(
+        select(Edge.from_node_id, Edge.to_node_id).where(
+            Edge.project_id == node.project_id,
+            Edge.relation_type == "child_of"
         )
-        child_ids = result.scalars().all()
-        children = []
-        if depth < 10:  # 防無限遞迴
-            for cid in child_ids:
-                children.append(await build_tree(cid, depth + 1))
+    )
+    child_map: dict[str, list[str]] = {}
+    for from_node_id, to_node_id in edge_rows.all():
+        from_id = str(from_node_id)
+        to_id = str(to_node_id)
+        child_map.setdefault(from_id, []).append(to_id)
 
-        # Get content blocks
-        blocks_result = await db.execute(
-            select(ContentBlock).where(ContentBlock.node_id == nid).order_by(ContentBlock.order_index)
-        )
-        blocks = [
-            {"id": b.id, "block_type": b.block_type, "content": b.content, "order_index": b.order_index}
-            for b in blocks_result.scalars().all()
-        ]
+    subtree_ids = {node_id}
+    frontier = [node_id]
+    depth = 0
+    while frontier and depth < 10:
+        next_frontier: list[str] = []
+        for current_id in frontier:
+            for child_id in child_map.get(current_id, []):
+                if child_id not in subtree_ids:
+                    subtree_ids.add(child_id)
+                    next_frontier.append(child_id)
+        frontier = next_frontier
+        depth += 1
+
+    nodes_result = await db.execute(
+        select(Node).where(Node.id.in_(subtree_ids))
+    )
+    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
+
+    blocks_result = await db.execute(
+        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
+    )
+    blocks_by_node_id: dict[str, list[dict]] = {}
+    for block in blocks_result.scalars().all():
+        block_node_id = str(block.node_id)
+        blocks_by_node_id.setdefault(block_node_id, []).append({
+            "id": block.id,
+            "block_type": block.block_type,
+            "content": block.content,
+            "order_index": block.order_index,
+        })
+
+    def build_tree(nid: str, current_depth: int = 0, ancestor_path: list[dict[str, str]] | None = None) -> dict:
+        n = nodes_by_id[nid]
+        current_ancestor_path = list(ancestor_path or [])
+        children = []
+        if current_depth < 10:
+            next_ancestor_path = current_ancestor_path + [{"id": str(n.id), "title": n.title, "node_type": n.node_type}]
+            for child_id in child_map.get(nid, []):
+                if child_id in nodes_by_id:
+                    children.append(build_tree(child_id, current_depth + 1, next_ancestor_path))
 
         return {
             "id": str(n.id),
@@ -237,13 +267,14 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
             "maturity": n.maturity,
             "tags": n.tags or [],
             "meta": {},
-            "content_blocks": blocks,
+            "content_blocks": blocks_by_node_id.get(nid, []),
+            "ancestor_path": current_ancestor_path,
             "created_at": n.created_at.isoformat() if n.created_at else "",
             "updated_at": n.updated_at.isoformat() if n.updated_at else "",
             "children": children,
         }
 
-    return await build_tree(node_id)
+    return build_tree(node_id)
 
 
 # ─── Edges ───
