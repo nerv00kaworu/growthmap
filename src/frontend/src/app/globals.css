@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #141414;
+  --bg-panel: #1a1a1a;
+  --border: #2a2a2a;
+  --text-primary: #e5e5e5;
+  --text-secondary: #888;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --seed: #a78bfa;
+  --rough: #f59e0b;
+  --developing: #3b82f6;
+  --stable: #10b981;
+  --finalized: #6366f1;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* React Flow overrides */
+.react-flow__background {
+  background: var(--bg-primary) !important;
+}
+.react-flow__minimap {
+  background: var(--bg-secondary) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+}
+.react-flow__controls {
+  border: 1px solid var(--border) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+.react-flow__controls button {
+  background: var(--bg-panel) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border) !important;
+}
+.react-flow__controls button:hover {
+  background: var(--bg-secondary) !important;
+}

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+src/frontend/node_modules/
+src/frontend/.next/
+src/frontend/out/
+
+# Python
+src/backend/venv/
+src/backend/__pycache__/
+src/backend/**/__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+*.sqlite3
+
+# Env & secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
