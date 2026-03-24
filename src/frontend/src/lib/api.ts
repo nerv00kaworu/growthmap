@@ -14,7 +14,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-import type { Project, GNode } from "./types";
+import type { Project, GNode, GrowthMode } from "./types";
 
 export const api = {
   // Projects
@@ -47,13 +47,13 @@ export const api = {
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/nodes/${nodeId}/history`),
 
   // AI operations
-  expand: (nodeId: string, instruction?: string, count?: number) =>
+  expand: (nodeId: string, instruction?: string, count?: number, mode: GrowthMode = "explore") =>
     request<{
       suggestions: { title: string; summary: string; node_type: string }[];
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3 }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode }),
     }),
 
   deepen: (nodeId: string, instruction?: string) =>

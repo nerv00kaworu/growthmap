@@ -12,7 +12,14 @@ export interface GNode {
   content_blocks: ContentBlock[];
   created_at: string;
   updated_at: string;
+  ancestor_path?: LineageNode[];
   children?: GNode[];
+}
+
+export interface LineageNode {
+  id: string;
+  title: string;
+  node_type?: string;
 }
 
 export interface ContentBlock {
@@ -44,6 +51,20 @@ export interface Project {
 }
 
 export type Maturity = "seed" | "rough" | "developing" | "stable" | "finalized";
+
+export type GrowthMode = "focused" | "explore" | "challenge";
+
+export const GROWTH_MODE_LABELS: Record<GrowthMode, string> = {
+  focused: "聚焦主線",
+  explore: "探索延伸",
+  challenge: "挑戰假設",
+};
+
+export const GROWTH_MODE_HELP: Record<GrowthMode, string> = {
+  focused: "補齊當前主線缺口，避免一次跳太遠。",
+  explore: "沿著主題向相鄰空間擴張，減少結果過早定型。",
+  challenge: "主動提出反例、風險與替代方向，打破僵硬分支。",
+};
 
 export const MATURITY_COLORS: Record<Maturity, string> = {
   seed: "#a78bfa",
