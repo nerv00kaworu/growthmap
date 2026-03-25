@@ -3,8 +3,8 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from api.routes import auto_advance_maturity
 from models.models import ContentBlock, Edge, Node, Project
+from services.node_service import auto_advance_maturity
 from tests.factories import NodeFactory, ProjectFactory
 
 
@@ -107,7 +107,7 @@ class TestAutoAdvanceMaturity:
 
         monkeypatch.setattr(db_session, "execute", execute_with_concurrent_finalize)
 
-        await auto_advance_maturity(root_id, db_session)
+        await auto_advance_maturity(db_session, root_id)
         await db_session.commit()
 
         refreshed_root = await db_session.get(Node, root_id)
