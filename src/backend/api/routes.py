@@ -1,5 +1,6 @@
 """Project & Node API routes"""
 import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,11 @@ from models.schemas import (
 )
 
 router = APIRouter()
+
+
+def touch_project(project: Project | None):
+    if project:
+        project.updated_at = datetime.now(timezone.utc)
 
 
 # ─── Projects ───
@@ -132,6 +138,7 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         action_type="create_node",
         payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
     ))
+    touch_project(project)
     # Auto-advance parent maturity
     if data.parent_id:
         await auto_advance_maturity(data.parent_id, db)
@@ -166,6 +173,8 @@ async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends
         action_type="update_node",
         payload=data.model_dump(exclude_unset=True),
     ))
+    project = await db.get(Project, node.project_id)
+    touch_project(project)
     await db.commit()
     await db.refresh(node)
     return node
@@ -187,6 +196,7 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
         )
     )
     await db.delete(node)
+    touch_project(project)
     await db.commit()
 
 
