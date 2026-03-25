@@ -458,20 +458,19 @@ async def auto_advance_maturity(node_id: str, db: AsyncSession):
     if not node or node.maturity == "finalized":
         return
 
-    # Count content blocks
-    result = await db.execute(
-        select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == node_id)
-    )
-    block_count = result.scalar() or 0
-
-    # Count children
-    result = await db.execute(
-        select(func.count()).select_from(Edge).where(
-            Edge.from_node_id == node_id,
-            Edge.relation_type == "child_of"
+    counts = (
+        await db.execute(
+            select(
+                select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == node_id).scalar_subquery(),
+                select(func.count()).select_from(Edge).where(
+                    Edge.from_node_id == node_id,
+                    Edge.relation_type == "child_of"
+                ).scalar_subquery(),
+            )
         )
-    )
-    child_count = result.scalar() or 0
+    ).one()
+    block_count = counts[0] or 0
+    child_count = counts[1] or 0
 
     has_summary = bool(node.summary and len(node.summary.strip()) > 10)
     current = node.maturity
