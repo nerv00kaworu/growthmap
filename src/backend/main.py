@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 from db.database import engine, Base
 from api.routes import router
 from ai.routes import router as ai_router
+from api.suggestion_routes import router as suggestion_router
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend" / "out"
 
@@ -38,6 +39,7 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(suggestion_router)
 
 
 @app.get("/api")
