@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Optional, Any
 from pydantic import BaseModel, Field
 
+from models.enums import Maturity, NodeStatus, NodeType, RelationType
+
 
 # === Project ===
 
@@ -41,7 +43,7 @@ class ProjectOut(BaseModel):
 class NodeCreate(BaseModel):
     title: str
     summary: str = ""
-    node_type: str = "idea"
+    node_type: NodeType = NodeType.IDEA
     parent_id: Optional[str] = None  # 自動建 child_of edge
     description: str = ""
     tags: list[str] = []
@@ -50,9 +52,9 @@ class NodeCreate(BaseModel):
 class NodeUpdate(BaseModel):
     title: Optional[str] = None
     summary: Optional[str] = None
-    node_type: Optional[str] = None
-    status: Optional[str] = None
-    maturity: Optional[str] = None
+    node_type: Optional[NodeType] = None
+    status: Optional[NodeStatus] = None
+    maturity: Optional[Maturity] = None
     priority: Optional[int] = None
     confidence: Optional[float] = None
     description: Optional[str] = None
@@ -71,9 +73,9 @@ class NodeOut(BaseModel):
     project_id: str
     title: str
     summary: str
-    node_type: str
-    status: str
-    maturity: str
+    node_type: NodeType
+    status: NodeStatus
+    maturity: Maturity
     priority: int
     confidence: float
     description: str
@@ -97,9 +99,9 @@ class NodeBrief(BaseModel):
     """輕量版，用於樹狀列表"""
     id: str
     title: str
-    node_type: str
-    status: str
-    maturity: str
+    node_type: NodeType
+    status: NodeStatus
+    maturity: Maturity
     summary: str
 
     model_config = {"from_attributes": True}
@@ -110,7 +112,7 @@ class NodeBrief(BaseModel):
 class EdgeCreate(BaseModel):
     from_node_id: str
     to_node_id: str
-    relation_type: str = "child_of"
+    relation_type: RelationType = RelationType.CHILD_OF
     weight: float = 1.0
     note: str = ""
     is_mainline: bool = False
@@ -121,7 +123,7 @@ class EdgeOut(BaseModel):
     project_id: str
     from_node_id: str
     to_node_id: str
-    relation_type: str
+    relation_type: RelationType
     weight: float
     note: str
     is_mainline: bool
