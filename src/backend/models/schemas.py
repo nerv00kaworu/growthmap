@@ -157,6 +157,36 @@ class ContentBlockOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# === Mainline / Branch Governance ===
+
+class NodeMoveRequest(BaseModel):
+    new_parent_id: str
+
+
+class AncestorNode(BaseModel):
+    id: str
+    title: str
+    node_type: str
+    maturity: str
+    is_mainline: bool  # whether edge to this node is mainline
+
+    model_config = {"from_attributes": True}
+
+
+class MainlinePathOut(BaseModel):
+    """Ordered list of nodes along the mainline from root to deepest leaf."""
+    path: list[AncestorNode]
+
+
+class BranchInfo(BaseModel):
+    """A node that has branching children (more than one child_of edge)."""
+    node_id: str
+    title: str
+    mainline_child_id: Optional[str]
+    branch_child_ids: list[str]
+    total_children: int
+
+
 # === Suggestion ===
 
 class SuggestionOut(BaseModel):
