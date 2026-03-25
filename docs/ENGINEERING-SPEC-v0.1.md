@@ -363,12 +363,10 @@ POST   /api/agent-sessions/:id/steer    修正 agent 方向
 POST   /api/agent-sessions/:id/stop     停止 session
 ```
 
-### Providers
+### Providers *(暫未實作)*
 ```
-GET    /api/providers                   列出 providers
-POST   /api/providers                   新增 provider
-PATCH  /api/providers/:id               更新 provider
-DELETE /api/providers/:id               刪除 provider
+# 小提醒：providers/ 目前是空模組，僅保留未來擴充接口
+# API 尚未提供這組路由
 ```
 
 ### Action Logs
@@ -379,56 +377,10 @@ GET    /api/nodes/:nid/logs             查看節點操作歷史
 
 ---
 
-## 4. Provider Interface
+## 4. Provider Interface *(尚未實作)*
 
 ```python
-# backend/providers/base.py
-
-from abc import ABC, abstractmethod
-from typing import Any
-
-class CognitionProvider(ABC):
-    """所有認知來源的統一介面"""
-
-    @abstractmethod
-    def can_handle(self, action_type: str) -> bool:
-        """是否支援此 action"""
-        ...
-
-    @abstractmethod
-    def estimate_cost(self, action_type: str, context_size: int) -> float:
-        """估算成本"""
-        ...
-
-    @abstractmethod
-    async def run_action(self, request: ActionRequest) -> ActionResult:
-        """執行 action"""
-        ...
-
-    @abstractmethod
-    def normalize_output(self, raw: Any) -> dict:
-        """統一輸出格式"""
-        ...
-
-
-class ActionRequest:
-    action_type: str           # expand_node, deepen_node, etc.
-    target_node: dict          # 當前節點
-    ancestor_chain: list[dict] # 祖先路徑
-    siblings: list[dict]       # 同層節點
-    related_nodes: list[dict]  # 關聯節點
-    project_summary: str       # 專案摘要
-    project_goal: str          # 專案目標
-    mode: str                  # divergent / convergent / organize
-    constraints: list[str]     # 限制條件
-    user_instructions: str     # 使用者附加指令
-    desired_count: int         # 期望候選數量
-
-
-class ActionResult:
-    suggestions: list[dict]    # 候選結果
-    metadata: dict             # provider 資訊、cost、model
-    open_questions: list[str]  # 未決問題
+# backend/providers/base.py 目前尚未建立，此段為設計藍圖
 ```
 
 ---
@@ -477,49 +429,10 @@ class ActionResult:
 
 ---
 
-## 6. Context Builder 邏輯
+## 6. Context Builder 邏輯 *(尚未實作)*
 
 ```python
-# backend/context/builder.py
-
-async def build_context(node_id: str, action_type: str) -> ActionRequest:
-    """
-    組裝給 provider 的上下文包
-    原則：只給局部，不給整棵樹
-    """
-    node = await get_node(node_id)
-    project = await get_project(node.project_id)
-
-    # 祖先鏈（從 root 到 parent）
-    ancestors = await get_ancestor_chain(node_id, max_depth=5)
-
-    # 同層節點
-    siblings = await get_siblings(node_id)
-
-    # 子節點摘要
-    children = await get_children_summary(node_id)
-
-    # 關聯節點
-    related = await get_related_nodes(node_id, max_count=10)
-
-    # 計算 token budget
-    # 祖先鏈只給 title+summary
-    # 同層只給 title
-    # 關聯只給 title+relation_type
-
-    return ActionRequest(
-        action_type=action_type,
-        target_node=node.to_context_dict(),
-        ancestor_chain=[a.to_brief_dict() for a in ancestors],
-        siblings=[s.to_brief_dict() for s in siblings],
-        related_nodes=[r.to_brief_dict() for r in related],
-        project_summary=project.description,
-        project_goal=project.goal,
-        mode=infer_mode(node),        # 根據 maturity 推斷
-        constraints=extract_constraints(node, ancestors),
-        user_instructions='',
-        desired_count=5
-    )
+# backend/context/builder.py 目前尚未建立，此段為設計藍圖
 ```
 
 ---

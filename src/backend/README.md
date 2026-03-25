@@ -11,6 +11,6 @@ uvicorn main:app --reload --port 8100
 
 ## Stack
 - FastAPI
-- SQLAlchemy + asyncpg
-- PostgreSQL
+- SQLAlchemy + aiosqlite
+- SQLite
 - Pydantic v2

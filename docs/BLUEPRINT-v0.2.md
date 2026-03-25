@@ -18,8 +18,8 @@
 ## 技術選型
 - Frontend: Next.js + React Flow + Zustand
 - Backend: FastAPI (Python)
-- DB: PostgreSQL + JSONB
-- Provider: 可插拔認知層
+- DB: SQLite + JSON (aiosqlite)
+- Provider: 可插拔認知層（藍圖中定義，實作待補）
 
 ## 開發順序
 - Phase 1: 核心骨架 (Project/Node/Edge + GUI + CRUD)
