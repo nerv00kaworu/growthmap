@@ -19,6 +19,8 @@ source venv/bin/activate 2>/dev/null || python3 -m venv venv && source venv/bin/
 export LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1}"
 export LLM_API_KEY="${LLM_API_KEY:-your-api-key}"
 export LLM_MODEL="${LLM_MODEL:-gpt-5-codex-mini}"
+export DATABASE_URL="${DATABASE_URL:-sqlite+aiosqlite:///$BACKEND/growthmap.db}"
 
 echo "🌳 Starting GrowthMap on :8100"
+echo "🗄️ DATABASE_URL=$DATABASE_URL"
 exec uvicorn main:app --host 0.0.0.0 --port 8100

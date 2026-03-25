@@ -1,5 +1,6 @@
 """GrowthMap DB connection"""
 import os
+from pathlib import Path
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
@@ -7,7 +8,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./growthmap.db")
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "growthmap.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_PATH}")
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 
