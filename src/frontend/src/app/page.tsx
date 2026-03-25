@@ -43,6 +43,7 @@ export default function HomePage() {
         {/* Project selector */}
         <select
           value={currentProject?.id || ""}
+          aria-label="選擇專案"
           onChange={(e) => {
             const p = projects.find((p) => p.id === e.target.value);
             if (p) selectProject(p);
@@ -57,6 +58,8 @@ export default function HomePage() {
 
         <button
           type="button"
+          aria-controls="new-project-panel"
+          aria-expanded={showNewProject}
           onClick={() => setShowNewProject(!showNewProject)}
           className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200"
         >
@@ -73,7 +76,7 @@ export default function HomePage() {
 
       {/* New project modal */}
       {showNewProject && (
-        <div className="surface-panel border-x-0 border-t-0 rounded-none p-4 flex gap-3 items-end">
+        <div id="new-project-panel" className="surface-panel border-x-0 border-t-0 rounded-none p-4 flex gap-3 items-end">
           <div className="flex-1">
             <div className="eyebrow-label">專案名稱</div>
             <input
