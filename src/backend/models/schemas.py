@@ -157,6 +157,34 @@ class ContentBlockOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# === Governance ===
+
+class NodeMoveRequest(BaseModel):
+    new_parent_id: str
+
+
+class AncestorNode(BaseModel):
+    id: str
+    title: str
+    node_type: str
+    maturity: str
+    is_mainline: bool
+
+    model_config = {"from_attributes": True}
+
+
+class MainlinePathOut(BaseModel):
+    path: list[AncestorNode]
+
+
+class BranchInfo(BaseModel):
+    node_id: str
+    title: str
+    mainline_child_id: Optional[str]
+    branch_child_ids: list[str]
+    total_children: int
+
+
 # === Suggestion ===
 
 class SuggestionOut(BaseModel):
