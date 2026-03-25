@@ -1,5 +1,8 @@
 # GrowthMap Blueprint v0.2
 
+> Status note: this file is a **product blueprint**, not a statement of what the current MVP already ships.
+> The current implementation is still centered on a SQLite-backed tree editor with AI expand/deepen helpers.
+
 ## 定位
 一個 GUI 可控、AI 可接手、provider 可插拔的專案生長平台。
 
@@ -19,10 +22,15 @@
 - Frontend: Next.js + React Flow + Zustand
 - Backend: FastAPI (Python)
 - DB: SQLite + JSON (aiosqlite)
-- Provider: 可插拔認知層（藍圖中定義，實作待補）
+- Provider: 可插拔認知層（藍圖中定義，**目前 MVP 僅支援 env-based OpenAI-compatible 單一 provider**）
 
 ## 開發順序
 - Phase 1: 核心骨架 (Project/Node/Edge + GUI + CRUD)
 - Phase 2: AI 生長 (Suggestion + expand/deepen + provider)
 - Phase 3: 共構能力 (agent handoff + session + history)
 - Phase 4: 智能路由 (cost routing + fallback)
+
+## 與目前 MVP 的落差
+
+- 已實作：Project / Node / `child_of` Edge / GUI / CRUD / AI expand / AI deepen / history / export
+- 未實作：provider 管理、agent session 工作流、多關係圖編輯、mainline / branch discipline
