@@ -5,19 +5,12 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
 import { useStore } from "@/stores/useStore";
+import { useHeaderData, useHeaderActions } from "@/stores/selectors";
 
 export default function HomePage() {
-  const loadProjects = useStore((s) => s.loadProjects);
-  const projects = useStore((s) => s.projects);
-  const currentProject = useStore((s) => s.currentProject);
-  const selectProject = useStore((s) => s.selectProject);
-  const createProject = useStore((s) => s.createProject);
+  const { projects, currentProject, loading, error, errorStatus, errorRetryable } = useHeaderData();
+  const { loadProjects, selectProject, createProject, dismissError } = useHeaderActions();
   const selectedNode = useStore((s) => s.selectedNode);
-  const loading = useStore((s) => s.loading);
-  const error = useStore((s) => s.error);
-  const errorStatus = useStore((s) => s.errorStatus);
-  const errorRetryable = useStore((s) => s.errorRetryable);
-  const dismissError = useStore((s) => s.dismissError);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");

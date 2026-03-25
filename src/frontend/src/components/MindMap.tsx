@@ -15,7 +15,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { GrowthNode } from "./GrowthNode";
 import type { GNode, Maturity } from "@/lib/types";
-import { useStore } from "@/stores/useStore";
+import { useMindMapData } from "@/stores/selectors";
 
 const nodeTypes = { growth: GrowthNode };
 
@@ -84,9 +84,7 @@ function treeToFlow(
 }
 
 export function MindMap() {
-  const rootNode = useStore((s) => s.rootNode);
-  const selectedNodeId = useStore((s) => s.selectedNodeId);
-  const selectNode = useStore((s) => s.selectNode);
+  const { rootNode, selectedNodeId, selectNode } = useMindMapData();
 
   const { flowNodes, flowEdges } = useMemo(() => {
     if (!rootNode) return { flowNodes: [], flowEdges: [] };

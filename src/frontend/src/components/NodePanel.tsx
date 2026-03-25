@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useStore } from "@/stores/useStore";
+import { useNodePanelData, useNodePanelActions } from "@/stores/selectors";
 import { NodeHeader } from "./NodePanel/NodeHeader";
 import { NodeContent } from "./NodePanel/NodeContent";
 import { NodeAI } from "./NodePanel/NodeAI";
@@ -34,22 +34,12 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
 };
 
 export function NodePanel() {
-  const selectedNode = useStore((s) => s.selectedNode);
-  const rootNode = useStore((s) => s.rootNode);
-  const addChildNode = useStore((s) => s.addChildNode);
-  const updateNode = useStore((s) => s.updateNode);
-  const deleteNode = useStore((s) => s.deleteNode);
-  const promoteMainlineChild = useStore((s) => s.promoteMainlineChild);
-  const expandNode = useStore((s) => s.expandNode);
-  const deepenNode = useStore((s) => s.deepenNode);
-  const acceptSuggestion = useStore((s) => s.acceptSuggestion);
-  const acceptAllSuggestions = useStore((s) => s.acceptAllSuggestions);
-  const acceptDeepen = useStore((s) => s.acceptDeepen);
-  const dismissAI = useStore((s) => s.dismissAI);
-  const expandSuggestions = useStore((s) => s.expandSuggestions);
-  const deepenResult = useStore((s) => s.deepenResult);
-  const aiLoading = useStore((s) => s.aiLoading);
-  const refreshTree = useStore((s) => s.refreshTree);
+  const { selectedNode, rootNode, expandSuggestions, deepenResult, aiLoading } = useNodePanelData();
+  const {
+    addChildNode, updateNode, deleteNode, promoteMainlineChild,
+    expandNode, deepenNode, acceptSuggestion, acceptAllSuggestions,
+    acceptDeepen, dismissAI, refreshTree,
+  } = useNodePanelActions();
 
   const [newChildTitle, setNewChildTitle] = useState("");
   const [editing, setEditing] = useState(false);
