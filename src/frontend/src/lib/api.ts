@@ -1,7 +1,15 @@
+import { createApiError } from "./errors";
+import type { GNode, GrowthMode, Project } from "./types";
+
 // API client for GrowthMap backend
 const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+function buildApiErrorMessage(status: number, text: string, statusText: string): string {
+  const detail = text.trim() || statusText.trim() || "Request failed";
+  return `API ${status}: ${detail}`;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
@@ -15,21 +23,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     });
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(`API ${res.status}: ${text}`);
+      throw createApiError(res.status, buildApiErrorMessage(res.status, text, res.statusText));
     }
     if (res.status === 204) return undefined as T;
     return res.json();
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
-      throw new Error(`API request to ${path} timed out after ${DEFAULT_TIMEOUT_MS / 1000}s`);
+      throw createApiError(408, `API request to ${path} timed out after ${DEFAULT_TIMEOUT_MS / 1000}s`);
     }
     throw err;
   } finally {
     clearTimeout(timeoutId);
   }
 }
-
-import type { Project, GNode, GrowthMode } from "./types";
 
 export const api = {
   // Projects

@@ -1,6 +1,14 @@
 import { create } from "zustand";
-import type { GNode, GrowthMode, Project } from "@/lib/types";
 import { api } from "@/lib/api";
+import { getErrorDetails } from "@/lib/errors";
+import type { GNode, GrowthMode, Project } from "@/lib/types";
+
+interface ActionLoadingState {
+  loadProjects: boolean;
+  selectProject: boolean;
+  expandNode: boolean;
+  deepenNode: boolean;
+}
 
 interface GrowthMapStore {
   // State
@@ -11,11 +19,15 @@ interface GrowthMapStore {
   selectedNode: GNode | null;
   loading: boolean;
   error: string | null;
+  errorStatus: number | null;
+  errorRetryable: boolean;
+  actionLoading: ActionLoadingState;
 
   // Actions
   loadProjects: () => Promise<void>;
   selectProject: (project: Project) => Promise<void>;
   selectNode: (nodeId: string | null) => void;
+  dismissError: () => void;
   createProject: (name: string, description?: string, goal?: string) => Promise<void>;
   addChildNode: (parentId: string, title: string, nodeType?: string) => Promise<void>;
   updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
@@ -94,6 +106,23 @@ function markMainlineChild(root: GNode, parentId: string, childId: string): GNod
   };
 }
 
+function clearErrorState() {
+  return {
+    error: null,
+    errorStatus: null,
+    errorRetryable: false,
+  };
+}
+
+function getStoreErrorState(error: unknown) {
+  const details = getErrorDetails(error);
+  return {
+    error: details.message,
+    errorStatus: details.status,
+    errorRetryable: details.retryable,
+  };
+}
+
 export const useStore = create<GrowthMapStore>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -102,27 +131,65 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   selectedNode: null,
   loading: false,
   error: null,
+  errorStatus: null,
+  errorRetryable: false,
+  actionLoading: {
+    loadProjects: false,
+    selectProject: false,
+    expandNode: false,
+    deepenNode: false,
+  },
   expandSuggestions: null,
   expandTargetNodeId: null,
   deepenResult: null,
   aiLoading: false,
 
   loadProjects: async () => {
+    set((state) => ({
+      ...clearErrorState(),
+      loading: true,
+      actionLoading: { ...state.actionLoading, loadProjects: true },
+    }));
     try {
       const projects = await api.listProjects();
-      set({ projects });
-    } catch (e: unknown) {
-      set({ error: (e as Error).message });
+      set((state) => ({
+        projects,
+        ...clearErrorState(),
+        loading: state.actionLoading.selectProject,
+        actionLoading: { ...state.actionLoading, loadProjects: false },
+      }));
+    } catch (error: unknown) {
+      set((state) => ({
+        ...getStoreErrorState(error),
+        loading: state.actionLoading.selectProject,
+        actionLoading: { ...state.actionLoading, loadProjects: false },
+      }));
     }
   },
 
   selectProject: async (project) => {
-    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null });
+    set((state) => ({
+      ...clearErrorState(),
+      loading: true,
+      currentProject: project,
+      selectedNodeId: null,
+      selectedNode: null,
+      actionLoading: { ...state.actionLoading, selectProject: true },
+    }));
     try {
       const rootNode = await api.getSubtree(project.root_node_id);
-      set({ rootNode, loading: false });
-    } catch (e: unknown) {
-      set({ error: (e as Error).message, loading: false });
+      set((state) => ({
+        rootNode,
+        ...clearErrorState(),
+        loading: state.actionLoading.loadProjects,
+        actionLoading: { ...state.actionLoading, selectProject: false },
+      }));
+    } catch (error: unknown) {
+      set((state) => ({
+        ...getStoreErrorState(error),
+        loading: state.actionLoading.loadProjects,
+        actionLoading: { ...state.actionLoading, selectProject: false },
+      }));
     }
   },
 
@@ -130,6 +197,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { rootNode } = get();
     const selectedNode = nodeId && rootNode ? findNode(rootNode, nodeId) : null;
     set({ selectedNodeId: nodeId, selectedNode });
+  },
+
+  dismissError: () => {
+    set(clearErrorState());
   },
 
   createProject: async (name, description, goal) => {
@@ -216,22 +287,51 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   expandNode: async (nodeId, instruction, mode = "explore") => {
-    set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null });
+    set((state) => ({
+      ...clearErrorState(),
+      aiLoading: true,
+      expandSuggestions: null,
+      expandTargetNodeId: nodeId,
+      deepenResult: null,
+      actionLoading: { ...state.actionLoading, expandNode: true },
+    }));
     try {
       const result = await api.expand(nodeId, instruction, undefined, mode);
-      set({ expandSuggestions: result.suggestions, aiLoading: false });
-    } catch (e: unknown) {
-      set({ error: (e as Error).message, aiLoading: false });
+      set((state) => ({
+        expandSuggestions: result.suggestions,
+        aiLoading: state.actionLoading.deepenNode,
+        actionLoading: { ...state.actionLoading, expandNode: false },
+      }));
+    } catch (error: unknown) {
+      set((state) => ({
+        ...getStoreErrorState(error),
+        aiLoading: state.actionLoading.deepenNode,
+        actionLoading: { ...state.actionLoading, expandNode: false },
+      }));
     }
   },
 
   deepenNode: async (nodeId, instruction) => {
-    set({ aiLoading: true, deepenResult: null, expandSuggestions: null });
+    set((state) => ({
+      ...clearErrorState(),
+      aiLoading: true,
+      deepenResult: null,
+      expandSuggestions: null,
+      actionLoading: { ...state.actionLoading, deepenNode: true },
+    }));
     try {
       const result = await api.deepen(nodeId, instruction);
-      set({ deepenResult: { ...result, target_node_id: nodeId }, aiLoading: false });
-    } catch (e: unknown) {
-      set({ error: (e as Error).message, aiLoading: false });
+      set((state) => ({
+        deepenResult: { ...result, target_node_id: nodeId },
+        aiLoading: state.actionLoading.expandNode,
+        actionLoading: { ...state.actionLoading, deepenNode: false },
+      }));
+    } catch (error: unknown) {
+      set((state) => ({
+        ...getStoreErrorState(error),
+        aiLoading: state.actionLoading.expandNode,
+        actionLoading: { ...state.actionLoading, deepenNode: false },
+      }));
     }
   },
 
