@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GNode, Project } from "@/lib/types";
+import type { GNode, GrowthMode, Project } from "@/lib/types";
 import { api } from "@/lib/api";
 
 interface GrowthMapStore {
@@ -27,7 +27,7 @@ interface GrowthMapStore {
   expandTargetNodeId: string | null;
   deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
   aiLoading: boolean;
-  expandNode: (nodeId: string, instruction?: string) => Promise<void>;
+  expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
   deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
   acceptSuggestion: (index: number) => Promise<void>;
   acceptAllSuggestions: () => Promise<void>;
@@ -121,10 +121,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
   },
 
-  expandNode: async (nodeId, instruction) => {
+  expandNode: async (nodeId, instruction, mode = "explore") => {
     set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null });
     try {
-      const result = await api.expand(nodeId, instruction);
+      const result = await api.expand(nodeId, instruction, undefined, mode);
       set({ expandSuggestions: result.suggestions, aiLoading: false });
     } catch (e: unknown) {
       set({ error: (e as Error).message, aiLoading: false });

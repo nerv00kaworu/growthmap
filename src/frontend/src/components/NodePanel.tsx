@@ -3,7 +3,15 @@
 import { useState } from "react";
 import { useStore } from "@/stores/useStore";
 import { api } from "@/lib/api";
-import { MATURITY_LABELS, MATURITY_COLORS, NODE_TYPE_ICONS, type Maturity } from "@/lib/types";
+import {
+  GROWTH_MODE_HELP,
+  GROWTH_MODE_LABELS,
+  MATURITY_LABELS,
+  MATURITY_COLORS,
+  NODE_TYPE_ICONS,
+  type GrowthMode,
+  type Maturity,
+} from "@/lib/types";
 
 function ContentBlockCard({
   blockId, blockType, title, body, editing, onRefresh
@@ -115,8 +123,37 @@ function NodeHistory({ nodeId }: { nodeId: string }) {
   );
 }
 
+function Section({
+  title,
+  subtitle,
+  tone = "neutral",
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  tone?: "neutral" | "ai" | "edit";
+  children: React.ReactNode;
+}) {
+  const toneClass = {
+    neutral: "border-gray-800 bg-gray-900/35",
+    ai: "border-purple-900/40 bg-purple-950/20",
+    edit: "border-blue-900/40 bg-blue-950/20",
+  }[tone];
+
+  return (
+    <section className={`rounded-xl border p-3 space-y-3 ${toneClass}`}>
+      <div className="space-y-1">
+        <label className="text-xs text-gray-400 uppercase tracking-wider">{title}</label>
+        {subtitle && <p className="text-[11px] text-gray-600">{subtitle}</p>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export function NodePanel() {
   const selectedNode = useStore((s) => s.selectedNode);
+  const rootNode = useStore((s) => s.rootNode);
   const addChildNode = useStore((s) => s.addChildNode);
   const updateNode = useStore((s) => s.updateNode);
   const deleteNode = useStore((s) => s.deleteNode);
@@ -136,6 +173,7 @@ export function NodePanel() {
   const [editTitle, setEditTitle] = useState("");
   const [editSummary, setEditSummary] = useState("");
   const [aiInstruction, setAiInstruction] = useState("");
+  const [aiMode, setAiMode] = useState<GrowthMode>("explore");
 
   if (!selectedNode) {
     return (
@@ -152,6 +190,8 @@ export function NodePanel() {
   const maturityColor = MATURITY_COLORS[maturity] || "#666";
   const maturityLabel = MATURITY_LABELS[maturity] || maturity;
   const icon = NODE_TYPE_ICONS[selectedNode.node_type] || "📌";
+  const lineagePath = [...(selectedNode.ancestor_path || []), { id: selectedNode.id, title: selectedNode.title }];
+  const isRootNode = rootNode?.id === selectedNode.id;
 
   const handleAddChild = async () => {
     if (!newChildTitle.trim()) return;
@@ -202,9 +242,22 @@ export function NodePanel() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Summary */}
-        <div>
-          <label className="text-xs text-gray-500 uppercase tracking-wider">摘要</label>
+        <Section title="主線脈絡" subtitle={isRootNode ? "目前位於主線根節點。" : "先看主線脈絡，再決定要補強、延伸或挑戰這條分支。"}>
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {lineagePath.map((node, index) => (
+              <span
+                key={`${node.id}-${index}`}
+                className={`text-[11px] px-2 py-1 rounded-full border ${node.id === selectedNode.id ? "text-blue-200 border-blue-700/60 bg-blue-950/40" : "text-gray-400 border-gray-700 bg-gray-900/80"}`}
+              >
+                {node.title}
+              </span>
+            ))}
+          </div>
+        </Section>
+
+        <Section title="節點內容" subtitle="先整理摘要，再補內容區塊與子節點。" tone={editing ? "edit" : "neutral"}>
+          <div>
+            <label className="text-xs text-gray-500 uppercase tracking-wider">摘要</label>
           {editing ? (
             <textarea
               value={editSummary}
@@ -216,32 +269,70 @@ export function NodePanel() {
               {selectedNode.summary || "（無摘要）"}
             </p>
           )}
-        </div>
-
-        {/* Content Blocks */}
-        {selectedNode.content_blocks && selectedNode.content_blocks.length > 0 && (
-          <div className="space-y-2">
-            <label className="text-xs text-gray-500 uppercase tracking-wider">📄 內容區塊</label>
-            {selectedNode.content_blocks.map((block) => {
-              const content = block.content as unknown as Record<string, string>;
-              return (
-                <ContentBlockCard
-                  key={block.id}
-                  blockId={block.id}
-                  blockType={block.block_type}
-                  title={content?.title || ""}
-                  body={content?.body || ""}
-                  editing={editing}
-                  onRefresh={async () => { await refreshTree(); }}
-                />
-              );
-            })}
           </div>
-        )}
 
-        {/* AI Actions */}
-        <div className="space-y-2">
-          <label className="text-xs text-gray-500 uppercase tracking-wider">🤖 AI 生長</label>
+          {selectedNode.content_blocks && selectedNode.content_blocks.length > 0 && (
+            <div className="space-y-2">
+              <label className="text-xs text-gray-500 uppercase tracking-wider">📄 內容區塊</label>
+              {selectedNode.content_blocks.map((block) => {
+                const content = block.content as unknown as Record<string, string>;
+                return (
+                  <ContentBlockCard
+                    key={block.id}
+                    blockId={block.id}
+                    blockType={block.block_type}
+                    title={content?.title || ""}
+                    body={content?.body || ""}
+                    editing={editing}
+                    onRefresh={async () => { await refreshTree(); }}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-gray-500 uppercase tracking-wider">手動新增子節點</label>
+            <div className="flex gap-2 mt-1">
+              <input
+                value={newChildTitle}
+                onChange={(e) => setNewChildTitle(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddChild()}
+                placeholder="輸入節點標題..."
+                className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
+              />
+              <button
+                onClick={handleAddChild}
+                disabled={!newChildTitle.trim()}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded transition-colors"
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs text-gray-500 uppercase tracking-wider">子節點</label>
+            <p className="text-sm text-gray-400 mt-1">{selectedNode.children?.length || 0} 個</p>
+          </div>
+        </Section>
+
+        <Section title="AI 生長" subtitle="切換模式，避免所有衍生結果都走同一種形狀。" tone="ai">
+          <div className="bg-gray-900/70 border border-gray-800 rounded-lg p-2.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-gray-500">生長模式</span>
+              <select
+                value={aiMode}
+                onChange={(e) => setAiMode(e.target.value as GrowthMode)}
+                className="bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200"
+              >
+                {Object.entries(GROWTH_MODE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[11px] text-gray-600">{GROWTH_MODE_HELP[aiMode]}</p>
+          </div>
           <input
             value={aiInstruction}
             onChange={(e) => setAiInstruction(e.target.value)}
@@ -250,7 +341,7 @@ export function NodePanel() {
           />
           <div className="flex gap-2">
             <button
-              onClick={() => expandNode(selectedNode.id, aiInstruction || undefined)}
+              onClick={() => expandNode(selectedNode.id, aiInstruction || undefined, aiMode)}
               disabled={aiLoading}
               className="flex-1 px-3 py-2 bg-purple-900/60 hover:bg-purple-800 disabled:bg-gray-800 disabled:text-gray-600 text-purple-200 text-xs rounded transition-colors border border-purple-700/50"
             >
@@ -264,11 +355,10 @@ export function NodePanel() {
               {aiLoading ? "⏳ 深化中..." : "🔍 深化內容"}
             </button>
           </div>
-        </div>
+        </Section>
 
-        {/* Expand Suggestions */}
         {expandSuggestions && expandSuggestions.length > 0 && (
-          <div className="space-y-2">
+          <Section title="分支建議" subtitle="先挑最有價值的分支採用，不要一次全收進來。" tone="ai">
             <div className="flex items-center justify-between">
               <label className="text-xs text-purple-400 uppercase tracking-wider">🌱 分支建議</label>
               <button onClick={dismissAI} className="text-xs text-gray-500 hover:text-gray-300">✕ 關閉</button>
@@ -296,12 +386,11 @@ export function NodePanel() {
             >
               ✓ 全部採用
             </button>
-          </div>
+          </Section>
         )}
 
-        {/* Deepen Result */}
         {deepenResult && (
-          <div className="space-y-2">
+          <Section title="深化建議" subtitle="AI 先補內文骨架，再由你決定是否正式寫入。" tone="ai">
             <div className="flex items-center justify-between">
               <label className="text-xs text-teal-400 uppercase tracking-wider">🔍 深化建議</label>
               <button onClick={dismissAI} className="text-xs text-gray-500 hover:text-gray-300">✕ 關閉</button>
@@ -325,45 +414,18 @@ export function NodePanel() {
             >
               ✓ 接受深化
             </button>
-          </div>
+          </Section>
         )}
 
-        {/* Add child */}
-        <div>
-          <label className="text-xs text-gray-500 uppercase tracking-wider">手動新增子節點</label>
-          <div className="flex gap-2 mt-1">
-            <input
-              value={newChildTitle}
-              onChange={(e) => setNewChildTitle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAddChild()}
-              placeholder="輸入節點標題..."
-              className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
-            />
-            <button
-              onClick={handleAddChild}
-              disabled={!newChildTitle.trim()}
-              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded transition-colors"
-            >
-              +
-            </button>
+        <Section title="操作紀錄" subtitle="回頭看這個節點怎麼長成現在這樣。">
+          <NodeHistory nodeId={selectedNode.id} />
+
+          <div className="text-xs text-gray-600 space-y-1 pt-2 border-t border-gray-800">
+            <div>ID: <span className="text-gray-500 font-mono">{selectedNode.id.slice(0, 8)}...</span></div>
+            <div>建立: {new Date(selectedNode.created_at).toLocaleString("zh-TW")}</div>
+            <div>更新: {new Date(selectedNode.updated_at).toLocaleString("zh-TW")}</div>
           </div>
-        </div>
-
-        {/* Children count */}
-        <div>
-          <label className="text-xs text-gray-500 uppercase tracking-wider">子節點</label>
-          <p className="text-sm text-gray-400 mt-1">{selectedNode.children?.length || 0} 個</p>
-        </div>
-
-        {/* History */}
-        <NodeHistory nodeId={selectedNode.id} />
-
-        {/* Meta */}
-        <div className="text-xs text-gray-600 space-y-1 pt-2 border-t border-gray-800">
-          <div>ID: <span className="text-gray-500 font-mono">{selectedNode.id.slice(0, 8)}...</span></div>
-          <div>建立: {new Date(selectedNode.created_at).toLocaleString("zh-TW")}</div>
-          <div>更新: {new Date(selectedNode.updated_at).toLocaleString("zh-TW")}</div>
-        </div>
+        </Section>
       </div>
 
       {/* Footer actions */}
