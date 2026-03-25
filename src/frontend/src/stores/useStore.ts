@@ -21,6 +21,7 @@ interface GrowthMapStore {
   updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
+  promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
 
   // AI
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
@@ -75,6 +76,37 @@ function patchNode(root: GNode, nodeId: string, patch: Partial<GNode>): GNode {
     ...root,
     children: (root.children || []).map((c) => patchNode(c, nodeId, patch)),
   };
+}
+
+function markMainlineChild(root: GNode, parentId: string, childId: string): GNode {
+  if (root.id === parentId) {
+    return {
+      ...root,
+      children: (root.children || []).map((child) => ({
+        ...child,
+        is_mainline: child.id === childId,
+      })),
+    };
+  }
+
+  return {
+    ...root,
+    children: (root.children || []).map((child) => markMainlineChild(child, parentId, childId)),
+  };
+}
+
+function findMainlineEdgeId(root: GNode, parentId: string, childId: string): string | null {
+  if (root.id === parentId) {
+    const child = (root.children || []).find((node) => node.id === childId);
+    return typeof child?.meta?.mainline_edge_id === "string" ? child.meta.mainline_edge_id : null;
+  }
+
+  for (const child of root.children || []) {
+    const edgeId = findMainlineEdgeId(child, parentId, childId);
+    if (edgeId) return edgeId;
+  }
+
+  return null;
 }
 
 export const useStore = create<GrowthMapStore>((set, get) => ({
@@ -183,6 +215,25 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { selectedNodeId } = get();
     if (selectedNodeId && rootNode) {
       set({ selectedNode: findNode(rootNode, selectedNodeId) });
+    }
+  },
+
+  promoteMainlineChild: async (parentId, childId) => {
+    const { rootNode } = get();
+    if (!rootNode) return;
+
+    const edgeId = findMainlineEdgeId(rootNode, parentId, childId);
+    if (!edgeId) {
+      throw new Error("Mainline edge metadata not found");
+    }
+
+    await api.promoteMainline(edgeId);
+    const updated = markMainlineChild(rootNode, parentId, childId);
+    set({ rootNode: updated });
+
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
     }
   },
 

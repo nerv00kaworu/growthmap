@@ -11,6 +11,7 @@ interface GrowthNodeData {
   summary: string;
   isSelected: boolean;
   childCount: number;
+  isMainline: boolean;
 }
 
 function GrowthNodeComponent({ data }: NodeProps) {
@@ -22,9 +23,9 @@ function GrowthNodeComponent({ data }: NodeProps) {
     <div
       className="relative px-4 py-3 rounded-lg border-2 min-w-[160px] max-w-[240px] cursor-pointer transition-all duration-200"
       style={{
-        background: d.isSelected ? "#1e293b" : "#141414",
-        borderColor: d.isSelected ? color : "#2a2a2a",
-        boxShadow: d.isSelected ? `0 0 12px ${color}40` : "none",
+        background: d.isSelected ? "#1e293b" : d.isMainline ? "#172554" : "#141414",
+        borderColor: d.isSelected ? color : d.isMainline ? "#60a5fa" : "#2a2a2a",
+        boxShadow: d.isSelected ? `0 0 12px ${color}40` : d.isMainline ? "0 0 0 1px rgba(96,165,250,0.35)" : "none",
       }}
     >
       <Handle type="target" position={Position.Top} className="!bg-gray-600 !w-2 !h-2" />
@@ -40,6 +41,7 @@ function GrowthNodeComponent({ data }: NodeProps) {
       <div className="text-sm font-medium text-gray-100 flex items-center gap-1.5">
         <span>{icon}</span>
         <span className="truncate">{d.label}</span>
+        {d.isMainline && <span className="text-[10px] text-blue-300 border border-blue-500/40 rounded-full px-1.5 py-0.5">MAIN</span>}
       </div>
 
       {/* Summary */}

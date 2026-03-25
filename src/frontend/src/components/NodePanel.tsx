@@ -25,7 +25,7 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
   return (
     <section className={`rounded-xl border p-3 space-y-3 ${toneClass}`}>
       <div className="space-y-1">
-        <label className="text-xs text-gray-400 uppercase tracking-wider">{title}</label>
+        <div className="text-xs text-gray-400 uppercase tracking-wider">{title}</div>
         {subtitle && <p className="text-[11px] text-gray-600">{subtitle}</p>}
       </div>
       {children}
@@ -39,6 +39,7 @@ export function NodePanel() {
   const addChildNode = useStore((s) => s.addChildNode);
   const updateNode = useStore((s) => s.updateNode);
   const deleteNode = useStore((s) => s.deleteNode);
+  const promoteMainlineChild = useStore((s) => s.promoteMainlineChild);
   const expandNode = useStore((s) => s.expandNode);
   const deepenNode = useStore((s) => s.deepenNode);
   const acceptSuggestion = useStore((s) => s.acceptSuggestion);
@@ -110,6 +111,7 @@ export function NodePanel() {
           newChildTitle={newChildTitle}
           setNewChildTitle={setNewChildTitle}
           onAddChild={handleAddChild}
+          onPromoteMainline={promoteMainlineChild}
           refreshTree={refreshTree}
           Section={Section}
         />
@@ -138,19 +140,20 @@ export function NodePanel() {
       <div className="p-3 border-t border-gray-800 flex gap-2">
         {editing ? (
           <>
-            <button onClick={saveEdit} className="flex-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded">
+            <button type="button" onClick={saveEdit} className="flex-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded">
               儲存
             </button>
-            <button onClick={() => setEditing(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
+            <button type="button" onClick={() => setEditing(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
               取消
             </button>
           </>
         ) : (
           <>
-            <button onClick={startEdit} className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
+            <button type="button" onClick={startEdit} className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
               ✏️ 編輯
             </button>
             <button
+              type="button"
               onClick={() => { if (confirm("確定刪除此節點？")) deleteNode(selectedNode.id); }}
               className="px-3 py-1.5 bg-red-900/50 hover:bg-red-800 text-red-400 text-sm rounded"
             >

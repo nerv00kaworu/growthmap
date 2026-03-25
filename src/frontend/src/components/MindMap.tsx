@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -45,15 +45,16 @@ function treeToFlow(
       id: node.id,
       type: "growth",
       position: { x, y },
-      data: {
-        label: node.title,
-        nodeType: node.node_type,
-        maturity: node.maturity as Maturity,
-        summary: node.summary,
-        isSelected: node.id === selectedId,
-        childCount: node.children?.length || 0,
-      },
-    });
+        data: {
+          label: node.title,
+          nodeType: node.node_type,
+          maturity: node.maturity as Maturity,
+          summary: node.summary,
+          isSelected: node.id === selectedId,
+          childCount: node.children?.length || 0,
+          isMainline: Boolean(node.is_mainline),
+        },
+      });
 
     const children = node.children || [];
     if (children.length === 0) return;
@@ -65,13 +66,13 @@ function treeToFlow(
       const cw = calcWidth(child);
       const childX = cx + cw / 2 - NODE_W / 2;
 
-      edges.push({
-        id: `${node.id}-${child.id}`,
-        source: node.id,
-        target: child.id,
-        style: { stroke: "#333", strokeWidth: 1.5 },
-        animated: false,
-      });
+        edges.push({
+          id: `${node.id}-${child.id}`,
+          source: node.id,
+          target: child.id,
+          style: child.is_mainline ? { stroke: "#60a5fa", strokeWidth: 2.5 } : { stroke: "#333", strokeWidth: 1.5 },
+          animated: false,
+        });
 
       place(child, childX, y + LEVEL_H);
       cx += cw + NODE_GAP;
@@ -96,8 +97,7 @@ export function MindMap() {
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
-  // Sync when flowNodes change
-  useMemo(() => {
+  useEffect(() => {
     setNodes(flowNodes);
     setEdges(flowEdges);
   }, [flowNodes, flowEdges, setNodes, setEdges]);

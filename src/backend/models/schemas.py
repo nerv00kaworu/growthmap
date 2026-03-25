@@ -111,6 +111,7 @@ class EdgeCreate(BaseModel):
     from_node_id: str
     to_node_id: str
     relation_type: str = "child_of"
+    is_mainline: bool = False
     weight: float = 1.0
     note: str = ""
 
@@ -121,6 +122,7 @@ class EdgeOut(BaseModel):
     from_node_id: str
     to_node_id: str
     relation_type: str
+    is_mainline: bool
     weight: float
     note: str
     created_at: datetime

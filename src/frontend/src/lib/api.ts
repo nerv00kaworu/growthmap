@@ -31,6 +31,10 @@ export const api = {
     request<GNode>(`/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteNode: (nodeId: string) =>
     request<void>(`/nodes/${nodeId}`, { method: "DELETE" }),
+  createEdge: (data: { from_node_id: string; to_node_id: string; relation_type?: string; is_mainline?: boolean; weight?: number; note?: string }) =>
+    request(`/edges`, { method: "POST", body: JSON.stringify(data) }),
+  promoteMainline: (edgeId: string) =>
+    request(`/edges/${edgeId}/promote-mainline`, { method: "POST" }),
 
   // Content blocks
   getBlocks: (nodeId: string) =>

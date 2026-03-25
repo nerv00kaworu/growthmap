@@ -78,6 +78,7 @@ class Edge(Base):
     from_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     to_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     relation_type = Column(String(30), nullable=False, default="child_of")
+    is_mainline = Column(Boolean, nullable=False, default=False)
     weight = Column(Float, default=1.0)
     note = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), default=utcnow)

@@ -9,6 +9,7 @@ export interface GNode {
   maturity: string;
   tags: string[];
   meta: Record<string, unknown>;
+  is_mainline?: boolean;
   content_blocks: ContentBlock[];
   created_at: string;
   updated_at: string;
@@ -32,10 +33,13 @@ export interface ContentBlock {
 
 export interface Edge {
   id: string;
-  source_id: string;
-  target_id: string;
-  relation: string;
-  meta: Record<string, unknown>;
+  from_node_id: string;
+  to_node_id: string;
+  relation_type: string;
+  is_mainline: boolean;
+  weight: number;
+  note: string;
+  created_at: string;
 }
 
 export interface Project {
