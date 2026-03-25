@@ -53,6 +53,8 @@ async def build_node_context(node_id: str, db: AsyncSession) -> dict:
         raise ValueError(f"Node {node_id} not found")
 
     project = await db.get(Project, node.project_id)
+    if not project:
+        raise ValueError(f"Project {node.project_id} not found")
 
     ancestors, parent_id = await _load_ancestor_path(node_id, db)
 
@@ -120,9 +122,9 @@ async def build_node_context(node_id: str, db: AsyncSession) -> dict:
 
     return {
         "project": {
-            "name": project.name if project else "",
-            "description": project.description if project else "",
-            "goal": project.goal if project else "",
+            "name": project.name,
+            "description": project.description,
+            "goal": project.goal,
         },
         "ancestor_path": ancestors,
         "current_node": {
