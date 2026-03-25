@@ -1,4 +1,5 @@
 """AI Provider interface — pluggable LLM backend"""
+import asyncio
 import os
 import json
 import httpx
@@ -11,6 +12,7 @@ load_dotenv()
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://models.github.ai/inference")
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("GITHUB_TOKEN", ""))
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 
 def get_provider_config() -> tuple[str, str, str]:
@@ -54,14 +56,38 @@ async def llm_complete(
         "max_tokens": max_tokens,
     }
 
+    request_timeout = httpx.Timeout(30.0, connect=10.0)
+    data: dict | list | None = None
+
     async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers=headers,
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        for attempt in range(2):
+            try:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=request_timeout,
+                )
+                status_code = getattr(resp, "status_code", 200)
+                if status_code in RETRYABLE_STATUS_CODES and attempt == 0:
+                    await asyncio.sleep(2)
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except httpx.TimeoutException:
+                if attempt == 0:
+                    await asyncio.sleep(2)
+                    continue
+                raise
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code in RETRYABLE_STATUS_CODES and attempt == 0:
+                    await asyncio.sleep(2)
+                    continue
+                raise
+
+    if data is None:
+        raise RuntimeError("LLM request did not produce a response payload")
 
     # Handle both OpenAI and Kimi-style responses
     if "choices" in data and data["choices"]:
