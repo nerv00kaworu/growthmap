@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GNode, GrowthMode, Project } from "@/lib/types";
+import type { ContentBlock, GNode, GrowthMode, Project } from "@/lib/types";
 import { api } from "@/lib/api";
 
 interface GrowthMapStore {
@@ -21,6 +21,8 @@ interface GrowthMapStore {
   updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
+  updateContentBlock: (nodeId: string, blockId: string, data: { content?: Record<string, string>; block_type?: string }) => Promise<void>;
+  deleteContentBlock: (nodeId: string, blockId: string) => Promise<void>;
 
   // AI
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
@@ -74,6 +76,55 @@ function patchNode(root: GNode, nodeId: string, patch: Partial<GNode>): GNode {
   return {
     ...root,
     children: (root.children || []).map((c) => patchNode(c, nodeId, patch)),
+  };
+}
+
+function appendContentBlocks(root: GNode, nodeId: string, blocks: ContentBlock[]): GNode {
+  if (root.id === nodeId) {
+    return {
+      ...root,
+      content_blocks: [...(root.content_blocks || []), ...blocks],
+    };
+  }
+
+  return {
+    ...root,
+    children: (root.children || []).map((c) => appendContentBlocks(c, nodeId, blocks)),
+  };
+}
+
+function patchContentBlock(
+  root: GNode,
+  nodeId: string,
+  blockId: string,
+  patch: Partial<ContentBlock>
+): GNode {
+  if (root.id === nodeId) {
+    return {
+      ...root,
+      content_blocks: (root.content_blocks || []).map((block) =>
+        block.id === blockId ? { ...block, ...patch } : block
+      ),
+    };
+  }
+
+  return {
+    ...root,
+    children: (root.children || []).map((c) => patchContentBlock(c, nodeId, blockId, patch)),
+  };
+}
+
+function removeContentBlock(root: GNode, nodeId: string, blockId: string): GNode {
+  if (root.id === nodeId) {
+    return {
+      ...root,
+      content_blocks: (root.content_blocks || []).filter((block) => block.id !== blockId),
+    };
+  }
+
+  return {
+    ...root,
+    children: (root.children || []).map((c) => removeContentBlock(c, nodeId, blockId)),
   };
 }
 
@@ -186,6 +237,34 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
   },
 
+  updateContentBlock: async (nodeId, blockId, data) => {
+    const updatedBlock = await api.updateBlock(blockId, data);
+    const { rootNode } = get();
+    if (!rootNode) return;
+
+    const updated = patchContentBlock(rootNode, nodeId, blockId, updatedBlock);
+    set({ rootNode: updated });
+
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
+  },
+
+  deleteContentBlock: async (nodeId, blockId) => {
+    await api.deleteBlock(blockId);
+    const { rootNode } = get();
+    if (!rootNode) return;
+
+    const updated = removeContentBlock(rootNode, nodeId, blockId);
+    set({ rootNode: updated });
+
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
+  },
+
   expandNode: async (nodeId, instruction, mode = "explore") => {
     set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null });
     try {
@@ -283,25 +362,19 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (!deepenResult || !rootNode) return;
     const targetId = deepenResult.target_node_id;
     await api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>);
+    const createdBlocks: ContentBlock[] = [];
     for (const block of deepenResult.content_blocks) {
-      await api.createBlock(targetId, {
+      const createdBlock = await api.createBlock(targetId, {
         block_type: block.block_type,
         content: { title: block.title, body: block.body },
       });
+      createdBlocks.push(createdBlock);
     }
-    // Patch locally: update summary + append blocks
-    const newBlocks = deepenResult.content_blocks.map((b, i) => ({
-      id: `temp-${Date.now()}-${i}`,
-      block_type: b.block_type,
-      content: { title: b.title, body: b.body },
-      order_index: i,
-    }));
-    const target = findNode(rootNode, targetId);
-    const existingBlocks = target?.content_blocks || [];
-    const updated = patchNode(rootNode, targetId, {
+
+    const updatedSummary = patchNode(rootNode, targetId, {
       summary: deepenResult.enriched_summary,
-      content_blocks: [...existingBlocks, ...newBlocks],
     } as Partial<GNode>);
+    const updated = appendContentBlocks(updatedSummary, targetId, createdBlocks);
     set({ rootNode: updated, deepenResult: null });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
