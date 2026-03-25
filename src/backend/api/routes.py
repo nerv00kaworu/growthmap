@@ -13,6 +13,7 @@ from models.schemas import (
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
     EdgeCreate, EdgeOut,
     ContentBlockCreate, ContentBlockUpdate, ContentBlockOut,
+    NodeMoveRequest, AncestorNode, MainlinePathOut, BranchInfo,
 )
 
 router = APIRouter()
@@ -396,6 +397,221 @@ async def delete_edge(edge_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Edge not found")
     await db.delete(edge)
     await db.commit()
+
+
+# ─── Mainline / Branch Governance ───
+
+@router.post("/nodes/{node_id}/move")
+async def move_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = Depends(get_db)):
+    """Re-parent a node under a new parent, with cycle detection."""
+    node = await db.get(Node, node_id)
+    if not node:
+        raise HTTPException(404, "Node not found")
+
+    # Cannot move root nodes
+    project = await db.get(Project, node.project_id)
+    if project and project.root_node_id == node_id:
+        raise HTTPException(400, "Cannot move root node")
+
+    new_parent = await db.get(Node, body.new_parent_id)
+    if not new_parent:
+        raise HTTPException(404, "New parent not found")
+    if new_parent.project_id != node.project_id:
+        raise HTTPException(400, "Cannot move node to a different project")
+
+    # Cycle detection: walk descendants of node_id; new_parent must not be among them
+    descendants: set[str] = set()
+    queue = [node_id]
+    while queue:
+        current = queue.pop()
+        child_edges = (await db.execute(
+            select(Edge).where(Edge.from_node_id == current, Edge.relation_type == "child_of")
+        )).scalars().all()
+        for e in child_edges:
+            if e.to_node_id not in descendants:
+                descendants.add(e.to_node_id)
+                queue.append(e.to_node_id)
+
+    if body.new_parent_id in descendants:
+        raise HTTPException(400, "Cannot move node under its own descendant (would create cycle)")
+
+    # Find and remove old incoming child_of edge
+    old_edge_result = await db.execute(
+        select(Edge).where(Edge.to_node_id == node_id, Edge.relation_type == "child_of")
+    )
+    old_edge = old_edge_result.scalar_one_or_none()
+    if old_edge:
+        await db.delete(old_edge)
+
+    # Check if new parent already has children (to decide mainline)
+    existing_children = (await db.execute(
+        select(func.count()).select_from(Edge).where(
+            Edge.from_node_id == body.new_parent_id,
+            Edge.relation_type == "child_of"
+        )
+    )).scalar() or 0
+
+    is_mainline = existing_children == 0  # first child becomes mainline
+
+    new_edge = Edge(
+        project_id=node.project_id,
+        from_node_id=body.new_parent_id,
+        to_node_id=node_id,
+        relation_type="child_of",
+        is_mainline=is_mainline,
+    )
+    db.add(new_edge)
+
+    # Log the action
+    log = ActionLog(
+        project_id=node.project_id,
+        node_id=node_id,
+        action_type="move",
+        actor_type="human",
+        payload={"from_parent": old_edge.from_node_id if old_edge else None, "to_parent": body.new_parent_id},
+    )
+    db.add(log)
+    touch_project(project)
+    await db.commit()
+
+    return {"ok": True, "is_mainline": is_mainline}
+
+
+@router.get("/nodes/{node_id}/ancestors", response_model=list[AncestorNode])
+async def get_ancestors(node_id: str, db: AsyncSession = Depends(get_db)):
+    """Walk up child_of edges from node to root, return root-first order."""
+    node = await db.get(Node, node_id)
+    if not node:
+        raise HTTPException(404, "Node not found")
+
+    ancestors: list[dict] = []
+    current_id = node_id
+    visited: set[str] = {current_id}
+
+    while True:
+        edge_result = await db.execute(
+            select(Edge).where(Edge.to_node_id == current_id, Edge.relation_type == "child_of")
+        )
+        edge = edge_result.scalar_one_or_none()
+        if not edge:
+            break
+
+        parent = await db.get(Node, edge.from_node_id)
+        if not parent or parent.id in visited:
+            break
+        visited.add(parent.id)
+
+        ancestors.append({
+            "id": parent.id,
+            "title": parent.title,
+            "node_type": parent.node_type,
+            "maturity": parent.maturity,
+            "is_mainline": edge.is_mainline,
+        })
+        current_id = parent.id
+
+    ancestors.reverse()  # root first
+    return ancestors
+
+
+@router.get("/projects/{project_id}/mainline-path", response_model=MainlinePathOut)
+async def get_mainline_path(project_id: str, db: AsyncSession = Depends(get_db)):
+    """Follow mainline edges from project root to deepest leaf."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not project.root_node_id:
+        return {"path": []}
+
+    path: list[dict] = []
+    current_id = project.root_node_id
+
+    while current_id:
+        node = await db.get(Node, current_id)
+        if not node:
+            break
+
+        # For root node, is_mainline is True by convention
+        is_mainline = True
+        if path:  # not root — look up the edge that brought us here
+            edge_result = await db.execute(
+                select(Edge).where(Edge.to_node_id == current_id, Edge.relation_type == "child_of")
+            )
+            edge = edge_result.scalar_one_or_none()
+            is_mainline = edge.is_mainline if edge else False
+
+        path.append({
+            "id": node.id,
+            "title": node.title,
+            "node_type": node.node_type,
+            "maturity": node.maturity,
+            "is_mainline": is_mainline,
+        })
+
+        # Find mainline child
+        mainline_edge_result = await db.execute(
+            select(Edge).where(
+                Edge.from_node_id == current_id,
+                Edge.relation_type == "child_of",
+                Edge.is_mainline == True,
+            )
+        )
+        mainline_edge = mainline_edge_result.scalar_one_or_none()
+        current_id = mainline_edge.to_node_id if mainline_edge else None
+
+    return {"path": path}
+
+
+@router.get("/projects/{project_id}/branch-roots", response_model=list[BranchInfo])
+async def get_branch_roots(project_id: str, db: AsyncSession = Depends(get_db)):
+    """Find all nodes in this project that have more than one child_of child (branch points)."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    # Find parent nodes with >1 child_of edge
+    branch_query = (
+        select(Edge.from_node_id, func.count().label("cnt"))
+        .where(Edge.project_id == project_id, Edge.relation_type == "child_of")
+        .group_by(Edge.from_node_id)
+        .having(func.count() > 1)
+    )
+    result = await db.execute(branch_query)
+    branch_parents = result.all()
+
+    branches: list[dict] = []
+    for row in branch_parents:
+        parent_id = row[0]
+        parent_node = await db.get(Node, parent_id)
+        if not parent_node:
+            continue
+
+        # Get all child edges for this parent
+        child_edges_result = await db.execute(
+            select(Edge).where(
+                Edge.from_node_id == parent_id,
+                Edge.relation_type == "child_of"
+            )
+        )
+        child_edges = child_edges_result.scalars().all()
+
+        mainline_child_id = None
+        branch_child_ids: list[str] = []
+        for e in child_edges:
+            if e.is_mainline:
+                mainline_child_id = e.to_node_id
+            else:
+                branch_child_ids.append(e.to_node_id)
+
+        branches.append({
+            "node_id": parent_id,
+            "title": parent_node.title,
+            "mainline_child_id": mainline_child_id,
+            "branch_child_ids": branch_child_ids,
+            "total_children": len(child_edges),
+        })
+
+    return branches
 
 
 # ─── Content Blocks ───
