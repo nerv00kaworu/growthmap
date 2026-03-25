@@ -24,7 +24,7 @@ export interface LineageNode {
 
 export interface ContentBlock {
   id: string;
-  node_id: string;
+  node_id?: string;
   block_type: string;
   content: Record<string, string>;
   order_index: number;

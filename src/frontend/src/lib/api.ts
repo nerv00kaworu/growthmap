@@ -14,7 +14,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-import type { Project, GNode, GrowthMode } from "./types";
+import type { Project, GNode, GrowthMode, ContentBlock } from "./types";
 
 export const api = {
   // Projects
@@ -34,11 +34,11 @@ export const api = {
 
   // Content blocks
   getBlocks: (nodeId: string) =>
-    request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number }[]>(`/nodes/${nodeId}/blocks`),
+    request<ContentBlock[]>(`/nodes/${nodeId}/blocks`),
   createBlock: (nodeId: string, data: { block_type: string; content: Record<string, string> }) =>
-    request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify(data) }),
+    request<ContentBlock>(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify(data) }),
   updateBlock: (blockId: string, data: { content?: Record<string, string>; block_type?: string }) =>
-    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify(data) }),
+    request<ContentBlock>(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteBlock: (blockId: string) =>
     request<void>(`/blocks/${blockId}`, { method: "DELETE" }),
 
