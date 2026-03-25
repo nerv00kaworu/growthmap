@@ -178,6 +178,64 @@ class SuggestionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class NodeMoveRequest(BaseModel):
+    new_parent_id: str
+
+
+class MainlinePathOut(BaseModel):
+    nodes: list[NodeBrief]
+
+
+class BranchInfo(BaseModel):
+    node: NodeBrief
+    parent_id: str
+    incoming_edge_id: str
+    child_count: int
+
+
+# === Provider Config ===
+
+class ProviderConfigCreate(BaseModel):
+    name: str
+    provider_type: str
+    endpoint: str = ""
+    auth_type: str = "none"
+    model_name: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    cost_level: str = "low"
+    enabled: bool = True
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    provider_type: Optional[str] = None
+    endpoint: Optional[str] = None
+    auth_type: Optional[str] = None
+    model_name: Optional[str] = None
+    capabilities: Optional[list[str]] = None
+    cost_level: Optional[str] = None
+    enabled: Optional[bool] = None
+    settings: Optional[dict[str, Any]] = None
+
+
+class ProviderConfigOut(BaseModel):
+    id: str
+    name: str
+    provider_type: str
+    endpoint: str
+    auth_type: str
+    model_name: str
+    capabilities: list[str]
+    cost_level: str
+    enabled: bool
+    settings: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # === AI Actions ===
 
 class ExpandRequest(BaseModel):
