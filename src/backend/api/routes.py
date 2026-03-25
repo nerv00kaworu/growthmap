@@ -1,5 +1,6 @@
 """Project & Node API routes"""
 import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,11 @@ from models.schemas import (
 )
 
 router = APIRouter()
+
+
+def touch_project(project: Project | None):
+    if project:
+        project.updated_at = datetime.now(timezone.utc)
 
 
 # ─── Projects ───
@@ -132,6 +138,7 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         action_type="create_node",
         payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
     ))
+    touch_project(project)
     # Auto-advance parent maturity
     if data.parent_id:
         await auto_advance_maturity(data.parent_id, db)
@@ -166,6 +173,8 @@ async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends
         action_type="update_node",
         payload=data.model_dump(exclude_unset=True),
     ))
+    project = await db.get(Project, node.project_id)
+    touch_project(project)
     await db.commit()
     await db.refresh(node)
     return node
@@ -176,6 +185,7 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
+    project = await db.get(Project, node.project_id)
     # Delete edges referencing this node first
     from sqlalchemy import or_
     await db.execute(
@@ -184,6 +194,7 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
         )
     )
     await db.delete(node)
+    touch_project(project)
     await db.commit()
 
 
@@ -293,6 +304,8 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
         **data.model_dump(),
     )
     db.add(edge)
+    project = await db.get(Project, from_node.project_id)
+    touch_project(project)
     await db.commit()
     await db.refresh(edge)
     return edge
@@ -303,7 +316,9 @@ async def delete_edge(edge_id: str, db: AsyncSession = Depends(get_db)):
     edge = await db.get(Edge, edge_id)
     if not edge:
         raise HTTPException(404, "Edge not found")
+    project = await db.get(Project, edge.project_id)
     await db.delete(edge)
+    touch_project(project)
     await db.commit()
 
 
@@ -324,6 +339,8 @@ async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession 
         raise HTTPException(404, "Node not found")
     block = ContentBlock(node_id=node_id, **data.model_dump())
     db.add(block)
+    project = await db.get(Project, node.project_id)
+    touch_project(project)
     await auto_advance_maturity(node_id, db)
     await db.commit()
     await db.refresh(block)
@@ -337,6 +354,9 @@ async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession
         raise HTTPException(404, "Block not found")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(block, k, v)
+    node = await db.get(Node, block.node_id)
+    project = await db.get(Project, node.project_id) if node else None
+    touch_project(project)
     await db.commit()
     await db.refresh(block)
     return block
@@ -347,7 +367,10 @@ async def delete_block(block_id: str, db: AsyncSession = Depends(get_db)):
     block = await db.get(ContentBlock, block_id)
     if not block:
         raise HTTPException(404, "Block not found")
+    node = await db.get(Node, block.node_id)
+    project = await db.get(Project, node.project_id) if node else None
     await db.delete(block)
+    touch_project(project)
     await db.commit()
 
 
