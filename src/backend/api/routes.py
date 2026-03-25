@@ -176,6 +176,9 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
+    project = await db.get(Project, node.project_id)
+    if project and project.root_node_id == node_id:
+        raise HTTPException(400, "Cannot delete the project root node")
     # Delete edges referencing this node first
     from sqlalchemy import or_
     await db.execute(
