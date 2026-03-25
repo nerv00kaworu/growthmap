@@ -437,12 +437,34 @@ from fastapi.responses import PlainTextResponse
 
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
-    """Export entire project tree as Markdown document."""
+    """Export entire project tree as Markdown document (bulk-loaded)."""
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
     if not project.root_node_id:
         raise HTTPException(404, "No root node")
+
+    # Bulk load all nodes, edges, blocks for this project
+    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
+
+    edges_result = await db.execute(
+        select(Edge.from_node_id, Edge.to_node_id).where(
+            Edge.project_id == project_id, Edge.relation_type == "child_of"
+        )
+    )
+    child_map: dict[str, list[str]] = {}
+    for from_id, to_id in edges_result.all():
+        child_map.setdefault(str(from_id), []).append(str(to_id))
+
+    all_node_ids = list(nodes_by_id.keys())
+    blocks_by_node: dict[str, list] = {}
+    if all_node_ids:
+        blocks_result = await db.execute(
+            select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
+        )
+        for b in blocks_result.scalars().all():
+            blocks_by_node.setdefault(str(b.node_id), []).append(b)
 
     lines = [f"# {project.name}\n"]
     if project.description:
@@ -451,21 +473,20 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         lines.append(f"**目標**: {project.goal}\n")
     lines.append("---\n")
 
-    async def export_node(nid: str, depth: int = 0):
-        n = await db.get(Node, nid)
-        if not n:
+    visited: set[str] = set()
+
+    def render_node(nid: str, depth: int = 0):
+        if nid in visited or nid not in nodes_by_id:
             return
+        visited.add(nid)
+        n = nodes_by_id[nid]
         prefix = "#" * min(depth + 2, 6)
         maturity_badge = {"seed": "🌱", "rough": "🪨", "developing": "🔧", "stable": "✅", "finalized": "🏆"}.get(n.maturity, "")
         lines.append(f"{prefix} {maturity_badge} {n.title}\n")
         if n.summary:
             lines.append(f"{n.summary}\n")
 
-        # Content blocks
-        result = await db.execute(
-            select(ContentBlock).where(ContentBlock.node_id == nid).order_by(ContentBlock.order_index)
-        )
-        for b in result.scalars().all():
+        for b in blocks_by_node.get(nid, []):
             content = b.content or {}
             title = content.get("title", "")
             body = content.get("body", "")
@@ -476,14 +497,8 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         if n.maturity == "seed":
             lines.append("_⏳ 待展開_\n")
 
-        # Recurse children
-        result = await db.execute(
-            select(Edge.to_node_id).where(
-                Edge.from_node_id == nid, Edge.relation_type == "child_of"
-            )
-        )
-        for cid in result.scalars().all():
-            await export_node(cid, depth + 1)
+        for cid in child_map.get(nid, []):
+            render_node(cid, depth + 1)
 
-    await export_node(project.root_node_id)
+    render_node(str(project.root_node_id))
     return "\n".join(lines)

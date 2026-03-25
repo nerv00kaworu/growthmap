@@ -54,13 +54,16 @@ if STATIC_DIR.exists():
 
     @app.get("/{path:path}")
     async def serve_spa(request: Request, path: str):
+        # Resolve and verify containment to prevent path traversal
+        file_path = (STATIC_DIR / path).resolve()
+        if not str(file_path).startswith(str(STATIC_DIR.resolve())):
+            raise HTTPException(403, "Forbidden")
         # Try exact file first
-        file_path = STATIC_DIR / path
         if file_path.is_file():
             return FileResponse(str(file_path))
         # Try path.html
-        html_path = STATIC_DIR / f"{path}.html"
-        if html_path.is_file():
+        html_path = (STATIC_DIR / f"{path}.html").resolve()
+        if str(html_path).startswith(str(STATIC_DIR.resolve())) and html_path.is_file():
             return FileResponse(str(html_path))
         # Fallback to index.html (SPA)
         index = STATIC_DIR / "index.html"
