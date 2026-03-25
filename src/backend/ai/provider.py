@@ -3,11 +3,29 @@ import os
 import json
 import httpx
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Default to local proxy; override via env
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://models.github.ai/inference")
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("GITHUB_TOKEN", ""))
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")
+
+
+def get_provider_config() -> tuple[str, str, str]:
+    base_url = LLM_BASE_URL.strip()
+    api_key = LLM_API_KEY.strip()
+    model = LLM_MODEL.strip()
+
+    if not base_url:
+        raise ValueError("LLM_BASE_URL is required before calling the AI provider")
+    if not api_key:
+        raise ValueError("LLM_API_KEY or GITHUB_TOKEN is required before calling the AI provider")
+    if not model:
+        raise ValueError("LLM_MODEL is required before calling the AI provider")
+
+    return base_url.rstrip("/"), api_key, model
 
 
 async def llm_complete(
@@ -18,10 +36,13 @@ async def llm_complete(
     max_tokens: int = 2000,
 ) -> str:
     """Send a chat completion request to any OpenAI-compatible API."""
-    model = model or LLM_MODEL
+    base_url, api_key, default_model = get_provider_config()
+    model = (model or default_model).strip()
+    if not model:
+        raise ValueError("LLM model cannot be blank")
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {LLM_API_KEY}",
+        "Authorization": f"Bearer {api_key}",
     }
     payload = {
         "model": model,
@@ -35,7 +56,7 @@ async def llm_complete(
 
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(
-            f"{LLM_BASE_URL}/chat/completions",
+            f"{base_url}/chat/completions",
             headers=headers,
             json=payload,
         )
