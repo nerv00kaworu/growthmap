@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -97,7 +97,7 @@ export function MindMap() {
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
   // Sync when flowNodes change
-  useMemo(() => {
+  useEffect(() => {
     setNodes(flowNodes);
     setEdges(flowEdges);
   }, [flowNodes, flowEdges, setNodes, setEdges]);
