@@ -21,24 +21,37 @@ interface NodeHistorySectionProps {
 export function NodeHistorySection({ selectedNode, Section }: NodeHistorySectionProps) {
   const [history, setHistory] = useState<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>([]);
   const [show, setShow] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
-    const h = await api.getHistory(selectedNode.id);
-    setHistory(h);
-    setShow(true);
+    setLoading(true);
+    setError(null);
+    try {
+      const h = await api.getHistory(selectedNode.id);
+      setHistory(h);
+      setShow(true);
+    } catch (e: unknown) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <Section title="操作紀錄" subtitle="回頭看這個節點怎麼長成現在這樣。">
       {!show ? (
-        <button onClick={load} className="text-xs text-gray-500 hover:text-gray-300 underline">
-          📜 查看操作歷史
-        </button>
+        <div className="space-y-2">
+          <button type="button" onClick={load} disabled={loading} className="text-xs text-gray-500 hover:text-gray-300 underline disabled:text-gray-600">
+            {loading ? "⏳ 載入中..." : "📜 查看操作歷史"}
+          </button>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
       ) : (
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <label className="text-xs text-gray-500 uppercase tracking-wider">📜 歷史</label>
-            <button onClick={() => setShow(false)} className="text-xs text-gray-600 hover:text-gray-400">收起</button>
+            <div className="text-xs text-gray-500 uppercase tracking-wider">📜 歷史</div>
+            <button type="button" onClick={() => setShow(false)} className="text-xs text-gray-600 hover:text-gray-400">收起</button>
           </div>
           {history.length === 0 ? (
             <p className="text-xs text-gray-600">無記錄</p>
