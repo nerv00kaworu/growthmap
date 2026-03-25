@@ -288,7 +288,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     );
 
     const failed = results.filter((r) => r.status === "rejected");
-    if (failed.length > 0) {
+    if (failed.length === expandSuggestions.length) {
       set({ error: `${failed.length} of ${expandSuggestions.length} suggestions failed to create` });
     }
 
