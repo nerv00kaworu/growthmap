@@ -33,9 +33,12 @@ export default function HomePage() {
   return (
     <div className="h-screen flex flex-col">
       {/* Top bar */}
-      <header className="h-12 bg-[#0d0d0d] border-b border-gray-800 flex items-center px-4 gap-4 shrink-0">
-        <h1 className="text-sm font-bold text-gray-300 tracking-wider">🌳 GrowthMap</h1>
-        <div className="h-4 w-px bg-gray-700" />
+      <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-panel)]/95 backdrop-blur flex items-center px-4 gap-4 shrink-0">
+        <div>
+          <div className="eyebrow-label">Project growth workspace</div>
+          <h1 className="text-sm font-semibold text-[var(--text-primary)] tracking-wide">🌳 GrowthMap</h1>
+        </div>
+        <div className="h-6 w-px bg-[var(--border)]" />
 
         {/* Project selector */}
         <select
@@ -44,7 +47,7 @@ export default function HomePage() {
             const p = projects.find((p) => p.id === e.target.value);
             if (p) selectProject(p);
           }}
-          className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+          className="surface-subtle rounded px-2.5 py-1.5 text-xs text-[var(--text-primary)]"
         >
           <option value="">選擇專案...</option>
           {projects.map((p) => (
@@ -53,46 +56,47 @@ export default function HomePage() {
         </select>
 
         <button
+          type="button"
           onClick={() => setShowNewProject(!showNewProject)}
-          className="text-xs text-blue-400 hover:text-blue-300"
+          className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200"
         >
           + 新專案
         </button>
 
         {currentProject && (
-          <span className="ml-auto text-xs text-gray-500">
-            {currentProject.description}
-          </span>
+          <div className="ml-auto min-w-0 text-right">
+            <div className="eyebrow-label">Current project</div>
+            <span className="block truncate text-xs text-[var(--text-muted)]">{currentProject.description || currentProject.name}</span>
+          </div>
         )}
       </header>
 
       {/* New project modal */}
       {showNewProject && (
-        <div className="bg-gray-900 border-b border-gray-700 p-4 flex gap-3 items-end">
+        <div className="surface-panel border-x-0 border-t-0 rounded-none p-4 flex gap-3 items-end">
           <div className="flex-1">
-            <label className="text-xs text-gray-500">專案名稱</label>
+            <div className="eyebrow-label">專案名稱</div>
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-              className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 mt-1"
+              className="mt-1 w-full rounded px-3 py-2 text-sm text-[var(--text-primary)] surface-subtle"
               placeholder="例：Fate Origin Agent"
-              autoFocus
             />
           </div>
           <div className="flex-1">
-            <label className="text-xs text-gray-500">描述（選填）</label>
+            <div className="eyebrow-label">描述（選填）</div>
             <input
               value={newDesc}
               onChange={(e) => setNewDesc(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 mt-1"
+              className="mt-1 w-full rounded px-3 py-2 text-sm text-[var(--text-primary)] surface-subtle"
               placeholder="一句話描述"
             />
           </div>
-          <button onClick={handleCreate} className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded">
+          <button type="button" onClick={handleCreate} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg">
             建立
           </button>
-          <button onClick={() => setShowNewProject(false)} className="px-3 py-1.5 text-gray-500 hover:text-gray-300 text-sm">
+          <button type="button" onClick={() => setShowNewProject(false)} className="px-3 py-2 text-[var(--text-faint)] hover:text-[var(--text-primary)] text-sm">
             取消
           </button>
         </div>
@@ -113,7 +117,7 @@ export default function HomePage() {
 
         {/* Right panel */}
         <div
-          className="border-l border-gray-800 bg-[#111] transition-all duration-300 overflow-hidden"
+          className="border-l border-[var(--border)] bg-[var(--bg-panel)] transition-all duration-300 overflow-hidden surface-panel rounded-none border-y-0 border-r-0"
           style={{ width: selectedNode ? 340 : 0 }}
         >
           <NodePanel />
