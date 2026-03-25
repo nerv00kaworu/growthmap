@@ -116,6 +116,8 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
     try:
         raw = await llm_complete(EXPAND_SYSTEM, user_prompt)
         suggestions = parse_json_response(raw)
+        if not isinstance(suggestions, list):
+            raise ValueError("LLM returned an invalid suggestions payload")
 
         # Log the AI operation
         node = await db.get(Node, req.node_id)
@@ -133,6 +135,8 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
             suggestions=[Suggestion(**s) for s in suggestions],
             context_used={"ancestor_path": ctx["ancestor_path"], "siblings_count": len(ctx["siblings"]), "children_count": len(ctx["children"]), "mode": req.mode},
         )
+    except json.JSONDecodeError:
+        raise HTTPException(500, "LLM returned invalid JSON for expand")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
 
@@ -154,6 +158,8 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
     try:
         raw = await llm_complete(DEEPEN_SYSTEM, user_prompt)
         result = parse_json_response(raw)
+        if not isinstance(result, dict):
+            raise ValueError("LLM returned an invalid deepen payload")
 
         # Log the AI operation
         node = await db.get(Node, req.node_id)
@@ -172,5 +178,7 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
             content_blocks=result.get("content_blocks", []),
             context_used={"ancestor_path": ctx["ancestor_path"], "siblings_count": len(ctx["siblings"]), "children_count": len(ctx["children"])},
         )
+    except json.JSONDecodeError:
+        raise HTTPException(500, "LLM returned invalid JSON for deepen")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
