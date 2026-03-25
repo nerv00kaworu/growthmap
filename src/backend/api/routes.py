@@ -1,403 +1,191 @@
 """Project & Node API routes"""
-import uuid
-from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, or_, update
+from fastapi.responses import PlainTextResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from db.database import get_db
-from models.models import Project, Node, Edge, ContentBlock, ActionLog
+from models.models import ContentBlock, Node
 from models.schemas import (
-    ProjectCreate, ProjectUpdate, ProjectOut,
-    NodeCreate, NodeUpdate, NodeOut, NodeBrief,
-    EdgeCreate, EdgeOut,
-    ContentBlockCreate, ContentBlockUpdate, ContentBlockOut,
+    ContentBlockCreate,
+    ContentBlockOut,
+    ContentBlockUpdate,
+    EdgeCreate,
+    EdgeOut,
+    NodeBrief,
+    NodeCreate,
+    NodeOut,
+    NodeUpdate,
+    ProjectCreate,
+    ProjectOut,
+    ProjectUpdate,
+)
+from services import (
+    NotFoundError,
+    ValidationError,
+    create_block as create_block_service,
+    create_edge as create_edge_service,
+    create_node as create_node_service,
+    create_project as create_project_service,
+    delete_edge as delete_edge_service,
+    delete_node as delete_node_service,
+    delete_project as delete_project_service,
+    export_project_markdown,
+    get_children as get_children_service,
+    get_node as get_node_service,
+    get_node_history as get_node_history_service,
+    get_project as get_project_service,
+    get_subtree as get_subtree_service,
+    list_projects as list_projects_service,
+    promote_child_mainline as promote_child_mainline_service,
+    promote_mainline as promote_mainline_service,
+    update_node as update_node_service,
+    update_project as update_project_service,
 )
 
 router = APIRouter()
 
 
-def touch_project(project: Project | None):
-    if project:
-        project.updated_at = datetime.now(timezone.utc)
+def _handle_service_error(exc: Exception) -> None:
+    if isinstance(exc, NotFoundError):
+        raise HTTPException(404, str(exc)) from exc
+    if isinstance(exc, ValidationError):
+        raise HTTPException(400, str(exc)) from exc
+    raise exc
 
 
 # ─── Projects ───
 
+
 @router.get("/projects", response_model=list[ProjectOut])
 async def list_projects(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Project).order_by(Project.updated_at.desc()))
-    return result.scalars().all()
+    return await list_projects_service(db)
 
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
 async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db)):
-    project = Project(**data.model_dump())
-    db.add(project)
-    await db.flush()
-
-    # 自動建 root node
-    root = Node(
-        project_id=project.id,
-        title=project.name,
-        summary=project.description,
-        node_type="concept",
-        created_by="human",
-    )
-    db.add(root)
-    await db.flush()
-    project.root_node_id = root.id
-
-    # log
-    db.add(ActionLog(
-        project_id=project.id,
-        actor_type="human",
-        action_type="create_project",
-        payload={"name": project.name},
-    ))
-    await db.commit()
-    await db.refresh(project)
-    return project
+    return await create_project_service(db, data)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 async def get_project(project_id: str, db: AsyncSession = Depends(get_db)):
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    return project
+    try:
+        return await get_project_service(db, project_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectOut)
 async def update_project(project_id: str, data: ProjectUpdate, db: AsyncSession = Depends(get_db)):
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(project, k, v)
-    await db.commit()
-    await db.refresh(project)
-    return project
+    try:
+        return await update_project_service(db, project_id, data)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.delete("/projects/{project_id}", status_code=204)
 async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    await db.delete(project)
-    await db.commit()
+    try:
+        await delete_project_service(db, project_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 # ─── Nodes ───
 
+
 @router.get("/projects/{project_id}/nodes", response_model=list[NodeBrief])
 async def list_nodes(project_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Node).where(Node.project_id == project_id).order_by(Node.created_at)
-    )
+    result = await db.execute(select(Node).where(Node.project_id == project_id).order_by(Node.created_at))
     return result.scalars().all()
 
 
 @router.post("/projects/{project_id}/nodes", response_model=NodeOut, status_code=201)
 async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depends(get_db)):
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-
-    node = Node(
-        project_id=project_id,
-        title=data.title,
-        summary=data.summary,
-        node_type=data.node_type,
-        description=data.description,
-        tags=data.tags,
-        created_by="human",
-    )
-    db.add(node)
-    await db.flush()
-
-    # 如果指定 parent，自動建 child_of edge
-    if data.parent_id:
-        parent = await db.get(Node, data.parent_id)
-        if not parent or parent.project_id != project_id:
-            raise HTTPException(400, "Invalid parent node")
-
-        # Determine if child should be mainline (first child)
-        result = await db.execute(
-            select(func.count()).select_from(Edge).where(
-                Edge.from_node_id == data.parent_id,
-                Edge.relation_type == "child_of"
-            )
-        )
-        existing_children = result.scalar() or 0
-        edge = Edge(
-            project_id=project_id,
-            from_node_id=data.parent_id,
-            to_node_id=node.id,
-            relation_type="child_of",
-            is_mainline=existing_children == 0,
-        )
-        db.add(edge)
-
-    db.add(ActionLog(
-        project_id=project_id,
-        node_id=node.id,
-        actor_type="human",
-        action_type="create_node",
-        payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
-    ))
-    touch_project(project)
-    # Auto-advance parent maturity
-    if data.parent_id:
-        await auto_advance_maturity(data.parent_id, db)
-    await db.commit()
-    await db.refresh(node)
-    return node
+    try:
+        return await create_node_service(db, project_id, data)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.get("/nodes/{node_id}", response_model=NodeOut)
 async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
-    node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-    return node
+    try:
+        return await get_node_service(db, node_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.patch("/nodes/{node_id}", response_model=NodeOut)
 async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends(get_db)):
-    node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(node, k, v)
-    node.last_edited_by = "human"
-    # Auto-advance maturity based on content richness
-    await auto_advance_maturity(node_id, db)
-
-    db.add(ActionLog(
-        project_id=node.project_id,
-        node_id=node.id,
-        actor_type="human",
-        action_type="update_node",
-        payload=data.model_dump(exclude_unset=True),
-    ))
-    project = await db.get(Project, node.project_id)
-    touch_project(project)
-    await db.commit()
-    await db.refresh(node)
-    return node
+    try:
+        return await update_node_service(db, node_id, data)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.delete("/nodes/{node_id}", status_code=204)
 async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
-    node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-    project = await db.get(Project, node.project_id)
-    if project and project.root_node_id == node_id:
-        raise HTTPException(400, "Cannot delete the project root node")
-    # Delete edges referencing this node first
-    from sqlalchemy import or_
-    await db.execute(
-        Edge.__table__.delete().where(
-            or_(Edge.from_node_id == node_id, Edge.to_node_id == node_id)
-        )
-    )
-    await db.delete(node)
-    touch_project(project)
-    await db.commit()
+    try:
+        await delete_node_service(db, node_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.get("/nodes/{node_id}/children", response_model=list[NodeBrief])
 async def get_children(node_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Node).join(Edge, Edge.to_node_id == Node.id).where(
-            Edge.from_node_id == node_id,
-            Edge.relation_type == "child_of"
-        )
-    )
-    return result.scalars().all()
+    try:
+        return await get_children_service(db, node_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.get("/nodes/{node_id}/subtree")
 async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
-    """遞迴取得子樹（bulk-loaded to avoid per-node query fan-out）"""
-    node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-
-    edge_rows = await db.execute(
-        select(Edge.from_node_id, Edge.to_node_id, Edge.id, Edge.is_mainline).where(
-            Edge.project_id == node.project_id,
-            Edge.relation_type == "child_of"
-        )
-    )
-    child_map: dict[str, list[str]] = {}
-    edge_meta: dict[str, dict[str, str | bool]] = {}
-    for from_node_id, to_node_id, edge_id, is_mainline in edge_rows.all():
-        from_id = str(from_node_id)
-        to_id = str(to_node_id)
-        edge_meta[to_id] = {
-            "edge_id": str(edge_id),
-            "is_mainline": bool(is_mainline),
-        }
-        child_map.setdefault(from_id, []).append(to_id)
-
-    subtree_ids = {node_id}
-    frontier = [node_id]
-    depth = 0
-    while frontier and depth < 10:
-        next_frontier: list[str] = []
-        for current_id in frontier:
-            for child_id in child_map.get(current_id, []):
-                if child_id not in subtree_ids:
-                    subtree_ids.add(child_id)
-                    next_frontier.append(child_id)
-        frontier = next_frontier
-        depth += 1
-
-    nodes_result = await db.execute(
-        select(Node).where(Node.id.in_(subtree_ids))
-    )
-    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
-
-    blocks_result = await db.execute(
-        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
-    )
-    blocks_by_node_id: dict[str, list[dict]] = {}
-    for block in blocks_result.scalars().all():
-        block_node_id = str(block.node_id)
-        blocks_by_node_id.setdefault(block_node_id, []).append({
-            "id": block.id,
-            "block_type": block.block_type,
-            "content": block.content,
-            "order_index": block.order_index,
-        })
-
-    def build_tree(nid: str, current_depth: int = 0, ancestor_path: list[dict[str, str]] | None = None) -> dict:
-        n = nodes_by_id[nid]
-        current_ancestor_path = list(ancestor_path or [])
-        children = []
-        if current_depth < 10:
-            next_ancestor_path = current_ancestor_path + [{"id": str(n.id), "title": n.title, "node_type": n.node_type}]
-            for child_id in child_map.get(nid, []):
-                if child_id in nodes_by_id:
-                    children.append(build_tree(child_id, current_depth + 1, next_ancestor_path))
-
-        return {
-            "id": str(n.id),
-            "title": n.title,
-            "summary": n.summary,
-            "node_type": n.node_type,
-            "status": n.status,
-            "maturity": n.maturity,
-            "tags": n.tags or [],
-            "meta": edge_meta.get(nid, {}),
-            "content_blocks": blocks_by_node_id.get(nid, []),
-            "ancestor_path": current_ancestor_path,
-            "created_at": n.created_at.isoformat() if n.created_at else "",
-            "updated_at": n.updated_at.isoformat() if n.updated_at else "",
-            "children": children,
-        }
-
-    return build_tree(node_id)
+    try:
+        return await get_subtree_service(db, node_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 # ─── Edges ───
 
+
 @router.post("/edges", response_model=EdgeOut, status_code=201)
 async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
-    from_node = await db.get(Node, data.from_node_id)
-    to_node = await db.get(Node, data.to_node_id)
-    if not from_node or not to_node:
-        raise HTTPException(400, "Invalid node id")
-    if from_node.project_id != to_node.project_id:
-        raise HTTPException(400, "Nodes must be in same project")
-
-    payload = data.model_dump()
-    is_mainline = payload.pop("is_mainline", False)
-
-    # If new edge is marked as mainline, demote siblings first
-    if is_mainline and payload.get("relation_type", "child_of") == "child_of":
-        await db.execute(
-            update(Edge)
-            .where(
-                Edge.from_node_id == payload["from_node_id"],
-                Edge.relation_type == "child_of"
-            )
-            .values(is_mainline=False)
-        )
-
-    edge = Edge(
-        project_id=from_node.project_id,
-        **payload,
-        is_mainline=is_mainline,
-    )
-    db.add(edge)
-    await db.commit()
-    await db.refresh(edge)
-    return edge
+    try:
+        return await create_edge_service(db, data)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.post("/edges/{edge_id}/promote-mainline", response_model=EdgeOut)
 async def promote_mainline(edge_id: str, db: AsyncSession = Depends(get_db)):
-    edge = await db.get(Edge, edge_id)
-    if not edge:
-        raise HTTPException(404, "Edge not found")
-    if edge.relation_type != "child_of":
-        raise HTTPException(400, "Only child_of edges can be promoted")
-
-    await db.execute(
-        update(Edge)
-        .where(
-            Edge.from_node_id == edge.from_node_id,
-            Edge.relation_type == "child_of"
-        )
-        .values(is_mainline=False)
-    )
-
-    edge.is_mainline = True
-    await db.commit()
-    await db.refresh(edge)
-    return edge
+    try:
+        return await promote_mainline_service(db, edge_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.post("/nodes/{parent_id}/promote-child/{child_id}")
 async def promote_child_mainline(parent_id: str, child_id: str, db: AsyncSession = Depends(get_db)):
-    """Promote a child node to mainline by parent+child ids."""
-    result = await db.execute(
-        select(Edge).where(
-            Edge.from_node_id == parent_id,
-            Edge.to_node_id == child_id,
-            Edge.relation_type == "child_of"
-        )
-    )
-    edge = result.scalar_one_or_none()
-    if not edge:
-        raise HTTPException(404, "Edge not found")
-
-    await db.execute(
-        update(Edge)
-        .where(Edge.from_node_id == parent_id, Edge.relation_type == "child_of")
-        .values(is_mainline=False)
-    )
-    edge.is_mainline = True
-    await db.commit()
-    return {"ok": True}
+    try:
+        return await promote_child_mainline_service(db, parent_id, child_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.delete("/edges/{edge_id}", status_code=204)
 async def delete_edge(edge_id: str, db: AsyncSession = Depends(get_db)):
-    edge = await db.get(Edge, edge_id)
-    if not edge:
-        raise HTTPException(404, "Edge not found")
-    await db.delete(edge)
-    await db.commit()
+    try:
+        await delete_edge_service(db, edge_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 # ─── Content Blocks ───
+
 
 @router.get("/nodes/{node_id}/blocks", response_model=list[ContentBlockOut])
 async def list_blocks(node_id: str, db: AsyncSession = Depends(get_db)):
@@ -409,15 +197,10 @@ async def list_blocks(node_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/nodes/{node_id}/blocks", response_model=ContentBlockOut, status_code=201)
 async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession = Depends(get_db)):
-    node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-    block = ContentBlock(node_id=node_id, **data.model_dump())
-    db.add(block)
-    await auto_advance_maturity(node_id, db)
-    await db.commit()
-    await db.refresh(block)
-    return block
+    try:
+        return await create_block_service(db, node_id, data)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)
 
 
 @router.patch("/blocks/{block_id}", response_model=ContentBlockOut)
@@ -425,8 +208,8 @@ async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession
     block = await db.get(ContentBlock, block_id)
     if not block:
         raise HTTPException(404, "Block not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(block, k, v)
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(block, key, value)
     await db.commit()
     await db.refresh(block)
     return block
@@ -441,154 +224,20 @@ async def delete_block(block_id: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
-# ─── Maturity Auto-Advance ───
-
-MATURITY_ORDER = ["seed", "rough", "developing", "stable", "finalized"]
-
-async def auto_advance_maturity(node_id: str, db: AsyncSession):
-    """Auto-advance node maturity based on content richness.
-    
-    Rules:
-    - seed → rough: has summary OR at least 1 child
-    - rough → developing: has ≥1 content block AND ≥1 child  
-    - developing → stable: has ≥3 content blocks AND summary AND ≥2 children
-    - stable → finalized: only manual (human decision)
-    """
-    node = await db.get(Node, node_id)
-    if not node or node.maturity == "finalized":
-        return
-
-    # Count content blocks
-    result = await db.execute(
-        select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == node_id)
-    )
-    block_count = result.scalar() or 0
-
-    # Count children
-    result = await db.execute(
-        select(func.count()).select_from(Edge).where(
-            Edge.from_node_id == node_id,
-            Edge.relation_type == "child_of"
-        )
-    )
-    child_count = result.scalar() or 0
-
-    has_summary = bool(node.summary and len(node.summary.strip()) > 10)
-    current = node.maturity
-    new_maturity = current
-
-    if current == "seed":
-        if has_summary or child_count >= 1:
-            new_maturity = "rough"
-    if current in ("seed", "rough"):
-        if block_count >= 1 and child_count >= 1:
-            new_maturity = "developing"
-    if current in ("seed", "rough", "developing"):
-        if block_count >= 3 and has_summary and child_count >= 2:
-            new_maturity = "stable"
-
-    if new_maturity != current:
-        node.maturity = new_maturity
-        db.add(ActionLog(
-            project_id=node.project_id,
-            node_id=node.id,
-            actor_type="system",
-            action_type="maturity_advance",
-            payload={"from": current, "to": new_maturity},
-        ))
-
-
 # ─── Node History ───
+
 
 @router.get("/nodes/{node_id}/history")
 async def get_node_history(node_id: str, limit: int = 20, db: AsyncSession = Depends(get_db)):
-    """Get action history for a node — what happened to it and when."""
-    result = await db.execute(
-        select(ActionLog).where(ActionLog.node_id == node_id)
-        .order_by(ActionLog.created_at.desc())
-        .limit(limit)
-    )
-    logs = result.scalars().all()
-    return [
-        {
-            "id": log.id,
-            "action_type": log.action_type,
-            "actor_type": log.actor_type,
-            "payload": log.payload,
-            "created_at": log.created_at.isoformat() if log.created_at else "",
-        }
-        for log in logs
-    ]
+    return await get_node_history_service(db, node_id, limit)
 
 
 # ─── Export ───
 
-from fastapi.responses import PlainTextResponse
 
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
-    """Export entire project tree as Markdown document (bulk-loaded)."""
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-    if not project.root_node_id:
-        raise HTTPException(404, "No root node")
-
-    # Bulk load all nodes, edges, blocks for this project
-    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
-    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
-
-    edges_result = await db.execute(
-        select(Edge.from_node_id, Edge.to_node_id).where(
-            Edge.project_id == project_id, Edge.relation_type == "child_of"
-        )
-    )
-    child_map: dict[str, list[str]] = {}
-    for from_id, to_id in edges_result.all():
-        child_map.setdefault(str(from_id), []).append(str(to_id))
-
-    all_node_ids = list(nodes_by_id.keys())
-    blocks_by_node: dict[str, list] = {}
-    if all_node_ids:
-        blocks_result = await db.execute(
-            select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
-        )
-        for b in blocks_result.scalars().all():
-            blocks_by_node.setdefault(str(b.node_id), []).append(b)
-
-    lines = [f"# {project.name}\n"]
-    if project.description:
-        lines.append(f"_{project.description}_\n")
-    if project.goal:
-        lines.append(f"**目標**: {project.goal}\n")
-    lines.append("---\n")
-
-    visited: set[str] = set()
-
-    def render_node(nid: str, depth: int = 0):
-        if nid in visited or nid not in nodes_by_id:
-            return
-        visited.add(nid)
-        n = nodes_by_id[nid]
-        prefix = "#" * min(depth + 2, 6)
-        maturity_badge = {"seed": "🌱", "rough": "🪨", "developing": "🔧", "stable": "✅", "finalized": "🏆"}.get(n.maturity, "")
-        lines.append(f"{prefix} {maturity_badge} {n.title}\n")
-        if n.summary:
-            lines.append(f"{n.summary}\n")
-
-        for b in blocks_by_node.get(nid, []):
-            content = b.content or {}
-            title = content.get("title", "")
-            body = content.get("body", "")
-            lines.append(f"**[{b.block_type}] {title}**\n")
-            if body:
-                lines.append(f"{body}\n")
-
-        if n.maturity == "seed":
-            lines.append("_⏳ 待展開_\n")
-
-        for cid in child_map.get(nid, []):
-            render_node(cid, depth + 1)
-
-    render_node(str(project.root_node_id))
-    return "\n".join(lines)
+    try:
+        return await export_project_markdown(db, project_id)
+    except (NotFoundError, ValidationError) as exc:
+        _handle_service_error(exc)

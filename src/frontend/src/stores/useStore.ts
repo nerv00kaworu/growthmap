@@ -275,36 +275,26 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   acceptAllSuggestions: async () => {
     const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
-    let tree = rootNode;
-    for (const s of expandSuggestions) {
-      const newNode = await api.createNode(currentProject.id, {
-        title: s.title,
-        summary: s.summary,
-        parent_id: expandTargetNodeId,
-        node_type: s.node_type,
-      });
-      const child: GNode = {
-        id: newNode.id,
-        title: newNode.title,
-        summary: newNode.summary || "",
-        node_type: newNode.node_type || "idea",
-        maturity: newNode.maturity || "seed",
-        tags: newNode.tags || [],
-        meta: {},
-      project_id: currentProject.id,
-      status: "active",
-        content_blocks: [],
-        children: [],
-        created_at: newNode.created_at || "",
-        updated_at: newNode.updated_at || "",
-      };
-      tree = insertChild(tree, expandTargetNodeId, child);
+
+    const results = await Promise.allSettled(
+      expandSuggestions.map((s) =>
+        api.createNode(currentProject.id, {
+          title: s.title,
+          summary: s.summary,
+          parent_id: expandTargetNodeId,
+          node_type: s.node_type,
+        })
+      )
+    );
+
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length === expandSuggestions.length) {
+      set({ error: `${failed.length} of ${expandSuggestions.length} suggestions failed to create` });
     }
-    set({ rootNode: tree, expandSuggestions: null });
-    const { selectedNodeId } = get();
-    if (selectedNodeId) {
-      set({ selectedNode: findNode(tree, selectedNodeId) });
-    }
+
+    set({ expandSuggestions: null });
+    // Refresh tree from server to get accurate state regardless of partial failures
+    await get().refreshTree();
   },
 
   acceptDeepen: async () => {

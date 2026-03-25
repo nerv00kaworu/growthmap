@@ -1,17 +1,32 @@
 // API client for GrowthMap backend
 const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";
 
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API ${res.status}: ${text}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      signal: options?.signal ?? controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`API ${res.status}: ${text}`);
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`API request to ${path} timed out after ${DEFAULT_TIMEOUT_MS / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 import type { Project, GNode, GrowthMode } from "./types";
