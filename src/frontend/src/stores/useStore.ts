@@ -45,6 +45,38 @@ function findNode(node: GNode, id: string): GNode | null {
   return null;
 }
 
+// Insert a child node into a tree (in-place returns new tree)
+function insertChild(root: GNode, parentId: string, child: GNode): GNode {
+  if (root.id === parentId) {
+    return { ...root, children: [...(root.children || []), child] };
+  }
+  return {
+    ...root,
+    children: (root.children || []).map((c) => insertChild(c, parentId, child)),
+  };
+}
+
+// Remove a node from the tree by id
+function removeNode(root: GNode, nodeId: string): GNode {
+  return {
+    ...root,
+    children: (root.children || [])
+      .filter((c) => c.id !== nodeId)
+      .map((c) => removeNode(c, nodeId)),
+  };
+}
+
+// Update a node in the tree by id
+function patchNode(root: GNode, nodeId: string, patch: Partial<GNode>): GNode {
+  if (root.id === nodeId) {
+    return { ...root, ...patch };
+  }
+  return {
+    ...root,
+    children: (root.children || []).map((c) => patchNode(c, nodeId, patch)),
+  };
+}
+
 export const useStore = create<GrowthMapStore>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -91,22 +123,56 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   addChildNode: async (parentId, title, nodeType) => {
-    const { currentProject } = get();
-    if (!currentProject) return;
-    await api.createNode(currentProject.id, { title, parent_id: parentId, node_type: nodeType });
-    await get().refreshTree();
+    const { currentProject, rootNode } = get();
+    if (!currentProject || !rootNode) return;
+    const newNode = await api.createNode(currentProject.id, { title, parent_id: parentId, node_type: nodeType });
+    const child: GNode = {
+      id: newNode.id,
+      title: newNode.title,
+      summary: newNode.summary || "",
+      node_type: newNode.node_type || "idea",
+      maturity: newNode.maturity || "seed",
+      tags: newNode.tags || [],
+      meta: {},
+      project_id: currentProject.id,
+      status: "active",
+      content_blocks: [],
+      children: [],
+      created_at: newNode.created_at || "",
+      updated_at: newNode.updated_at || "",
+    };
+    const updated = insertChild(rootNode, parentId, child);
+    set({ rootNode: updated });
+    // Re-sync selectedNode if viewing the parent
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
   },
 
   updateNode: async (nodeId, data) => {
     await api.updateNode(nodeId, data);
-    await get().refreshTree();
+    const { rootNode } = get();
+    if (!rootNode) return;
+    const updated = patchNode(rootNode, nodeId, data);
+    set({ rootNode: updated });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
   },
 
   deleteNode: async (nodeId) => {
     await api.deleteNode(nodeId);
-    const { selectedNodeId } = get();
-    if (selectedNodeId === nodeId) set({ selectedNodeId: null, selectedNode: null });
-    await get().refreshTree();
+    const { rootNode, selectedNodeId } = get();
+    if (!rootNode) return;
+    const updated = removeNode(rootNode, nodeId);
+    set({ rootNode: updated });
+    if (selectedNodeId === nodeId) {
+      set({ selectedNodeId: null, selectedNode: null });
+    } else if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
   },
 
   refreshTree: async () => {
@@ -114,7 +180,6 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (!currentProject) return;
     const rootNode = await api.getSubtree(currentProject.root_node_id);
     set({ rootNode });
-    // Re-select current node
     const { selectedNodeId } = get();
     if (selectedNodeId && rootNode) {
       set({ selectedNode: findNode(rootNode, selectedNodeId) });
@@ -142,50 +207,106 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptSuggestion: async (index) => {
-    const { expandSuggestions, expandTargetNodeId, currentProject } = get();
-    if (!expandSuggestions || !expandTargetNodeId || !currentProject) return;
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
+    if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
     const s = expandSuggestions[index];
-    await api.createNode(currentProject.id, {
+    const newNode = await api.createNode(currentProject.id, {
       title: s.title,
       summary: s.summary,
       parent_id: expandTargetNodeId,
       node_type: s.node_type,
     });
+    const child: GNode = {
+      id: newNode.id,
+      title: newNode.title,
+      summary: newNode.summary || "",
+      node_type: newNode.node_type || "idea",
+      maturity: newNode.maturity || "seed",
+      tags: newNode.tags || [],
+      meta: {},
+      project_id: currentProject.id,
+      status: "active",
+      content_blocks: [],
+      children: [],
+      created_at: newNode.created_at || "",
+      updated_at: newNode.updated_at || "",
+    };
+    const updated = insertChild(rootNode, expandTargetNodeId, child);
     const remaining = expandSuggestions.filter((_, i) => i !== index);
-    set({ expandSuggestions: remaining.length > 0 ? remaining : null });
-    await get().refreshTree();
+    set({
+      rootNode: updated,
+      expandSuggestions: remaining.length > 0 ? remaining : null,
+    });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
   },
 
   acceptAllSuggestions: async () => {
-    const { expandSuggestions, expandTargetNodeId, currentProject } = get();
-    if (!expandSuggestions || !expandTargetNodeId || !currentProject) return;
-    // Create all nodes sequentially to avoid race conditions
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
+    if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
+    let tree = rootNode;
     for (const s of expandSuggestions) {
-      await api.createNode(currentProject.id, {
+      const newNode = await api.createNode(currentProject.id, {
         title: s.title,
         summary: s.summary,
         parent_id: expandTargetNodeId,
         node_type: s.node_type,
       });
+      const child: GNode = {
+        id: newNode.id,
+        title: newNode.title,
+        summary: newNode.summary || "",
+        node_type: newNode.node_type || "idea",
+        maturity: newNode.maturity || "seed",
+        tags: newNode.tags || [],
+        meta: {},
+      project_id: currentProject.id,
+      status: "active",
+        content_blocks: [],
+        children: [],
+        created_at: newNode.created_at || "",
+        updated_at: newNode.updated_at || "",
+      };
+      tree = insertChild(tree, expandTargetNodeId, child);
     }
-    set({ expandSuggestions: null });
-    await get().refreshTree();
+    set({ rootNode: tree, expandSuggestions: null });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(tree, selectedNodeId) });
+    }
   },
 
   acceptDeepen: async () => {
-    const { deepenResult } = get();
-    if (!deepenResult) return;
+    const { deepenResult, rootNode } = get();
+    if (!deepenResult || !rootNode) return;
     const targetId = deepenResult.target_node_id;
     await api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>);
-    // Create content blocks
     for (const block of deepenResult.content_blocks) {
       await api.createBlock(targetId, {
         block_type: block.block_type,
         content: { title: block.title, body: block.body },
       });
     }
-    set({ deepenResult: null });
-    await get().refreshTree();
+    // Patch locally: update summary + append blocks
+    const newBlocks = deepenResult.content_blocks.map((b, i) => ({
+      id: `temp-${Date.now()}-${i}`,
+      block_type: b.block_type,
+      content: { title: b.title, body: b.body },
+      order_index: i,
+    }));
+    const target = findNode(rootNode, targetId);
+    const existingBlocks = target?.content_blocks || [];
+    const updated = patchNode(rootNode, targetId, {
+      summary: deepenResult.enriched_summary,
+      content_blocks: [...existingBlocks, ...newBlocks],
+    } as Partial<GNode>);
+    set({ rootNode: updated, deepenResult: null });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
   },
 
   dismissAI: () => {
