@@ -489,6 +489,12 @@ async def auto_advance_maturity(node_id: str, db: AsyncSession):
             new_maturity = "stable"
 
     if new_maturity != current:
+        await db.refresh(node)
+        current = node.maturity
+        if current == "finalized":
+            return
+        if new_maturity == current:
+            return
         node.maturity = new_maturity
         db.add(ActionLog(
             project_id=node.project_id,
