@@ -22,6 +22,13 @@ from services.project_service import (
     touch_project,
     update_project,
 )
+from services.provider_service import (
+    create_provider,
+    delete_provider,
+    get_provider,
+    list_providers,
+    update_provider,
+)
 
 __all__ = [
     "MATURITY_ORDER",
@@ -32,19 +39,24 @@ __all__ = [
     "create_edge",
     "create_node",
     "create_project",
+    "create_provider",
     "delete_edge",
     "delete_node",
     "delete_project",
+    "delete_provider",
     "export_project_markdown",
     "get_children",
     "get_node",
     "get_node_history",
     "get_project",
+    "get_provider",
     "get_subtree",
     "list_projects",
+    "list_providers",
     "promote_child_mainline",
     "promote_mainline",
     "touch_project",
     "update_node",
     "update_project",
+    "update_provider",
 ]

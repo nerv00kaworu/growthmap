@@ -1,9 +1,9 @@
-"""Service-layer exceptions translated by API routes."""
+"""Service-layer exceptions."""
 
 
 class NotFoundError(Exception):
-    """Raised when a requested entity does not exist."""
+    """Raised when a requested resource does not exist."""
 
 
 class ValidationError(Exception):
-    """Raised when service input violates business rules."""
+    """Raised when a request violates service-layer validation rules."""
