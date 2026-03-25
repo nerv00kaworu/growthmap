@@ -122,6 +122,8 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
         # Validate required fields before constructing response
         validated = []
         for s in suggestions:
+            if not isinstance(s, dict):
+                raise TypeError("Each suggestion payload must be an object")
             validated.append(Suggestion(
                 title=s["title"],
                 summary=s["summary"],
@@ -146,8 +148,12 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
         )
     except json.JSONDecodeError:
         raise HTTPException(500, "LLM returned invalid JSON for expand")
-    except (KeyError, TypeError) as e:
-        raise HTTPException(500, f"LLM returned malformed suggestion data: {str(e)}")
+    except KeyError as e:
+        raise HTTPException(500, f"LLM returned incomplete expand payload: missing {str(e)}")
+    except TypeError:
+        raise HTTPException(500, "LLM returned malformed expand payload")
+    except ValueError as e:
+        raise HTTPException(500, f"LLM error: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
 
@@ -174,6 +180,10 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 
         enriched_summary = result["enriched_summary"]
         content_blocks = result.get("content_blocks", [])
+        if not isinstance(enriched_summary, str):
+            raise TypeError("enriched_summary must be a string")
+        if not isinstance(content_blocks, list):
+            raise TypeError("content_blocks must be a list")
 
         # Validate content_blocks structure
         for block in content_blocks:
@@ -199,7 +209,11 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
         )
     except json.JSONDecodeError:
         raise HTTPException(500, "LLM returned invalid JSON for deepen")
-    except (KeyError, TypeError) as e:
-        raise HTTPException(500, f"LLM returned malformed deepen data: {str(e)}")
+    except KeyError as e:
+        raise HTTPException(500, f"LLM returned incomplete deepen payload: missing {str(e)}")
+    except TypeError:
+        raise HTTPException(500, "LLM returned malformed deepen payload")
+    except ValueError as e:
+        raise HTTPException(500, f"LLM error: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
