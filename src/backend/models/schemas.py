@@ -161,6 +161,21 @@ class ContentBlockOut(BaseModel):
 
 # === Suggestion ===
 
+class SuggestionCreate(BaseModel):
+    project_id: str
+    target_node_id: str
+    action_type: str  # "add_child", "edit_content", "restructure"
+    payload: dict = {}
+    provider_id: Optional[str] = None
+    provider_model: Optional[str] = None
+    cost_estimate: Optional[float] = None
+
+
+class SuggestionUpdate(BaseModel):
+    status: Optional[str] = None  # "approved", "rejected"
+    reviewed_by: Optional[str] = None
+
+
 class SuggestionOut(BaseModel):
     id: str
     project_id: str
