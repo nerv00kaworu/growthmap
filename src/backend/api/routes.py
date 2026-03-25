@@ -198,15 +198,16 @@ async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
     project = await db.get(Project, node.project_id)
     if project and project.root_node_id == node_id:
         raise HTTPException(400, "Cannot delete the project root node")
-    # Delete edges referencing this node first
-    from sqlalchemy import or_
-    await db.execute(
-        Edge.__table__.delete().where(
-            or_(Edge.from_node_id == node_id, Edge.to_node_id == node_id)
+    async with db.begin_nested():
+        edge_result = await db.execute(
+            select(Edge).where(
+                or_(Edge.from_node_id == node_id, Edge.to_node_id == node_id)
+            )
         )
-    )
-    await db.delete(node)
-    touch_project(project)
+        for edge in edge_result.scalars().all():
+            await db.delete(edge)
+        await db.delete(node)
+        touch_project(project)
     await db.commit()
 
 
