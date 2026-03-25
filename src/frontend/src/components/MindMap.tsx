@@ -52,6 +52,7 @@ function treeToFlow(
         summary: node.summary,
         isSelected: node.id === selectedId,
         childCount: node.children?.length || 0,
+        isMainline: Boolean(node.is_mainline),
       },
     });
 
@@ -69,7 +70,7 @@ function treeToFlow(
         id: `${node.id}-${child.id}`,
         source: node.id,
         target: child.id,
-        style: { stroke: "#333", strokeWidth: 1.5 },
+        style: child.is_mainline ? { stroke: "#60a5fa", strokeWidth: 2.5 } : { stroke: "#333", strokeWidth: 1.5 },
         animated: false,
       });
 

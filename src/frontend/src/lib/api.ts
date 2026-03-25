@@ -32,6 +32,14 @@ export const api = {
   deleteNode: (nodeId: string) =>
     request<void>(`/nodes/${nodeId}`, { method: "DELETE" }),
 
+  // Edges
+  createEdge: (data: { from_node_id: string; to_node_id: string; relation_type?: string; is_mainline?: boolean }) =>
+    request(`/edges`, { method: "POST", body: JSON.stringify(data) }),
+  promoteMainline: (edgeId: string) =>
+    request(`/edges/${edgeId}/promote-mainline`, { method: "POST" }),
+  promoteChildMainline: (parentId: string, childId: string) =>
+    request(`/nodes/${parentId}/promote-child/${childId}`, { method: "POST" }),
+
   // Content blocks
   getBlocks: (nodeId: string) =>
     request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number }[]>(`/nodes/${nodeId}/blocks`),

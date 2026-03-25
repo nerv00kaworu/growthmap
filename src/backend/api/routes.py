@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -123,11 +123,21 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         parent = await db.get(Node, data.parent_id)
         if not parent or parent.project_id != project_id:
             raise HTTPException(400, "Invalid parent node")
+
+        # Determine if child should be mainline (first child)
+        result = await db.execute(
+            select(func.count()).select_from(Edge).where(
+                Edge.from_node_id == data.parent_id,
+                Edge.relation_type == "child_of"
+            )
+        )
+        existing_children = result.scalar() or 0
         edge = Edge(
             project_id=project_id,
             from_node_id=data.parent_id,
             to_node_id=node.id,
             relation_type="child_of",
+            is_mainline=existing_children == 0,
         )
         db.add(edge)
 
@@ -219,15 +229,20 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Node not found")
 
     edge_rows = await db.execute(
-        select(Edge.from_node_id, Edge.to_node_id).where(
+        select(Edge.from_node_id, Edge.to_node_id, Edge.id, Edge.is_mainline).where(
             Edge.project_id == node.project_id,
             Edge.relation_type == "child_of"
         )
     )
     child_map: dict[str, list[str]] = {}
-    for from_node_id, to_node_id in edge_rows.all():
+    edge_meta: dict[str, dict[str, str | bool]] = {}
+    for from_node_id, to_node_id, edge_id, is_mainline in edge_rows.all():
         from_id = str(from_node_id)
         to_id = str(to_node_id)
+        edge_meta[to_id] = {
+            "edge_id": str(edge_id),
+            "is_mainline": bool(is_mainline),
+        }
         child_map.setdefault(from_id, []).append(to_id)
 
     subtree_ids = {node_id}
@@ -279,7 +294,7 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
             "status": n.status,
             "maturity": n.maturity,
             "tags": n.tags or [],
-            "meta": {},
+            "meta": edge_meta.get(nid, {}),
             "content_blocks": blocks_by_node_id.get(nid, []),
             "ancestor_path": current_ancestor_path,
             "created_at": n.created_at.isoformat() if n.created_at else "",
@@ -301,14 +316,76 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
     if from_node.project_id != to_node.project_id:
         raise HTTPException(400, "Nodes must be in same project")
 
+    payload = data.model_dump()
+    is_mainline = payload.pop("is_mainline", False)
+
+    # If new edge is marked as mainline, demote siblings first
+    if is_mainline and payload.get("relation_type", "child_of") == "child_of":
+        await db.execute(
+            update(Edge)
+            .where(
+                Edge.from_node_id == payload["from_node_id"],
+                Edge.relation_type == "child_of"
+            )
+            .values(is_mainline=False)
+        )
+
     edge = Edge(
         project_id=from_node.project_id,
-        **data.model_dump(),
+        **payload,
+        is_mainline=is_mainline,
     )
     db.add(edge)
     await db.commit()
     await db.refresh(edge)
     return edge
+
+
+@router.post("/edges/{edge_id}/promote-mainline", response_model=EdgeOut)
+async def promote_mainline(edge_id: str, db: AsyncSession = Depends(get_db)):
+    edge = await db.get(Edge, edge_id)
+    if not edge:
+        raise HTTPException(404, "Edge not found")
+    if edge.relation_type != "child_of":
+        raise HTTPException(400, "Only child_of edges can be promoted")
+
+    await db.execute(
+        update(Edge)
+        .where(
+            Edge.from_node_id == edge.from_node_id,
+            Edge.relation_type == "child_of"
+        )
+        .values(is_mainline=False)
+    )
+
+    edge.is_mainline = True
+    await db.commit()
+    await db.refresh(edge)
+    return edge
+
+
+@router.post("/nodes/{parent_id}/promote-child/{child_id}")
+async def promote_child_mainline(parent_id: str, child_id: str, db: AsyncSession = Depends(get_db)):
+    """Promote a child node to mainline by parent+child ids."""
+    result = await db.execute(
+        select(Edge).where(
+            Edge.from_node_id == parent_id,
+            Edge.to_node_id == child_id,
+            Edge.relation_type == "child_of"
+        )
+    )
+    edge = result.scalar_one_or_none()
+    if not edge:
+        raise HTTPException(404, "Edge not found")
+
+    await db.execute(
+        update(Edge)
+        .where(Edge.from_node_id == parent_id, Edge.relation_type == "child_of")
+        .values(is_mainline=False)
+    )
+    edge.is_mainline = True
+    await db.commit()
+    return {"ok": True}
 
 
 @router.delete("/edges/{edge_id}", status_code=204)

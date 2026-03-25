@@ -21,6 +21,7 @@ interface GrowthMapStore {
   updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
+  promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
 
   // AI
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
@@ -74,6 +75,22 @@ function patchNode(root: GNode, nodeId: string, patch: Partial<GNode>): GNode {
   return {
     ...root,
     children: (root.children || []).map((c) => patchNode(c, nodeId, patch)),
+  };
+}
+
+function markMainlineChild(root: GNode, parentId: string, childId: string): GNode {
+  if (root.id === parentId) {
+    return {
+      ...root,
+      children: (root.children || []).map((child) => ({
+        ...child,
+        is_mainline: child.id === childId,
+      })),
+    };
+  }
+  return {
+    ...root,
+    children: (root.children || []).map((c) => markMainlineChild(c, parentId, childId)),
   };
 }
 
@@ -183,6 +200,18 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { selectedNodeId } = get();
     if (selectedNodeId && rootNode) {
       set({ selectedNode: findNode(rootNode, selectedNodeId) });
+    }
+  },
+
+  promoteMainlineChild: async (parentId, childId) => {
+    const { rootNode } = get();
+    if (!rootNode) return;
+    await api.promoteChildMainline(parentId, childId);
+    const updated = markMainlineChild(rootNode, parentId, childId);
+    set({ rootNode: updated });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
     }
   },
 

@@ -39,6 +39,7 @@ export function NodePanel() {
   const addChildNode = useStore((s) => s.addChildNode);
   const updateNode = useStore((s) => s.updateNode);
   const deleteNode = useStore((s) => s.deleteNode);
+  const promoteMainlineChild = useStore((s) => s.promoteMainlineChild);
   const expandNode = useStore((s) => s.expandNode);
   const deepenNode = useStore((s) => s.deepenNode);
   const acceptSuggestion = useStore((s) => s.acceptSuggestion);
@@ -110,6 +111,7 @@ export function NodePanel() {
           newChildTitle={newChildTitle}
           setNewChildTitle={setNewChildTitle}
           onAddChild={handleAddChild}
+          onPromoteMainline={promoteMainlineChild}
           refreshTree={refreshTree}
           Section={Section}
         />

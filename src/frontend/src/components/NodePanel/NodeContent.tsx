@@ -12,6 +12,7 @@ interface NodeContentProps {
   newChildTitle: string;
   setNewChildTitle: Dispatch<SetStateAction<string>>;
   onAddChild: () => Promise<void>;
+  onPromoteMainline: (parentId: string, childId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
   Section: (props: { title: string; subtitle?: string; tone?: "neutral" | "ai" | "edit"; children: React.ReactNode }) => React.JSX.Element;
 }
@@ -86,6 +87,7 @@ export function NodeContent({
   newChildTitle,
   setNewChildTitle,
   onAddChild,
+  onPromoteMainline,
   refreshTree,
   Section,
 }: NodeContentProps) {
@@ -147,8 +149,32 @@ export function NodeContent({
       </div>
 
       <div>
-        <label className="text-xs text-gray-500 uppercase tracking-wider">子節點</label>
+        <div className="text-xs text-gray-500 uppercase tracking-wider">子節點</div>
         <p className="text-sm text-gray-400 mt-1">{selectedNode.children?.length || 0} 個</p>
+        {selectedNode.children && selectedNode.children.length > 0 && (
+          <div className="mt-2 space-y-2">
+            {selectedNode.children.map((child) => (
+              <div key={child.id} className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-900/60 px-3 py-2">
+                <div>
+                  <div className="text-sm text-gray-200 flex items-center gap-2">
+                    <span>{child.title}</span>
+                    {child.is_mainline && <span className="text-[10px] text-blue-300 border border-blue-500/40 rounded-full px-1.5 py-0.5">主線</span>}
+                  </div>
+                  <div className="text-[11px] text-gray-500">{child.summary || child.node_type}</div>
+                </div>
+                {!child.is_mainline && (
+                  <button
+                    type="button"
+                    onClick={() => onPromoteMainline(selectedNode.id, child.id)}
+                    className="text-xs px-2.5 py-1 rounded border border-blue-700/50 bg-blue-950/30 text-blue-300 hover:bg-blue-900/40"
+                  >
+                    設為主線
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Section>
   );

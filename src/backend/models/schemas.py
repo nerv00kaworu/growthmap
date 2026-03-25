@@ -113,6 +113,7 @@ class EdgeCreate(BaseModel):
     relation_type: str = "child_of"
     weight: float = 1.0
     note: str = ""
+    is_mainline: bool = False
 
 
 class EdgeOut(BaseModel):
@@ -123,6 +124,7 @@ class EdgeOut(BaseModel):
     relation_type: str
     weight: float
     note: str
+    is_mainline: bool
     created_at: datetime
 
     model_config = {"from_attributes": True}

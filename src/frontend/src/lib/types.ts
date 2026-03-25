@@ -14,6 +14,7 @@ export interface GNode {
   updated_at: string;
   ancestor_path?: LineageNode[];
   children?: GNode[];
+  is_mainline?: boolean;
 }
 
 export interface LineageNode {
@@ -36,6 +37,7 @@ export interface Edge {
   target_id: string;
   relation: string;
   meta: Record<string, unknown>;
+  is_mainline?: boolean;
 }
 
 export interface Project {

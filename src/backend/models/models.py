@@ -80,6 +80,7 @@ class Edge(Base):
     relation_type = Column(String(30), nullable=False, default="child_of")
     weight = Column(Float, default=1.0)
     note = Column(Text, default="")
+    is_mainline = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     project = relationship("Project", back_populates="edges")
