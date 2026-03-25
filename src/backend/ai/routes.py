@@ -18,11 +18,13 @@ class ExpandRequest(BaseModel):
     instruction: Optional[str] = None
     count: int = 3  # how many suggestions
     mode: Literal["focused", "explore", "challenge"] = "explore"
+    provider_id: Optional[str] = None
 
 
 class DeepenRequest(BaseModel):
     node_id: str
     instruction: Optional[str] = None
+    provider_id: Optional[str] = None
 
 
 class Suggestion(BaseModel):
@@ -114,10 +116,21 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(EXPAND_SYSTEM, user_prompt)
+        raw = await llm_complete(EXPAND_SYSTEM, user_prompt, provider_id=req.provider_id, db=db)
         suggestions = parse_json_response(raw)
         if not isinstance(suggestions, list):
             raise ValueError("LLM returned an invalid suggestions payload")
+
+        # Validate required fields before constructing response
+        validated = []
+        for s in suggestions:
+            if not isinstance(s, dict):
+                raise TypeError("Each suggestion payload must be an object")
+            validated.append(Suggestion(
+                title=s["title"],
+                summary=s["summary"],
+                node_type=s["node_type"],
+            ))
 
         # Log the AI operation
         node = await db.get(Node, req.node_id)
@@ -127,16 +140,22 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_expand",
-                payload={"count": len(suggestions), "instruction": req.instruction, "mode": req.mode},
+                payload={"count": len(validated), "instruction": req.instruction, "mode": req.mode},
             ))
             await db.commit()
 
         return ExpandResponse(
-            suggestions=[Suggestion(**s) for s in suggestions],
+            suggestions=validated,
             context_used={"ancestor_path": ctx["ancestor_path"], "siblings_count": len(ctx["siblings"]), "children_count": len(ctx["children"]), "mode": req.mode},
         )
     except json.JSONDecodeError:
         raise HTTPException(500, "LLM returned invalid JSON for expand")
+    except KeyError as e:
+        raise HTTPException(500, f"LLM returned incomplete expand payload: missing {str(e)}")
+    except TypeError:
+        raise HTTPException(500, "LLM returned malformed expand payload")
+    except ValueError as e:
+        raise HTTPException(500, f"LLM error: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
 
@@ -156,10 +175,22 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt)
+        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt, provider_id=req.provider_id, db=db)
         result = parse_json_response(raw)
         if not isinstance(result, dict):
             raise ValueError("LLM returned an invalid deepen payload")
+
+        enriched_summary = result["enriched_summary"]
+        content_blocks = result.get("content_blocks", [])
+        if not isinstance(enriched_summary, str):
+            raise TypeError("enriched_summary must be a string")
+        if not isinstance(content_blocks, list):
+            raise TypeError("content_blocks must be a list")
+
+        # Validate content_blocks structure
+        for block in content_blocks:
+            if not isinstance(block, dict) or "title" not in block or "body" not in block:
+                raise TypeError(f"Invalid content block structure: {block}")
 
         # Log the AI operation
         node = await db.get(Node, req.node_id)
@@ -169,16 +200,22 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_deepen",
-                payload={"instruction": req.instruction, "blocks_generated": len(result.get("content_blocks", []))},
+                payload={"instruction": req.instruction, "blocks_generated": len(content_blocks)},
             ))
             await db.commit()
 
         return DeepenResponse(
-            enriched_summary=result["enriched_summary"],
-            content_blocks=result.get("content_blocks", []),
+            enriched_summary=enriched_summary,
+            content_blocks=content_blocks,
             context_used={"ancestor_path": ctx["ancestor_path"], "siblings_count": len(ctx["siblings"]), "children_count": len(ctx["children"])},
         )
     except json.JSONDecodeError:
         raise HTTPException(500, "LLM returned invalid JSON for deepen")
+    except KeyError as e:
+        raise HTTPException(500, f"LLM returned incomplete deepen payload: missing {str(e)}")
+    except TypeError:
+        raise HTTPException(500, "LLM returned malformed deepen payload")
+    except ValueError as e:
+        raise HTTPException(500, f"LLM error: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")

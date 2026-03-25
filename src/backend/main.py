@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from db.database import engine, Base
 from api.routes import router
+from api.provider_routes import router as provider_router
 from ai.routes import router as ai_router
 
 STATIC_DIR = Path(__file__).parent.parent / "frontend" / "out"
@@ -37,6 +38,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(provider_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 
 

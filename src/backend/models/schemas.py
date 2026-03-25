@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Optional, Any
 from pydantic import BaseModel, Field
 
+from models.enums import Maturity, NodeStatus, NodeType, RelationType
+
 
 # === Project ===
 
@@ -41,7 +43,7 @@ class ProjectOut(BaseModel):
 class NodeCreate(BaseModel):
     title: str
     summary: str = ""
-    node_type: str = "idea"
+    node_type: NodeType = NodeType.IDEA
     parent_id: Optional[str] = None  # 自動建 child_of edge
     description: str = ""
     tags: list[str] = []
@@ -50,9 +52,9 @@ class NodeCreate(BaseModel):
 class NodeUpdate(BaseModel):
     title: Optional[str] = None
     summary: Optional[str] = None
-    node_type: Optional[str] = None
-    status: Optional[str] = None
-    maturity: Optional[str] = None
+    node_type: Optional[NodeType] = None
+    status: Optional[NodeStatus] = None
+    maturity: Optional[Maturity] = None
     priority: Optional[int] = None
     confidence: Optional[float] = None
     description: Optional[str] = None
@@ -71,9 +73,9 @@ class NodeOut(BaseModel):
     project_id: str
     title: str
     summary: str
-    node_type: str
-    status: str
-    maturity: str
+    node_type: NodeType
+    status: NodeStatus
+    maturity: Maturity
     priority: int
     confidence: float
     description: str
@@ -97,9 +99,9 @@ class NodeBrief(BaseModel):
     """輕量版，用於樹狀列表"""
     id: str
     title: str
-    node_type: str
-    status: str
-    maturity: str
+    node_type: NodeType
+    status: NodeStatus
+    maturity: Maturity
     summary: str
 
     model_config = {"from_attributes": True}
@@ -110,7 +112,7 @@ class NodeBrief(BaseModel):
 class EdgeCreate(BaseModel):
     from_node_id: str
     to_node_id: str
-    relation_type: str = "child_of"
+    relation_type: RelationType = RelationType.CHILD_OF
     weight: float = 1.0
     note: str = ""
     is_mainline: bool = False
@@ -121,7 +123,7 @@ class EdgeOut(BaseModel):
     project_id: str
     from_node_id: str
     to_node_id: str
-    relation_type: str
+    relation_type: RelationType
     weight: float
     note: str
     is_mainline: bool
@@ -172,6 +174,64 @@ class SuggestionOut(BaseModel):
     created_at: datetime
     reviewed_at: Optional[datetime]
     reviewed_by: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+
+class NodeMoveRequest(BaseModel):
+    new_parent_id: str
+
+
+class MainlinePathOut(BaseModel):
+    nodes: list[NodeBrief]
+
+
+class BranchInfo(BaseModel):
+    node: NodeBrief
+    parent_id: str
+    incoming_edge_id: str
+    child_count: int
+
+
+# === Provider Config ===
+
+class ProviderConfigCreate(BaseModel):
+    name: str
+    provider_type: str
+    endpoint: str = ""
+    auth_type: str = "none"
+    model_name: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    cost_level: str = "low"
+    enabled: bool = True
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    provider_type: Optional[str] = None
+    endpoint: Optional[str] = None
+    auth_type: Optional[str] = None
+    model_name: Optional[str] = None
+    capabilities: Optional[list[str]] = None
+    cost_level: Optional[str] = None
+    enabled: Optional[bool] = None
+    settings: Optional[dict[str, Any]] = None
+
+
+class ProviderConfigOut(BaseModel):
+    id: str
+    name: str
+    provider_type: str
+    endpoint: str
+    auth_type: str
+    model_name: str
+    capabilities: list[str]
+    cost_level: str
+    enabled: bool
+    settings: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
 
