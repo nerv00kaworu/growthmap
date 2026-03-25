@@ -18,11 +18,13 @@ class ExpandRequest(BaseModel):
     instruction: Optional[str] = None
     count: int = 3  # how many suggestions
     mode: Literal["focused", "explore", "challenge"] = "explore"
+    provider_id: Optional[str] = None
 
 
 class DeepenRequest(BaseModel):
     node_id: str
     instruction: Optional[str] = None
+    provider_id: Optional[str] = None
 
 
 class Suggestion(BaseModel):
@@ -114,7 +116,7 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(EXPAND_SYSTEM, user_prompt)
+        raw = await llm_complete(EXPAND_SYSTEM, user_prompt, provider_id=req.provider_id, db=db)
         suggestions = parse_json_response(raw)
         if not isinstance(suggestions, list):
             raise ValueError("LLM returned an invalid suggestions payload")
@@ -173,7 +175,7 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt)
+        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt, provider_id=req.provider_id, db=db)
         result = parse_json_response(raw)
         if not isinstance(result, dict):
             raise ValueError("LLM returned an invalid deepen payload")

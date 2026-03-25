@@ -1,10 +1,13 @@
 """AI Provider interface — pluggable LLM backend"""
 import asyncio
-import os
 import json
+import os
 import httpx
 from typing import Optional
 from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.models import ProviderConfig
 
 load_dotenv()
 
@@ -30,15 +33,35 @@ def get_provider_config() -> tuple[str, str, str]:
     return base_url.rstrip("/"), api_key, model
 
 
+async def get_provider_config_from_db(
+    provider_id: Optional[str],
+    db: Optional[AsyncSession],
+) -> tuple[str, str, str]:
+    if provider_id and db is not None:
+        provider = await db.get(ProviderConfig, provider_id)
+        if provider is not None:
+            endpoint = (provider.endpoint or "").strip()
+            model_name = (provider.model_name or "").strip()
+            settings = provider.settings or {}
+            api_key = str(settings.get("api_key", "")).strip()
+
+            if endpoint and api_key and model_name:
+                return endpoint.rstrip("/"), api_key, model_name
+
+    return get_provider_config()
+
+
 async def llm_complete(
     system: str,
     user: str,
     model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
+    provider_id: Optional[str] = None,
+    db: Optional[AsyncSession] = None,
 ) -> str:
     """Send a chat completion request to any OpenAI-compatible API."""
-    base_url, api_key, default_model = get_provider_config()
+    base_url, api_key, default_model = await get_provider_config_from_db(provider_id, db)
     model = (model or default_model).strip()
     if not model:
         raise ValueError("LLM model cannot be blank")
@@ -90,12 +113,14 @@ async def llm_complete(
         raise RuntimeError("LLM request did not produce a response payload")
 
     # Handle both OpenAI and Kimi-style responses
-    if "choices" in data and data["choices"]:
+    if isinstance(data, dict) and "choices" in data and data["choices"]:
         return data["choices"][0]["message"]["content"]
-    elif "content" in data:
+    elif isinstance(data, dict) and "content" in data:
         return data["content"]
     else:
-        raise ValueError(f"Unexpected LLM response format: {list(data.keys())}")
+        if isinstance(data, dict):
+            raise ValueError(f"Unexpected LLM response format: {list(data.keys())}")
+        raise ValueError("Unexpected LLM response format: non-object payload")
 
 
 def parse_json_response(text: str) -> list | dict:
