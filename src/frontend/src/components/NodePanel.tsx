@@ -17,16 +17,16 @@ interface SectionProps {
 
 const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) => {
   const toneClass = {
-    neutral: "border-gray-800 bg-gray-900/35",
-    ai: "border-purple-900/40 bg-purple-950/20",
-    edit: "border-blue-900/40 bg-blue-950/20",
+    neutral: "surface-subtle",
+    ai: "border-purple-900/40 bg-purple-950/20 shadow-[0_0_0_1px_rgba(88,28,135,0.08)]",
+    edit: "border-blue-900/40 bg-blue-950/20 shadow-[0_0_0_1px_rgba(30,64,175,0.08)]",
   }[tone];
 
   return (
-    <section className={`rounded-xl border p-3 space-y-3 ${toneClass}`}>
+    <section className={`rounded-xl border p-4 space-y-3 ${toneClass}`}>
       <div className="space-y-1">
-        <label className="text-xs text-gray-400 uppercase tracking-wider">{title}</label>
-        {subtitle && <p className="text-[11px] text-gray-600">{subtitle}</p>}
+        <div className="eyebrow-label">{title}</div>
+        {subtitle && <p className="text-[11px] text-[var(--text-faint)]">{subtitle}</p>}
       </div>
       {children}
     </section>
@@ -59,7 +59,7 @@ export function NodePanel() {
 
   if (!selectedNode) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-500 text-sm p-6">
+      <div className="h-full flex items-center justify-center text-[var(--text-faint)] text-sm p-6">
         <div className="text-center">
           <div className="text-4xl mb-3">🌳</div>
           <div>點擊節點查看詳情</div>
@@ -101,7 +101,7 @@ export function NodePanel() {
         setEditTitle={setEditTitle}
       />
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
         <NodeContent
           selectedNode={selectedNode as GNode}
           editing={editing}
@@ -135,24 +135,25 @@ export function NodePanel() {
         <NodeHistorySection selectedNode={selectedNode as GNode} Section={Section} />
       </div>
 
-      <div className="p-3 border-t border-gray-800 flex gap-2">
+      <div className="p-3 border-t border-[var(--border)] bg-[var(--bg-panel)]/80 flex gap-2">
         {editing ? (
           <>
-            <button onClick={saveEdit} className="flex-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded">
+            <button type="button" onClick={saveEdit} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 text-white text-sm rounded-lg">
               儲存
             </button>
-            <button onClick={() => setEditing(false)} className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
+            <button type="button" onClick={() => setEditing(false)} className="px-3 py-2 surface-subtle text-[var(--text-muted)] text-sm rounded-lg hover:text-[var(--text-primary)]">
               取消
             </button>
           </>
         ) : (
           <>
-            <button onClick={startEdit} className="flex-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded">
+            <button type="button" onClick={startEdit} className="flex-1 px-3 py-2 surface-subtle text-[var(--text-primary)] text-sm rounded-lg hover:border-blue-500/40 hover:text-blue-100">
               ✏️ 編輯
             </button>
             <button
+              type="button"
               onClick={() => { if (confirm("確定刪除此節點？")) deleteNode(selectedNode.id); }}
-              className="px-3 py-1.5 bg-red-900/50 hover:bg-red-800 text-red-400 text-sm rounded"
+              className="px-3 py-2 rounded-lg border border-red-900/40 bg-red-950/30 hover:bg-red-900/40 text-red-300 text-sm"
             >
               🗑️
             </button>
