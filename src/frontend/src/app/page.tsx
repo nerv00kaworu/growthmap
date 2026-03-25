@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useStore } from "@/stores/useStore";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
+import { useStore } from "@/stores/useStore";
 
 export default function HomePage() {
   const loadProjects = useStore((s) => s.loadProjects);
@@ -13,6 +14,10 @@ export default function HomePage() {
   const createProject = useStore((s) => s.createProject);
   const selectedNode = useStore((s) => s.selectedNode);
   const loading = useStore((s) => s.loading);
+  const error = useStore((s) => s.error);
+  const errorStatus = useStore((s) => s.errorStatus);
+  const errorRetryable = useStore((s) => s.errorRetryable);
+  const dismissError = useStore((s) => s.dismissError);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");
@@ -21,6 +26,18 @@ export default function HomePage() {
   useEffect(() => {
     loadProjects();
   }, [loadProjects]);
+
+  useEffect(() => {
+    if (!error || !errorRetryable) return;
+
+    const timeoutId = window.setTimeout(() => {
+      dismissError();
+    }, 5000);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [dismissError, error, errorRetryable]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -102,27 +119,54 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Mind map canvas */}
-        <div className="flex-1 relative">
-          {loading ? (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              載入中...
+      {error && (
+        <div className="px-4 pt-4">
+          <div
+            role="alert"
+            className="surface-panel flex items-start gap-3 rounded-2xl px-4 py-3 text-sm text-[var(--text-primary)]"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="eyebrow-label">Request error</div>
+              <p className="mt-1 break-words text-[var(--text-primary)]">{error}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">
+                {errorStatus !== null ? `HTTP ${errorStatus}` : "Request failed"}
+                {errorRetryable ? " · 可重試，將於 5 秒後自動關閉" : " · 請手動確認後再繼續"}
+              </p>
             </div>
-          ) : (
-            <MindMap />
-          )}
+            <button
+              type="button"
+              onClick={dismissError}
+              className="surface-subtle shrink-0 rounded-lg px-3 py-1.5 text-xs text-[var(--text-primary)]"
+            >
+              關閉
+            </button>
+          </div>
         </div>
+      )}
 
-        {/* Right panel */}
-        <div
-          className="border-l border-[var(--border)] bg-[var(--bg-panel)] transition-all duration-300 overflow-hidden surface-panel rounded-none border-y-0 border-r-0"
-          style={{ width: selectedNode ? 340 : 0 }}
-        >
-          <NodePanel />
+      {/* Main content */}
+      <ErrorBoundary>
+        <div className="flex-1 flex overflow-hidden">
+          {/* Mind map canvas */}
+          <div className="flex-1 relative">
+            {loading ? (
+              <div className="flex h-full items-center justify-center text-[var(--text-muted)]">
+                載入中...
+              </div>
+            ) : (
+              <MindMap />
+            )}
+          </div>
+
+          {/* Right panel */}
+          <div
+            className="border-l border-[var(--border)] bg-[var(--bg-panel)] transition-all duration-300 overflow-hidden surface-panel rounded-none border-y-0 border-r-0"
+            style={{ width: selectedNode ? 340 : 0 }}
+          >
+            <NodePanel />
+          </div>
         </div>
-      </div>
+      </ErrorBoundary>
     </div>
   );
 }
