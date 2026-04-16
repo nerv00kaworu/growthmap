@@ -73,9 +73,9 @@ export function NodePanel() {
   const lineagePath = [...(selectedNode.ancestor_path || []), { id: selectedNode.id, title: selectedNode.title }];
   const isRootNode = rootNode?.id === selectedNode.id;
 
-  const handleAddChild = async () => {
+  const handleAddChild = async (nodeType?: string) => {
     if (!newChildTitle.trim()) return;
-    await addChildNode(selectedNode.id, newChildTitle.trim());
+    await addChildNode(selectedNode.id, newChildTitle.trim(), nodeType);
     setNewChildTitle("");
   };
 

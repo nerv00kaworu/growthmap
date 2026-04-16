@@ -780,3 +780,28 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
     render_node(str(project.root_node_id))
     return "\n".join(lines)
+
+
+@router.get("/projects/{project_id}/actions")
+async def list_project_actions(project_id: str, limit: int = 5, db: AsyncSession = Depends(get_db)):
+    """List recent actions for a project."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    result = await db.execute(
+        select(ActionLog)
+        .where(ActionLog.project_id == project_id)
+        .order_by(ActionLog.created_at.desc())
+        .limit(limit)
+    )
+    actions = result.scalars().all()
+    return [
+        {
+            "id": str(a.id),
+            "action_type": a.action_type,
+            "actor_type": a.actor_type,
+            "node_id": str(a.node_id) if a.node_id else None,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in actions
+    ]

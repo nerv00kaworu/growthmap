@@ -3,6 +3,9 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "@/lib/api";
 import type { GNode } from "@/lib/types";
+import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
+
+const NODE_TYPES = ["idea", "concept", "task", "question", "decision", "risk", "resource", "note", "module"];
 
 interface NodeContentProps {
   selectedNode: GNode;
@@ -11,7 +14,7 @@ interface NodeContentProps {
   setEditSummary: Dispatch<SetStateAction<string>>;
   newChildTitle: string;
   setNewChildTitle: Dispatch<SetStateAction<string>>;
-  onAddChild: () => Promise<void>;
+  onAddChild: (nodeType?: string) => Promise<void>;
   onPromoteMainline: (parentId: string, childId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
   Section: (props: { title: string; subtitle?: string; tone?: "neutral" | "ai" | "edit"; children: React.ReactNode }) => React.JSX.Element;
@@ -91,8 +94,34 @@ export function NodeContent({
   refreshTree,
   Section,
 }: NodeContentProps) {
+  const [newChildType, setNewChildType] = useState("idea");
+
+  const handleMaturityChange = async (newMaturity: string) => {
+    await api.updateNode(selectedNode.id, { maturity: newMaturity } as Partial<GNode>);
+    await refreshTree();
+  };
+
   return (
     <Section title="節點內容" subtitle="先整理摘要，再補內容區塊與子節點。" tone={editing ? "edit" : "neutral"}>
+      <div>
+        <label className="text-xs text-gray-500 uppercase tracking-wider">成熟度</label>
+        <div className="flex items-center gap-2 mt-1">
+          <span
+            className="w-3 h-3 rounded-full shrink-0"
+            style={{ backgroundColor: MATURITY_COLORS[selectedNode.maturity as Maturity] || "#888" }}
+          />
+          <select
+            value={selectedNode.maturity}
+            onChange={(e) => handleMaturityChange(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+          >
+            {(Object.keys(MATURITY_LABELS) as Maturity[]).map((m) => (
+              <option key={m} value={m}>{MATURITY_LABELS[m]}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       <div>
         <label className="text-xs text-gray-500 uppercase tracking-wider">摘要</label>
         {editing ? (
@@ -131,15 +160,24 @@ export function NodeContent({
       <div>
         <label className="text-xs text-gray-500 uppercase tracking-wider">手動新增子節點</label>
         <div className="flex gap-2 mt-1">
+          <select
+            value={newChildType}
+            onChange={(e) => setNewChildType(e.target.value)}
+            className="bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:border-blue-500 focus:outline-none shrink-0"
+          >
+            {NODE_TYPES.map((t) => (
+              <option key={t} value={t}>{NODE_TYPE_ICONS[t] || ""} {t}</option>
+            ))}
+          </select>
           <input
             value={newChildTitle}
             onChange={(e) => setNewChildTitle(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onAddChild()}
+            onKeyDown={(e) => e.key === "Enter" && onAddChild(newChildType)}
             placeholder="輸入節點標題..."
             className="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-600 focus:border-blue-500 focus:outline-none"
           />
           <button
-            onClick={onAddChild}
+            onClick={() => onAddChild(newChildType)}
             disabled={!newChildTitle.trim()}
             className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded transition-colors"
           >
