@@ -42,22 +42,22 @@ export function NodeHistorySection({ selectedNode, Section }: NodeHistorySection
     <Section title="操作紀錄" subtitle="回頭看這個節點怎麼長成現在這樣。">
       {!show ? (
         <div className="space-y-2">
-          <button type="button" onClick={load} disabled={loading} className="text-xs text-gray-500 hover:text-gray-300 underline disabled:text-gray-600">
+          <button type="button" onClick={load} disabled={loading} className="text-sm text-gray-500 hover:text-gray-300 underline disabled:text-gray-600">
             {loading ? "⏳ 載入中..." : "📜 查看操作歷史"}
           </button>
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-sm text-red-400">{error}</p>}
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <div className="text-xs text-gray-500 uppercase tracking-wider">📜 歷史</div>
-            <button type="button" onClick={() => setShow(false)} className="text-xs text-gray-600 hover:text-gray-400">收起</button>
+            <div className="text-sm text-gray-500 uppercase tracking-wider">📜 歷史</div>
+            <button type="button" onClick={() => setShow(false)} className="text-sm text-gray-600 hover:text-gray-400">收起</button>
           </div>
           {history.length === 0 ? (
-            <p className="text-xs text-gray-600">無記錄</p>
+            <p className="text-sm text-gray-600">無記錄</p>
           ) : (
             history.map((h) => (
-              <div key={h.id} className="text-[11px] text-gray-500 flex gap-2">
+              <div key={h.id} className="text-xs text-gray-500 flex gap-2">
                 <span className="text-gray-600 shrink-0">{h.created_at ? new Date(h.created_at).toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
                 <span>{ACTION_LABELS[h.action_type] || h.action_type}</span>
                 {h.action_type === "maturity_advance" && h.payload && (
@@ -72,7 +72,7 @@ export function NodeHistorySection({ selectedNode, Section }: NodeHistorySection
         </div>
       )}
 
-      <div className="text-xs text-gray-600 space-y-1 pt-2 border-t border-gray-800">
+      <div className="text-sm text-gray-600 space-y-1 pt-2 border-t border-gray-800">
         <div>ID: <span className="text-gray-500 font-mono">{selectedNode.id.slice(0, 8)}...</span></div>
         <div>建立: {new Date(selectedNode.created_at).toLocaleString("zh-TW")}</div>
         <div>更新: {new Date(selectedNode.updated_at).toLocaleString("zh-TW")}</div>

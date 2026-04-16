@@ -195,7 +195,7 @@ export default function HomePage() {
         {/* Right panel */}
         <div
           className="border-l border-[var(--border)] bg-[var(--bg-panel)] transition-all duration-300 overflow-hidden surface-panel rounded-none border-y-0 border-r-0"
-          style={{ width: selectedNode ? 340 : 0 }}
+          style={{ width: selectedNode ? 420 : 0 }}
         >
           <NodePanel />
         </div>

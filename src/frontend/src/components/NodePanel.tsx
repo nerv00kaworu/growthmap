@@ -23,7 +23,7 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
   }[tone];
 
   return (
-    <section className={`rounded-xl border p-4 space-y-3 ${toneClass}`}>
+    <section className={`rounded-xl border p-5 space-y-3 ${toneClass}`}>
       <div className="space-y-1">
         <div className="eyebrow-label">{title}</div>
         {subtitle && <p className="text-[11px] text-[var(--text-faint)]">{subtitle}</p>}
@@ -102,7 +102,7 @@ export function NodePanel() {
         setEditTitle={setEditTitle}
       />
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
+      <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
         <NodeContent
           selectedNode={selectedNode as GNode}
           editing={editing}

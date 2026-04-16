@@ -21,7 +21,7 @@ function GrowthNodeComponent({ data }: NodeProps) {
 
   return (
     <div
-      className="relative px-4 py-3 rounded-lg border-2 min-w-[160px] max-w-[240px] cursor-pointer transition-all duration-200"
+      className="relative px-5 py-4 rounded-lg border-2 min-w-[180px] max-w-[280px] cursor-pointer transition-all duration-200"
       style={{
         background: d.isSelected ? "#1e293b" : d.isMainline ? "#172554" : "#141414",
         borderColor: d.isSelected ? color : d.isMainline ? "#60a5fa" : "#2a2a2a",
@@ -38,7 +38,7 @@ function GrowthNodeComponent({ data }: NodeProps) {
       />
 
       {/* Title */}
-      <div className="text-sm font-medium text-gray-100 flex items-center gap-1.5">
+      <div className="text-base font-medium text-gray-100 flex items-center gap-1.5">
         <span>{icon}</span>
         <span className="truncate">{d.label}</span>
         {d.isMainline && <span className="text-[10px] text-blue-300 border border-blue-500/40 rounded-full px-1.5 py-0.5">MAIN</span>}
@@ -46,7 +46,7 @@ function GrowthNodeComponent({ data }: NodeProps) {
 
       {/* Summary */}
       {d.summary && (
-        <div className="text-xs text-gray-400 mt-1 line-clamp-2">{d.summary}</div>
+        <div className="text-sm text-gray-400 mt-1 line-clamp-2">{d.summary}</div>
       )}
 
       {/* Child count badge */}
