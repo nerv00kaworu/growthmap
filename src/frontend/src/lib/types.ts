@@ -52,6 +52,18 @@ export interface Project {
   updated_at: string;
 }
 
+export interface Suggestion {
+  title: string;
+  summary: string;
+  node_type: string;
+}
+
+export interface DeepenResult {
+  enriched_summary: string;
+  content_blocks: { title: string; body: string; block_type: string }[];
+  target_node_id: string;
+}
+
 export type Maturity = "seed" | "rough" | "developing" | "stable" | "finalized";
 
 export type GrowthMode = "focused" | "explore" | "challenge";

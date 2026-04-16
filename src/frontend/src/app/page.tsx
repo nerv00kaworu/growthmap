@@ -5,6 +5,7 @@ import { useStore } from "@/stores/useStore";
 import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
 import { Toast } from "@/components/Toast";
+import { Settings } from "@/components/Settings";
 
 export default function HomePage() {
   const loadProjects = useStore((s) => s.loadProjects);
@@ -20,6 +21,7 @@ export default function HomePage() {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showActions, setShowActions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [actions, setActions] = useState<{ id: string; action_type: string; actor_type: string; created_at: string }[]>([]);
 
   useEffect(() => {
@@ -98,6 +100,14 @@ export default function HomePage() {
           className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200"
         >
           + 新專案
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowSettings(true)}
+          className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100"
+        >
+          ⚙️ LLM 設定
         </button>
 
         {currentProject && (
@@ -200,6 +210,9 @@ export default function HomePage() {
           <NodePanel />
         </div>
       </div>
+
+      {/* Settings Modal */}
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
 
       {/* Error Toast */}
       {error && (

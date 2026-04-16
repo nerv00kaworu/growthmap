@@ -37,9 +37,15 @@ async def llm_complete(
     model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
+    base_url_override: Optional[str] = None,
+    api_key_override: Optional[str] = None,
 ) -> str:
     """Send a chat completion request to any OpenAI-compatible API (with retry)."""
     base_url, api_key, default_model = get_provider_config()
+    if base_url_override:
+        base_url = base_url_override
+    if api_key_override:
+        api_key = api_key_override
     model = (model or default_model).strip()
     if not model:
         raise ValueError("LLM model cannot be blank")

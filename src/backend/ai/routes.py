@@ -13,16 +13,25 @@ from models.models import ActionLog, Node
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 
+class LLMConfigOverride(BaseModel):
+    provider: Optional[str] = None  # openai, anthropic, google, openclaw, custom
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
 class ExpandRequest(BaseModel):
     node_id: str
     instruction: Optional[str] = None
     count: int = 3  # how many suggestions
     mode: Literal["focused", "explore", "challenge"] = "explore"
+    llm_config: Optional[LLMConfigOverride] = None
 
 
 class DeepenRequest(BaseModel):
     node_id: str
     instruction: Optional[str] = None
+    llm_config: Optional[LLMConfigOverride] = None
 
 
 class Suggestion(BaseModel):
@@ -79,6 +88,21 @@ DEEPEN_SYSTEM = """你是一個知識深化分析師。根據提供的上下文�
 }"""
 
 
+def _build_llm_kwargs(config: Optional[LLMConfigOverride]) -> dict:
+    """Convert frontend LLM config to kwargs for llm_complete."""
+    if not config:
+        return {}
+    kwargs: dict = {}
+    if config.model:
+        kwargs["model"] = config.model
+    if config.api_key and config.base_url:
+        kwargs["base_url_override"] = config.base_url.rstrip("/")
+        kwargs["api_key_override"] = config.api_key
+    elif config.api_key:
+        kwargs["api_key_override"] = config.api_key
+    return kwargs
+
+
 def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"]) -> str:
     prompts = {
         "focused": "模式：focused（聚焦主線）。請優先補齊當前節點缺失的核心結構、必要步驟與基礎元件，避免跳到太遠的主題。",
@@ -114,7 +138,8 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(EXPAND_SYSTEM, user_prompt)
+        llm_kwargs = _build_llm_kwargs(req.llm_config)
+        raw = await llm_complete(EXPAND_SYSTEM, user_prompt, **llm_kwargs)
         suggestions = parse_json_response(raw)
         if not isinstance(suggestions, list):
             raise ValueError("LLM returned an invalid suggestions payload")
@@ -173,7 +198,8 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt)
+        llm_kwargs = _build_llm_kwargs(req.llm_config)
+        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt, **llm_kwargs)
         result = parse_json_response(raw)
         if not isinstance(result, dict):
             raise ValueError("LLM returned an invalid deepen payload")

@@ -15,6 +15,23 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 import type { Project, GNode, GrowthMode } from "./types";
+import { loadLLMConfig, type LLMConfig } from "./llm-provider";
+
+function getLLMPayload(): Record<string, unknown> | undefined {
+  const config = loadLLMConfig();
+  if (!config) return undefined;
+  // Map frontend provider types to backend-compatible base_url
+  const providerBaseUrls: Record<string, string> = {
+    openai: "https://api.openai.com/v1",
+    anthropic: "https://api.anthropic.com/v1", // backend uses OpenAI-compat, may not work for Anthropic native
+  };
+  return {
+    provider: config.provider,
+    api_key: config.apiKey,
+    base_url: config.baseUrl || providerBaseUrls[config.provider] || undefined,
+    model: config.model || undefined,
+  };
+}
 
 export const api = {
   // Projects
@@ -61,7 +78,7 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, llm_config: getLLMPayload() }),
     }),
 
   deepen: (nodeId: string, instruction?: string) =>
@@ -71,6 +88,6 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/deepen", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction }),
+      body: JSON.stringify({ node_id: nodeId, instruction, llm_config: getLLMPayload() }),
     }),
 };
