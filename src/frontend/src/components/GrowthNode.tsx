@@ -12,6 +12,7 @@ interface GrowthNodeData {
   isSelected: boolean;
   childCount: number;
   isMainline: boolean;
+  isHighlighted?: boolean;
 }
 
 function GrowthNodeComponent({ data }: NodeProps) {
@@ -24,8 +25,14 @@ function GrowthNodeComponent({ data }: NodeProps) {
       className="relative px-5 py-4 rounded-lg border-2 min-w-[180px] max-w-[280px] cursor-pointer transition-all duration-200"
       style={{
         background: d.isSelected ? "#1e293b" : d.isMainline ? "#172554" : "#141414",
-        borderColor: d.isSelected ? color : d.isMainline ? "#60a5fa" : "#2a2a2a",
-        boxShadow: d.isSelected ? `0 0 12px ${color}40` : d.isMainline ? "0 0 0 1px rgba(96,165,250,0.35)" : "none",
+        borderColor: d.isSelected ? color : d.isHighlighted ? "#f59e0b" : d.isMainline ? "#60a5fa" : "#2a2a2a",
+        boxShadow: d.isSelected
+          ? `0 0 12px ${color}40`
+          : d.isHighlighted
+          ? "0 0 12px rgba(245,158,11,0.5)"
+          : d.isMainline
+          ? "0 0 0 1px rgba(96,165,250,0.35)"
+          : "none",
       }}
     >
       <Handle type="target" position={Position.Top} className="!bg-gray-600 !w-2 !h-2" />

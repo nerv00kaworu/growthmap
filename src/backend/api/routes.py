@@ -1,7 +1,10 @@
 """Project & Node API routes"""
 import uuid
+import shutil
+import os
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi.responses import JSONResponse
 from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,6 +20,15 @@ from models.schemas import (
 )
 
 router = APIRouter()
+
+
+def backup_db():
+    """Backup growthmap.db before destructive operations."""
+    try:
+        if os.path.exists("growthmap.db"):
+            shutil.copy2("growthmap.db", "growthmap.db.bak")
+    except Exception:
+        pass  # Don't fail operations due to backup issues
 
 
 def touch_project(project: Project | None):
@@ -84,6 +96,7 @@ async def update_project(project_id: str, data: ProjectUpdate, db: AsyncSession 
 
 @router.delete("/projects/{project_id}", status_code=204)
 async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
+    backup_db()
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -193,6 +206,7 @@ async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends
 
 @router.delete("/nodes/{node_id}", status_code=204)
 async def delete_node(node_id: str, db: AsyncSession = Depends(get_db)):
+    backup_db()
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
@@ -805,3 +819,238 @@ async def list_project_actions(project_id: str, limit: int = 5, db: AsyncSession
         }
         for a in actions
     ]
+
+
+# ─── Reparent ───
+
+@router.post("/nodes/{node_id}/reparent")
+async def reparent_node(node_id: str, body: dict = Body(...), db: AsyncSession = Depends(get_db)):
+    """Reparent a node to a new parent via drag-and-drop."""
+    new_parent_id = body.get("new_parent_id")
+    if not new_parent_id:
+        raise HTTPException(400, "new_parent_id required")
+
+    node = await db.get(Node, node_id)
+    if not node:
+        raise HTTPException(404, "Node not found")
+
+    project = await db.get(Project, node.project_id)
+    if project and project.root_node_id == node_id:
+        raise HTTPException(400, "Cannot reparent root node")
+
+    new_parent = await db.get(Node, new_parent_id)
+    if not new_parent or new_parent.project_id != node.project_id:
+        raise HTTPException(400, "Invalid new parent")
+
+    # Cycle detection
+    descendants: set[str] = set()
+    queue = [node_id]
+    while queue:
+        current = queue.pop()
+        child_edges = (await db.execute(
+            select(Edge).where(Edge.from_node_id == current, Edge.relation_type == "child_of")
+        )).scalars().all()
+        for e in child_edges:
+            if e.to_node_id not in descendants:
+                descendants.add(e.to_node_id)
+                queue.append(e.to_node_id)
+
+    if new_parent_id in descendants or new_parent_id == node_id:
+        raise HTTPException(400, "Cannot reparent under descendant (cycle)")
+
+    # Remove old child_of edge
+    old_edge_result = await db.execute(
+        select(Edge).where(Edge.to_node_id == node_id, Edge.relation_type == "child_of")
+    )
+    old_edge = old_edge_result.scalar_one_or_none()
+    if old_edge:
+        await db.delete(old_edge)
+
+    # Determine mainline
+    existing_children = (await db.execute(
+        select(func.count()).select_from(Edge).where(
+            Edge.from_node_id == new_parent_id, Edge.relation_type == "child_of"
+        )
+    )).scalar() or 0
+
+    new_edge = Edge(
+        project_id=node.project_id,
+        from_node_id=new_parent_id,
+        to_node_id=node_id,
+        relation_type="child_of",
+        is_mainline=existing_children == 0,
+    )
+    db.add(new_edge)
+    touch_project(project)
+    await db.commit()
+    return {"ok": True}
+
+
+# ─── Import / Export JSON ───
+
+@router.get("/projects/{project_id}/export-json")
+async def export_project_json(project_id: str, db: AsyncSession = Depends(get_db)):
+    """Export entire project as JSON (all nodes, edges, content blocks, action logs)."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+    nodes = nodes_result.scalars().all()
+
+    edges_result = await db.execute(select(Edge).where(Edge.project_id == project_id))
+    edges = edges_result.scalars().all()
+
+    node_ids = [str(n.id) for n in nodes]
+    blocks_result = await db.execute(
+        select(ContentBlock).where(ContentBlock.node_id.in_(node_ids))
+    ) if node_ids else None
+    blocks = blocks_result.scalars().all() if blocks_result else []
+
+    logs_result = await db.execute(
+        select(ActionLog).where(ActionLog.project_id == project_id).order_by(ActionLog.created_at.desc()).limit(200)
+    )
+    logs = logs_result.scalars().all()
+
+    return {
+        "version": "1.0",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "project": {
+            "id": str(project.id),
+            "name": project.name,
+            "description": project.description,
+            "goal": project.goal,
+            "root_node_id": str(project.root_node_id) if project.root_node_id else None,
+            "status": project.status,
+            "settings": project.settings,
+            "created_at": project.created_at.isoformat() if project.created_at else None,
+            "updated_at": project.updated_at.isoformat() if project.updated_at else None,
+        },
+        "nodes": [
+            {
+                "id": str(n.id),
+                "title": n.title,
+                "summary": n.summary,
+                "node_type": n.node_type,
+                "status": n.status,
+                "maturity": n.maturity,
+                "tags": n.tags,
+                "description": n.description,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+                "updated_at": n.updated_at.isoformat() if n.updated_at else None,
+            }
+            for n in nodes
+        ],
+        "edges": [
+            {
+                "id": str(e.id),
+                "from_node_id": str(e.from_node_id),
+                "to_node_id": str(e.to_node_id),
+                "relation_type": e.relation_type,
+                "is_mainline": e.is_mainline,
+            }
+            for e in edges
+        ],
+        "content_blocks": [
+            {
+                "id": str(b.id),
+                "node_id": str(b.node_id),
+                "block_type": b.block_type,
+                "content": b.content,
+                "order_index": b.order_index,
+            }
+            for b in blocks
+        ],
+        "action_logs": [
+            {
+                "id": str(a.id),
+                "node_id": str(a.node_id) if a.node_id else None,
+                "actor_type": a.actor_type,
+                "action_type": a.action_type,
+                "payload": a.payload,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in logs
+        ],
+    }
+
+
+@router.post("/projects/import-json", response_model=None, status_code=201)
+async def import_project_json(data: dict = Body(...), db: AsyncSession = Depends(get_db)):
+    """Import a project from JSON export. Creates new project with new IDs."""
+    proj_data = data.get("project", {})
+    nodes_data = data.get("nodes", [])
+    edges_data = data.get("edges", [])
+    blocks_data = data.get("content_blocks", [])
+
+    # Create new project
+    new_project = Project(
+        name=proj_data.get("name", "匯入的專案"),
+        description=proj_data.get("description"),
+        goal=proj_data.get("goal"),
+        status=proj_data.get("status", "active"),
+        settings=proj_data.get("settings", {}),
+    )
+    db.add(new_project)
+    await db.flush()
+
+    # Map old IDs to new IDs
+    old_root_id = proj_data.get("root_node_id")
+    id_map: dict[str, str] = {}
+
+    for n in nodes_data:
+        new_node = Node(
+            project_id=new_project.id,
+            title=n.get("title", ""),
+            summary=n.get("summary"),
+            node_type=n.get("node_type", "idea"),
+            status=n.get("status", "active"),
+            maturity=n.get("maturity", "seed"),
+            tags=n.get("tags", []),
+            description=n.get("description"),
+            created_by="import",
+        )
+        db.add(new_node)
+        await db.flush()
+        id_map[n["id"]] = str(new_node.id)
+
+    # Set root
+    if old_root_id and old_root_id in id_map:
+        new_project.root_node_id = id_map[old_root_id]
+
+    for e in edges_data:
+        from_id = id_map.get(e.get("from_node_id", ""))
+        to_id = id_map.get(e.get("to_node_id", ""))
+        if not from_id or not to_id:
+            continue
+        new_edge = Edge(
+            project_id=new_project.id,
+            from_node_id=from_id,
+            to_node_id=to_id,
+            relation_type=e.get("relation_type", "child_of"),
+            is_mainline=e.get("is_mainline", False),
+        )
+        db.add(new_edge)
+
+    for b in blocks_data:
+        node_id_mapped = id_map.get(b.get("node_id", ""))
+        if not node_id_mapped:
+            continue
+        new_block = ContentBlock(
+            node_id=node_id_mapped,
+            block_type=b.get("block_type", "note"),
+            content=b.get("content", {}),
+            order_index=b.get("order_index", 0),
+        )
+        db.add(new_block)
+
+    db.add(ActionLog(
+        project_id=new_project.id,
+        actor_type="human",
+        action_type="import_project",
+        payload={"original_name": proj_data.get("name")},
+    ))
+    await db.commit()
+    await db.refresh(new_project)
+    return {"id": str(new_project.id), "name": new_project.name, "root_node_id": str(new_project.root_node_id) if new_project.root_node_id else None}
+

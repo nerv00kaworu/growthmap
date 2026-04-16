@@ -1,26 +1,24 @@
 #!/bin/bash
-# GrowthMap 啟動腳本
-# Usage: ./start.sh [--rebuild]
+# Start GrowthMap (backend + frontend)
+cd "$(dirname "$0")"
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND="$DIR/src/backend"
-FRONTEND="$DIR/src/frontend"
+# Start backend
+cd src/backend
+source venv/bin/activate 2>/dev/null || (python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt)
+uvicorn main:app --host 0.0.0.0 --port 8100 &
+BACKEND_PID=$!
+cd ../..
 
-# Rebuild frontend if requested or not built
-if [ "$1" = "--rebuild" ] || [ ! -d "$FRONTEND/out" ]; then
-  echo "🔨 Building frontend..."
-  cd "$FRONTEND" && npm run build
-  echo "✅ Frontend built"
-fi
+# Start frontend
+cd src/frontend
+npm install --silent 2>/dev/null
+npx next dev -p 3100 &
+FRONTEND_PID=$!
+cd ../..
 
-cd "$BACKEND"
-source venv/bin/activate 2>/dev/null || python3 -m venv venv && source venv/bin/activate && pip install -q -r requirements.txt
+echo "🌳 GrowthMap running: http://localhost:3100"
+echo "   Backend: http://localhost:8100"
+echo "   Press Ctrl+C to stop"
 
-export LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1}"
-export LLM_API_KEY="${LLM_API_KEY:-your-api-key}"
-export LLM_MODEL="${LLM_MODEL:-gpt-5-codex-mini}"
-export DATABASE_URL="${DATABASE_URL:-sqlite+aiosqlite:///$BACKEND/growthmap.db}"
-
-echo "🌳 Starting GrowthMap on :8100"
-echo "🗄️ DATABASE_URL=$DATABASE_URL"
-exec uvicorn main:app --host 0.0.0.0 --port 8100
+trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null" EXIT
+wait

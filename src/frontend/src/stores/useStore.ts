@@ -2,6 +2,11 @@ import { create } from "zustand";
 import type { GNode, GrowthMode, Project } from "@/lib/types";
 import { api } from "@/lib/api";
 
+interface UndoEntry {
+  rootNode: GNode;
+  description: string;
+}
+
 interface GrowthMapStore {
   // State
   projects: Project[];
@@ -11,6 +16,14 @@ interface GrowthMapStore {
   selectedNode: GNode | null;
   loading: boolean;
   error: string | null;
+
+  // Undo
+  undoStack: UndoEntry[];
+  toast: string | null;
+
+  // Search
+  searchQuery: string;
+  highlightedNodeIds: string[];
 
   // Actions
   loadProjects: () => Promise<void>;
@@ -22,6 +35,10 @@ interface GrowthMapStore {
   deleteNode: (nodeId: string) => Promise<void>;
   refreshTree: () => Promise<void>;
   promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
+  reparentNode: (nodeId: string, newParentId: string) => Promise<void>;
+  undo: () => void;
+  setSearchQuery: (q: string) => void;
+  setToast: (msg: string | null) => void;
 
   // AI
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
@@ -94,6 +111,24 @@ function markMainlineChild(root: GNode, parentId: string, childId: string): GNod
   };
 }
 
+function searchNodes(node: GNode, query: string): string[] {
+  const results: string[] = [];
+  if (query && node.title.toLowerCase().includes(query.toLowerCase())) {
+    results.push(node.id);
+  }
+  for (const child of node.children || []) {
+    results.push(...searchNodes(child, query));
+  }
+  return results;
+}
+
+const MAX_UNDO = 10;
+
+function pushUndo(stack: UndoEntry[], rootNode: GNode, description: string): UndoEntry[] {
+  const newStack = [{ rootNode, description }, ...stack];
+  return newStack.slice(0, MAX_UNDO);
+}
+
 export const useStore = create<GrowthMapStore>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -106,6 +141,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   expandTargetNodeId: null,
   deepenResult: null,
   aiLoading: false,
+  undoStack: [],
+  toast: null,
+  searchQuery: "",
+  highlightedNodeIds: [],
 
   loadProjects: async () => {
     try {
@@ -117,7 +156,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   selectProject: async (project) => {
-    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null });
+    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [] });
     try {
       const rootNode = await api.getSubtree(project.root_node_id);
       set({ rootNode, loading: false });
@@ -142,6 +181,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   addChildNode: async (parentId, title, nodeType) => {
     const { currentProject, rootNode } = get();
     if (!currentProject || !rootNode) return;
+    const { undoStack } = get();
+    const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`);
     const newNode = await api.createNode(currentProject.id, { title, parent_id: parentId, node_type: nodeType });
     const child: GNode = {
       id: newNode.id,
@@ -159,8 +200,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       updated_at: newNode.updated_at || "",
     };
     const updated = insertChild(rootNode, parentId, child);
-    set({ rootNode: updated });
-    // Re-sync selectedNode if viewing the parent
+    set({ rootNode: updated, undoStack: newUndoStack });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -168,8 +208,12 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   updateNode: async (nodeId, data) => {
+    const { rootNode, undoStack } = get();
+    if (rootNode) {
+      const newUndoStack = pushUndo(undoStack, rootNode, `更新節點`);
+      set({ undoStack: newUndoStack });
+    }
     await api.updateNode(nodeId, data);
-    const { rootNode } = get();
     if (!rootNode) return;
     const updated = patchNode(rootNode, nodeId, data);
     set({ rootNode: updated });
@@ -180,8 +224,13 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   deleteNode: async (nodeId) => {
+    const { rootNode, undoStack, selectedNodeId } = get();
+    if (rootNode) {
+      const node = findNode(rootNode, nodeId);
+      const newUndoStack = pushUndo(undoStack, rootNode, `刪除節點: ${node?.title || nodeId}`);
+      set({ undoStack: newUndoStack });
+    }
     await api.deleteNode(nodeId);
-    const { rootNode, selectedNodeId } = get();
     if (!rootNode) return;
     const updated = removeNode(rootNode, nodeId);
     set({ rootNode: updated });
@@ -215,6 +264,43 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
   },
 
+  reparentNode: async (nodeId, newParentId) => {
+    const { rootNode, undoStack } = get();
+    if (!rootNode) return;
+    const node = findNode(rootNode, nodeId);
+    const newUndoStack = pushUndo(undoStack, rootNode, `移動節點: ${node?.title || nodeId}`);
+    set({ undoStack: newUndoStack });
+    try {
+      await fetch(`/api/nodes/${nodeId}/reparent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_parent_id: newParentId }),
+      });
+      await get().refreshTree();
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  undo: () => {
+    const { undoStack } = get();
+    if (undoStack.length === 0) return;
+    const [entry, ...rest] = undoStack;
+    set({ rootNode: entry.rootNode, undoStack: rest, toast: `已復原: ${entry.description}` });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(entry.rootNode, selectedNodeId) });
+    }
+  },
+
+  setSearchQuery: (q) => {
+    const { rootNode } = get();
+    const highlightedNodeIds = rootNode ? searchNodes(rootNode, q) : [];
+    set({ searchQuery: q, highlightedNodeIds });
+  },
+
+  setToast: (msg) => set({ toast: msg }),
+
   expandNode: async (nodeId, instruction, mode = "explore") => {
     set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null });
     try {
@@ -236,8 +322,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptSuggestion: async (index) => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
+    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 建議`);
+    set({ undoStack: newUndoStack });
     const s = expandSuggestions[index];
     const newNode = await api.createNode(currentProject.id, {
       title: s.title,
@@ -273,8 +361,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptAllSuggestions: async () => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
+    const newUndoStack = pushUndo(undoStack, rootNode, `接受全部 AI 建議`);
+    set({ undoStack: newUndoStack });
     let tree = rootNode;
     for (const s of expandSuggestions) {
       const newNode = await api.createNode(currentProject.id, {
@@ -291,8 +381,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         maturity: newNode.maturity || "seed",
         tags: newNode.tags || [],
         meta: {},
-      project_id: currentProject.id,
-      status: "active",
+        project_id: currentProject.id,
+        status: "active",
         content_blocks: [],
         children: [],
         created_at: newNode.created_at || "",
@@ -308,8 +398,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptDeepen: async () => {
-    const { deepenResult, rootNode } = get();
+    const { deepenResult, rootNode, undoStack } = get();
     if (!deepenResult || !rootNode) return;
+    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 深化`);
+    set({ undoStack: newUndoStack });
     const targetId = deepenResult.target_node_id;
     await api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>);
     for (const block of deepenResult.content_blocks) {
@@ -318,7 +410,6 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         content: { title: block.title, body: block.body },
       });
     }
-    // Patch locally: update summary + append blocks
     const newBlocks = deepenResult.content_blocks.map((b, i) => ({
       id: `temp-${Date.now()}-${i}`,
       block_type: b.block_type,
