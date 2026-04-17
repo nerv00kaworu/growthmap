@@ -18,6 +18,13 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "out"
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migration: add branch_id column to nodes if missing
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text("ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)")
+            )
+        except Exception:
+            pass  # Column already exists
     yield
 
 

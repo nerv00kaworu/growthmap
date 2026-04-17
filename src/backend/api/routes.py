@@ -4,19 +4,20 @@ import shutil
 import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.database import get_db
-from models.models import Project, Node, Edge, ContentBlock, ActionLog
+from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
     EdgeCreate, EdgeOut,
     ContentBlockCreate, ContentBlockUpdate, ContentBlockOut,
     NodeMoveRequest, AncestorNode, MainlinePathOut, BranchInfo,
+    BranchCreate, BranchOut,
 )
 
 router = APIRouter()
@@ -1053,4 +1054,399 @@ async def import_project_json(data: dict = Body(...), db: AsyncSession = Depends
     await db.commit()
     await db.refresh(new_project)
     return {"id": str(new_project.id), "name": new_project.name, "root_node_id": str(new_project.root_node_id) if new_project.root_node_id else None}
+
+
+# ─── Spec Export ───
+
+@router.get("/projects/{project_id}/export-spec", response_class=PlainTextResponse)
+async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
+    """Export project as a structured spec Markdown document."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not project.root_node_id:
+        raise HTTPException(404, "No root node")
+
+    from datetime import date
+    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
+
+    edges_result = await db.execute(
+        select(Edge.from_node_id, Edge.to_node_id).where(
+            Edge.project_id == project_id, Edge.relation_type == "child_of"
+        )
+    )
+    child_map: dict[str, list[str]] = {}
+    for from_id, to_id in edges_result.all():
+        child_map.setdefault(str(from_id), []).append(str(to_id))
+
+    all_node_ids = list(nodes_by_id.keys())
+    blocks_by_node: dict[str, list] = {}
+    if all_node_ids:
+        blocks_result = await db.execute(
+            select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
+        )
+        for b in blocks_result.scalars().all():
+            blocks_by_node.setdefault(str(b.node_id), []).append(b)
+
+    # Build TOC and content
+    toc_lines: list[str] = []
+    content_lines: list[str] = []
+    visited: set[str] = set()
+
+    def render_spec_node(nid: str, depth: int = 0):
+        if nid in visited or nid not in nodes_by_id:
+            return
+        visited.add(nid)
+        n = nodes_by_id[nid]
+        prefix = "#" * min(depth + 2, 6)
+        indent = "  " * depth
+        anchor = n.title.lower().replace(" ", "-").replace("（", "").replace("）", "")
+        toc_lines.append(f"{indent}- [{n.title}](#{anchor})")
+
+        if n.maturity in ("stable", "finalized"):
+            content_lines.append(f"{prefix} {n.title}")
+            if n.summary:
+                content_lines.append(f"\n{n.summary}\n")
+            # Group content blocks by type
+            type_sections: dict[str, list] = {}
+            for b in blocks_by_node.get(nid, []):
+                bt = b.block_type
+                type_sections.setdefault(bt, []).append(b)
+            type_labels = {
+                "decisions": "### 決策記錄",
+                "rules": "### 規則",
+                "constraints": "### 約束條件",
+                "definition": "### 定義",
+                "examples": "### 範例",
+            }
+            for bt, label in type_labels.items():
+                if bt in type_sections:
+                    content_lines.append(label)
+                    for b in type_sections[bt]:
+                        c = b.content or {}
+                        title = c.get("title", "")
+                        body = c.get("body", "")
+                        if title:
+                            content_lines.append(f"**{title}**")
+                        if body:
+                            content_lines.append(body)
+                    content_lines.append("")
+            # Other types
+            other_blocks = [b for bt, blist in type_sections.items() if bt not in type_labels for b in blist]
+            if other_blocks:
+                content_lines.append("### 備註")
+                for b in other_blocks:
+                    c = b.content or {}
+                    title = c.get("title", "")
+                    body = c.get("body", "")
+                    if title:
+                        content_lines.append(f"**{title}**")
+                    if body:
+                        content_lines.append(body)
+                content_lines.append("")
+        else:
+            content_lines.append(f"{prefix} {n.title} （🚧 開發中）")
+            if n.summary:
+                content_lines.append(f"\n{n.summary}\n")
+
+        for cid in child_map.get(nid, []):
+            render_spec_node(cid, depth + 1)
+
+    render_spec_node(str(project.root_node_id))
+
+    header = [
+        f"# {project.name} — 規格文件",
+        "",
+        f"**描述**：{project.description}" if project.description else "",
+        f"**目標**：{project.goal}" if project.goal else "",
+        f"**匯出日期**：{date.today().isoformat()}",
+        "",
+        "---",
+        "",
+        "## 目錄",
+        "",
+        *toc_lines,
+        "",
+        "---",
+        "",
+    ]
+    lines = header + content_lines
+    return "\n".join(l for l in lines if l is not None)
+
+
+# ─── Git-like Branches ───
+
+@router.post("/projects/{project_id}/branches", response_model=BranchOut, status_code=201)
+async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = Depends(get_db)):
+    """Create a branch by deep-copying source node and all its descendants."""
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    source_node = await db.get(Node, data.source_node_id)
+    if not source_node or source_node.project_id != project_id:
+        raise HTTPException(400, "Invalid source node")
+
+    # Create branch record
+    branch = Branch(
+        project_id=project_id,
+        name=data.name,
+        description=data.description,
+        source_node_id=data.source_node_id,
+        status="active",
+    )
+    db.add(branch)
+    await db.flush()
+
+    # Load all edges for this project
+    edges_result = await db.execute(
+        select(Edge).where(Edge.project_id == project_id, Edge.relation_type == "child_of")
+    )
+    all_edges = edges_result.scalars().all()
+    child_map_all: dict[str, list[str]] = {}
+    for e in all_edges:
+        child_map_all.setdefault(str(e.from_node_id), []).append(str(e.to_node_id))
+
+    # Collect all nodes in subtree
+    subtree_ids: list[str] = []
+    frontier = [data.source_node_id]
+    while frontier:
+        nid = frontier.pop()
+        subtree_ids.append(nid)
+        for cid in child_map_all.get(nid, []):
+            if cid not in subtree_ids:
+                frontier.append(cid)
+
+    # Load all subtree nodes
+    nodes_result = await db.execute(select(Node).where(Node.id.in_(subtree_ids)))
+    subtree_nodes = {str(n.id): n for n in nodes_result.scalars().all()}
+
+    # Load blocks
+    blocks_result = await db.execute(
+        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids))
+    )
+    blocks_by_node: dict[str, list] = {}
+    for b in blocks_result.scalars().all():
+        blocks_by_node.setdefault(str(b.node_id), []).append(b)
+
+    # Deep copy: create id mapping
+    id_map: dict[str, str] = {}
+    for old_id in subtree_ids:
+        new_node_id = str(uuid.uuid4())
+        id_map[old_id] = new_node_id
+
+    # Create new nodes
+    for old_id, old_node in subtree_nodes.items():
+        new_id = id_map[old_id]
+        copied = Node(
+            id=new_id,
+            project_id=project_id,
+            title=old_node.title,
+            summary=old_node.summary,
+            node_type=old_node.node_type,
+            status=old_node.status,
+            maturity=old_node.maturity,
+            tags=old_node.tags or [],
+            description=old_node.description,
+            rules_text=old_node.rules_text,
+            constraints_text=old_node.constraints_text,
+            examples_text=old_node.examples_text,
+            questions_text=old_node.questions_text,
+            decision_notes=old_node.decision_notes,
+            priority=old_node.priority,
+            confidence=old_node.confidence,
+            created_by="branch",
+            branch_id=branch.id,
+        )
+        db.add(copied)
+        # Copy blocks
+        for b in blocks_by_node.get(old_id, []):
+            db.add(ContentBlock(
+                node_id=new_id,
+                block_type=b.block_type,
+                content=b.content,
+                order_index=b.order_index,
+                created_by="branch",
+            ))
+
+    await db.flush()
+
+    # Create new edges mirroring original structure (child_of only within subtree)
+    for old_from, old_tos in child_map_all.items():
+        if old_from not in id_map:
+            continue
+        for old_to in old_tos:
+            if old_to not in id_map:
+                continue
+            db.add(Edge(
+                project_id=project_id,
+                from_node_id=id_map[old_from],
+                to_node_id=id_map[old_to],
+                relation_type="child_of",
+                is_mainline=True,
+            ))
+
+    db.add(ActionLog(
+        project_id=project_id,
+        actor_type="human",
+        action_type="create_branch",
+        payload={"branch_name": data.name, "source_node_id": data.source_node_id},
+    ))
+    await db.commit()
+    await db.refresh(branch)
+    return branch
+
+
+@router.get("/projects/{project_id}/branches", response_model=list[BranchOut])
+async def list_branches(project_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Branch).where(Branch.project_id == project_id, Branch.status == "active")
+        .order_by(Branch.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.get("/branches/{branch_id}", response_model=BranchOut)
+async def get_branch(branch_id: str, db: AsyncSession = Depends(get_db)):
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+    return branch
+
+
+@router.get("/branches/{branch_id}/subtree")
+async def get_branch_subtree(branch_id: str, db: AsyncSession = Depends(get_db)):
+    """Get the full subtree of branch nodes."""
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+
+    # Find the root node of this branch (branch root = node with branch_id set and no parent within branch)
+    branch_nodes_result = await db.execute(
+        select(Node).where(Node.branch_id == branch_id, Node.project_id == branch.project_id)
+    )
+    branch_nodes = branch_nodes_result.scalars().all()
+    if not branch_nodes:
+        return {"id": branch_id, "name": branch.name, "nodes": []}
+
+    branch_node_ids = {str(n.id) for n in branch_nodes}
+    # Build child map for branch nodes
+    edges_result = await db.execute(
+        select(Edge).where(
+            Edge.project_id == branch.project_id,
+            Edge.from_node_id.in_(branch_node_ids),
+            Edge.relation_type == "child_of"
+        )
+    )
+    child_map: dict[str, list[str]] = {}
+    child_ids: set[str] = set()
+    for e in edges_result.scalars().all():
+        child_map.setdefault(str(e.from_node_id), []).append(str(e.to_node_id))
+        child_ids.add(str(e.to_node_id))
+
+    # Find root: branch node with no parent within branch
+    root_id = None
+    for n in branch_nodes:
+        if str(n.id) not in child_ids:
+            root_id = str(n.id)
+            break
+
+    nodes_by_id = {str(n.id): n for n in branch_nodes}
+
+    def build_tree(nid: str) -> dict:
+        n = nodes_by_id.get(nid)
+        if not n:
+            return {}
+        return {
+            "id": n.id, "title": n.title, "summary": n.summary,
+            "node_type": n.node_type, "maturity": n.maturity,
+            "branch_id": n.branch_id,
+            "children": [build_tree(cid) for cid in child_map.get(nid, []) if cid in nodes_by_id],
+        }
+
+    return {"branch": {"id": branch.id, "name": branch.name, "status": branch.status}, "tree": build_tree(root_id) if root_id else None}
+
+
+@router.post("/branches/{branch_id}/merge")
+async def merge_branch(branch_id: str, body: dict = Body(...), db: AsyncSession = Depends(get_db)):
+    """Merge branch by re-parenting branch root under target node."""
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+    target_node_id = body.get("target_node_id")
+    if not target_node_id:
+        raise HTTPException(400, "target_node_id required")
+
+    # Find branch nodes
+    branch_nodes_result = await db.execute(
+        select(Node).where(Node.branch_id == branch_id)
+    )
+    branch_nodes = branch_nodes_result.scalars().all()
+    branch_node_ids = {str(n.id) for n in branch_nodes}
+
+    # Find branch root (no incoming child_of edge from another branch node)
+    child_ids: set[str] = set()
+    edges_result = await db.execute(
+        select(Edge).where(Edge.from_node_id.in_(branch_node_ids), Edge.relation_type == "child_of")
+    )
+    for e in edges_result.scalars().all():
+        child_ids.add(str(e.to_node_id))
+
+    root_node_id = None
+    for n in branch_nodes:
+        if str(n.id) not in child_ids:
+            root_node_id = str(n.id)
+            break
+
+    if not root_node_id:
+        raise HTTPException(400, "Cannot find branch root")
+
+    # Clear branch_id from all nodes
+    for n in branch_nodes:
+        n.branch_id = None
+
+    # Re-parent branch root under target
+    root_node = await db.get(Node, root_node_id)
+    if root_node:
+        # Remove existing edge if any
+        old_edge_result = await db.execute(
+            select(Edge).where(Edge.to_node_id == root_node_id, Edge.relation_type == "child_of")
+        )
+        old_edge = old_edge_result.scalar_one_or_none()
+        if old_edge:
+            await db.delete(old_edge)
+
+        existing_children = (await db.execute(
+            select(func.count()).select_from(Edge).where(
+                Edge.from_node_id == target_node_id, Edge.relation_type == "child_of"
+            )
+        )).scalar() or 0
+
+        db.add(Edge(
+            project_id=branch.project_id,
+            from_node_id=target_node_id,
+            to_node_id=root_node_id,
+            relation_type="child_of",
+            is_mainline=existing_children == 0,
+        ))
+
+    branch.status = "merged"
+    db.add(ActionLog(
+        project_id=branch.project_id,
+        actor_type="human",
+        action_type="merge_branch",
+        payload={"branch_id": branch_id, "target_node_id": target_node_id},
+    ))
+    await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/branches/{branch_id}", status_code=204)
+async def archive_branch(branch_id: str, db: AsyncSession = Depends(get_db)):
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+    branch.status = "archived"
+    await db.commit()
 

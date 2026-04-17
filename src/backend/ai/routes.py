@@ -258,3 +258,61 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(500, f"LLM error: {str(e)}")
     except Exception as e:
         raise HTTPException(500, f"LLM error: {str(e)}")
+
+
+# ─── Chat ───
+
+class ChatRequest(BaseModel):
+    node_id: str
+    message: str
+    history: list[dict] = []
+    llm_config: Optional[LLMConfigOverride] = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    context_used: dict
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
+    """與節點進行對話，LLM 作為專案顧問回應。"""
+    try:
+        ctx = await build_node_context(req.node_id, db)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    title = ctx["current_node"]["title"]
+    system_prompt = f"你是一個專案顧問。你正在協助使用者思考節點「{title}」的設計。上下文包含完整的祖先脈絡和現有內容。回答要具體、有建設性，可以指出問題、提出替代方案、或釐清概念。避免空泛的建議。"
+
+    # Build a combined user message with context + history + current question
+    context_summary = f"節點上下文：\n{json.dumps(ctx, ensure_ascii=False, indent=2)}\n\n"
+    if req.history:
+        history_lines = []
+        for h in req.history:
+            role_label = "使用者" if h.get("role") == "user" else "顧問"
+            history_lines.append(f"{role_label}：{h.get('content', '')}")
+        context_summary += "對話歷史：\n" + "\n".join(history_lines) + "\n\n"
+    context_summary += f"使用者的最新問題：{req.message}"
+
+    try:
+        llm_kwargs = _build_llm_kwargs(req.llm_config)
+        reply = await llm_complete(system_prompt, context_summary, **llm_kwargs)
+
+        node = await db.get(Node, req.node_id)
+        if node:
+            db.add(ActionLog(
+                project_id=node.project_id,
+                node_id=req.node_id,
+                actor_type="ai",
+                action_type="ai_chat",
+                payload={"message": req.message[:200], "reply": reply[:200]},
+            ))
+            await db.commit()
+
+        return ChatResponse(
+            reply=reply,
+            context_used={"ancestor_path": ctx["ancestor_path"], "node_title": title},
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Chat error: {str(e)}")

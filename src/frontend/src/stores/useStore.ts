@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { GNode, GrowthMode, Project } from "@/lib/types";
+import type { GNode, GrowthMode, Project, Branch } from "@/lib/types";
 import { api } from "@/lib/api";
 
 interface UndoEntry {
@@ -25,6 +25,10 @@ interface GrowthMapStore {
   searchQuery: string;
   highlightedNodeIds: string[];
 
+  // Branches
+  branches: Branch[];
+  currentBranch: Branch | null;
+
   // Actions
   loadProjects: () => Promise<void>;
   selectProject: (project: Project) => Promise<void>;
@@ -39,6 +43,12 @@ interface GrowthMapStore {
   undo: () => void;
   setSearchQuery: (q: string) => void;
   setToast: (msg: string | null) => void;
+
+  // Branch actions
+  loadBranches: (projectId: string) => Promise<void>;
+  createBranch: (sourceNodeId: string, name: string, description?: string) => Promise<void>;
+  selectBranch: (branch: Branch | null) => Promise<void>;
+  mergeBranch: (branchId: string, targetNodeId: string) => Promise<void>;
 
   // AI
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
@@ -145,6 +155,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   toast: null,
   searchQuery: "",
   highlightedNodeIds: [],
+  branches: [],
+  currentBranch: null,
 
   loadProjects: async () => {
     try {
@@ -156,10 +168,12 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   selectProject: async (project) => {
-    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [] });
+    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [], currentBranch: null, branches: [] });
     try {
       const rootNode = await api.getSubtree(project.root_node_id);
       set({ rootNode, loading: false });
+      // Load branches in background
+      get().loadBranches(project.id);
     } catch (e: unknown) {
       set({ error: (e as Error).message, loading: false });
     }
@@ -301,6 +315,63 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
 
   setToast: (msg) => set({ toast: msg }),
 
+  // Branch actions
+  loadBranches: async (projectId) => {
+    try {
+      const branches = await api.listBranches(projectId);
+      set({ branches });
+    } catch (e: unknown) {
+      console.error("Failed to load branches:", e);
+    }
+  },
+
+  createBranch: async (sourceNodeId, name, description) => {
+    const { currentProject } = get();
+    if (!currentProject) return;
+    try {
+      const branch = await api.createBranch(currentProject.id, { source_node_id: sourceNodeId, name, description });
+      const { branches } = get();
+      set({ branches: [...branches, branch], toast: `✅ 分支「${name}」已建立` });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  selectBranch: async (branch) => {
+    if (!branch) {
+      // Go back to main
+      const { currentProject } = get();
+      if (!currentProject) return;
+      const rootNode = await api.getSubtree(currentProject.root_node_id);
+      set({ currentBranch: null, rootNode });
+      return;
+    }
+    try {
+      const result = await api.getBranchSubtree(branch.id);
+      set({ currentBranch: branch, rootNode: result.tree });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+
+  mergeBranch: async (branchId, targetNodeId) => {
+    try {
+      await api.mergeBranch(branchId, targetNodeId);
+      const { currentProject, branches } = get();
+      set({
+        branches: branches.filter((b) => b.id !== branchId),
+        currentBranch: null,
+        toast: "✅ 分支已合併",
+      });
+      if (currentProject) {
+        const rootNode = await api.getSubtree(currentProject.root_node_id);
+        set({ rootNode });
+      }
+    } catch (e: unknown) {
+      set({ error: (e as Error).message });
+    }
+  },
+
   expandNode: async (nodeId, instruction, mode = "explore") => {
     set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null });
     try {
@@ -412,6 +483,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
     const newBlocks = deepenResult.content_blocks.map((b, i) => ({
       id: `temp-${Date.now()}-${i}`,
+      node_id: targetId,
       block_type: b.block_type,
       content: { title: b.title, body: b.body },
       order_index: i,
@@ -433,3 +505,56 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     set({ expandSuggestions: null, deepenResult: null });
   },
 }));
+
+
+interface UndoEntry {
+  rootNode: GNode;
+  description: string;
+}
+
+interface GrowthMapStore {
+  // State
+  projects: Project[];
+  currentProject: Project | null;
+  rootNode: GNode | null;
+  selectedNodeId: string | null;
+  selectedNode: GNode | null;
+  loading: boolean;
+  error: string | null;
+
+  // Undo
+  undoStack: UndoEntry[];
+  toast: string | null;
+
+  // Search
+  searchQuery: string;
+  highlightedNodeIds: string[];
+
+  // Actions
+  loadProjects: () => Promise<void>;
+  selectProject: (project: Project) => Promise<void>;
+  selectNode: (nodeId: string | null) => void;
+  createProject: (name: string, description?: string, goal?: string) => Promise<void>;
+  addChildNode: (parentId: string, title: string, nodeType?: string) => Promise<void>;
+  updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
+  deleteNode: (nodeId: string) => Promise<void>;
+  refreshTree: () => Promise<void>;
+  promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
+  reparentNode: (nodeId: string, newParentId: string) => Promise<void>;
+  undo: () => void;
+  setSearchQuery: (q: string) => void;
+  setToast: (msg: string | null) => void;
+
+  // AI
+  expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
+  expandTargetNodeId: string | null;
+  deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
+  aiLoading: boolean;
+  expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
+  deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
+  acceptSuggestion: (index: number) => Promise<void>;
+  acceptAllSuggestions: () => Promise<void>;
+  acceptDeepen: () => Promise<void>;
+  dismissAI: () => void;
+}
+

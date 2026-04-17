@@ -14,7 +14,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-import type { Project, GNode, GrowthMode } from "./types";
+import type { Project, GNode, GrowthMode, Branch } from "./types";
 import { loadLLMConfig, type LLMConfig } from "./llm-provider";
 
 function getLLMPayload(): Record<string, unknown> | undefined {
@@ -90,4 +90,36 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ node_id: nodeId, instruction, llm_config: getLLMPayload() }),
     }),
+
+  chat: (nodeId: string, message: string, history: { role: string; content: string }[]) =>
+    request<{ reply: string; context_used: Record<string, unknown> }>("/ai/chat", {
+      method: "POST",
+      body: JSON.stringify({ node_id: nodeId, message, history, llm_config: getLLMPayload() }),
+    }),
+
+  // Spec export (returns text)
+  exportSpec: async (projectId: string): Promise<string> => {
+    const res = await fetch(`${BASE}/projects/${projectId}/export-spec`);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.text();
+  },
+
+  // Branches
+  listBranches: (projectId: string) =>
+    request<Branch[]>(`/projects/${projectId}/branches`),
+  createBranch: (projectId: string, data: { source_node_id: string; name: string; description?: string }) =>
+    request<Branch>(`/projects/${projectId}/branches`, { method: "POST", body: JSON.stringify(data) }),
+  getBranch: (branchId: string) =>
+    request<Branch>(`/branches/${branchId}`),
+  getBranchSubtree: (branchId: string) =>
+    request<{ branch: Branch; tree: GNode | null }>(`/branches/${branchId}/subtree`),
+  mergeBranch: (branchId: string, targetNodeId: string) =>
+    request<{ ok: boolean }>(`/branches/${branchId}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ target_node_id: targetNodeId }),
+    }),
+  archiveBranch: (branchId: string) =>
+    request<void>(`/branches/${branchId}`, { method: "DELETE" }),
 };
+
+

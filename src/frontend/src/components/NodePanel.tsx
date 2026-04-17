@@ -6,6 +6,7 @@ import { NodeHeader } from "./NodePanel/NodeHeader";
 import { NodeContent } from "./NodePanel/NodeContent";
 import { NodeAI } from "./NodePanel/NodeAI";
 import { NodeHistorySection } from "./NodePanel/NodeHistory";
+import { NodeChat } from "./NodePanel/NodeChat";
 import type { GNode, GrowthMode, Maturity } from "@/lib/types";
 
 interface SectionProps {
@@ -33,6 +34,8 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
   );
 };
 
+type Tab = "content" | "ai" | "chat" | "history";
+
 export function NodePanel() {
   const selectedNode = useStore((s) => s.selectedNode);
   const rootNode = useStore((s) => s.rootNode);
@@ -51,6 +54,7 @@ export function NodePanel() {
   const aiLoading = useStore((s) => s.aiLoading);
   const refreshTree = useStore((s) => s.refreshTree);
 
+  const [activeTab, setActiveTab] = useState<Tab>("content");
   const [newChildTitle, setNewChildTitle] = useState("");
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -90,6 +94,13 @@ export function NodePanel() {
     setEditing(false);
   };
 
+  const TABS: { key: Tab; label: string }[] = [
+    { key: "content", label: "內容" },
+    { key: "ai", label: "AI" },
+    { key: "chat", label: "對話" },
+    { key: "history", label: "歷史" },
+  ];
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       <NodeHeader
@@ -102,39 +113,69 @@ export function NodePanel() {
         setEditTitle={setEditTitle}
       />
 
+      {/* Tab bar */}
+      <div className="flex border-b border-[var(--border)] bg-[var(--bg-panel)]/80 px-2 gap-0 shrink-0">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setActiveTab(t.key)}
+            className={`px-4 py-2.5 text-xs font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === t.key
+                ? "border-blue-500 text-blue-300"
+                : "border-transparent text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
-        <NodeContent
-          selectedNode={selectedNode as GNode}
-          editing={editing}
-          editSummary={editSummary}
-          setEditSummary={setEditSummary}
-          newChildTitle={newChildTitle}
-          setNewChildTitle={setNewChildTitle}
-          onAddChild={handleAddChild}
-          onPromoteMainline={promoteMainlineChild}
-          refreshTree={refreshTree}
-          Section={Section}
-        />
+        {activeTab === "content" && (
+          <NodeContent
+            selectedNode={selectedNode as GNode}
+            editing={editing}
+            editSummary={editSummary}
+            setEditSummary={setEditSummary}
+            newChildTitle={newChildTitle}
+            setNewChildTitle={setNewChildTitle}
+            onAddChild={handleAddChild}
+            onPromoteMainline={promoteMainlineChild}
+            refreshTree={refreshTree}
+            Section={Section}
+          />
+        )}
 
-        <NodeAI
-          selectedNode={selectedNode as GNode}
-          aiInstruction={aiInstruction}
-          setAiInstruction={setAiInstruction}
-          aiMode={aiMode}
-          setAiMode={setAiMode}
-          aiLoading={aiLoading}
-          expandNode={expandNode}
-          deepenNode={deepenNode}
-          expandSuggestions={expandSuggestions}
-          acceptSuggestion={acceptSuggestion}
-          acceptAllSuggestions={acceptAllSuggestions}
-          deepenResult={deepenResult}
-          acceptDeepen={acceptDeepen}
-          dismissAI={dismissAI}
-          Section={Section}
-        />
+        {activeTab === "ai" && (
+          <NodeAI
+            selectedNode={selectedNode as GNode}
+            aiInstruction={aiInstruction}
+            setAiInstruction={setAiInstruction}
+            aiMode={aiMode}
+            setAiMode={setAiMode}
+            aiLoading={aiLoading}
+            expandNode={expandNode}
+            deepenNode={deepenNode}
+            expandSuggestions={expandSuggestions}
+            acceptSuggestion={acceptSuggestion}
+            acceptAllSuggestions={acceptAllSuggestions}
+            deepenResult={deepenResult}
+            acceptDeepen={acceptDeepen}
+            dismissAI={dismissAI}
+            Section={Section}
+          />
+        )}
 
-        <NodeHistorySection selectedNode={selectedNode as GNode} Section={Section} />
+        {activeTab === "chat" && (
+          <Section title="節點對話" subtitle="與 AI 顧問討論此節點的設計與方向。" tone="ai">
+            <NodeChat selectedNode={selectedNode as GNode} />
+          </Section>
+        )}
+
+        {activeTab === "history" && (
+          <NodeHistorySection selectedNode={selectedNode as GNode} Section={Section} />
+        )}
       </div>
 
       <div className="p-3 border-t border-[var(--border)] bg-[var(--bg-panel)]/80 flex gap-2">

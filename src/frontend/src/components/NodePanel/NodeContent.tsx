@@ -4,6 +4,7 @@ import { useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "@/lib/api";
 import type { GNode } from "@/lib/types";
 import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
+import { useStore } from "@/stores/useStore";
 
 const NODE_TYPES = ["idea", "concept", "task", "question", "decision", "risk", "resource", "note", "module"];
 
@@ -95,6 +96,10 @@ export function NodeContent({
   Section,
 }: NodeContentProps) {
   const [newChildType, setNewChildType] = useState("idea");
+  const [showBranchModal, setShowBranchModal] = useState(false);
+  const [branchName, setBranchName] = useState("");
+  const [branchDesc, setBranchDesc] = useState("");
+  const createBranch = useStore((s) => s.createBranch);
 
   const handleMaturityChange = async (newMaturity: string) => {
     await api.updateNode(selectedNode.id, { maturity: newMaturity } as Partial<GNode>);
@@ -187,7 +192,18 @@ export function NodeContent({
       </div>
 
       <div>
-        <div className="text-sm text-gray-500 uppercase tracking-wider">子節點</div>
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-gray-500 uppercase tracking-wider">子節點</div>
+          {selectedNode.children && selectedNode.children.length > 0 && (
+            <button
+              type="button"
+              onClick={() => { setBranchName(""); setBranchDesc(""); setShowBranchModal(true); }}
+              className="text-xs px-2.5 py-1 rounded border border-purple-700/50 bg-purple-950/30 text-purple-300 hover:bg-purple-900/40"
+            >
+              🔀 建立分支
+            </button>
+          )}
+        </div>
         <p className="text-base text-gray-400 mt-1">{selectedNode.children?.length || 0} 個</p>
         {selectedNode.children && selectedNode.children.length > 0 && (
           <div className="mt-2 space-y-2">
@@ -214,6 +230,48 @@ export function NodeContent({
           </div>
         )}
       </div>
+
+      {/* Branch creation modal */}
+      {showBranchModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowBranchModal(false)}>
+          <div className="bg-[#111] border border-gray-700 rounded-xl p-5 w-72 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-gray-200">🔀 建立分支</h3>
+            <input
+              value={branchName}
+              onChange={(e) => setBranchName(e.target.value)}
+              placeholder="分支名稱（例：方案B: 微服務架構）"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-purple-500 focus:outline-none"
+            />
+            <input
+              value={branchDesc}
+              onChange={(e) => setBranchDesc(e.target.value)}
+              placeholder="描述（選填）"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-purple-500 focus:outline-none"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={!branchName.trim()}
+                onClick={async () => {
+                  if (!branchName.trim()) return;
+                  await createBranch(selectedNode.id, branchName.trim(), branchDesc.trim());
+                  setShowBranchModal(false);
+                }}
+                className="flex-1 px-3 py-2 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors"
+              >
+                建立
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowBranchModal(false)}
+                className="px-3 py-2 text-gray-500 hover:text-gray-300 text-sm"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Section>
   );
 }

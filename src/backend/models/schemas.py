@@ -227,6 +227,26 @@ class DetectGapsRequest(BaseModel):
     provider_id: Optional[str] = None
 
 
+# === Branch ===
+
+class BranchCreate(BaseModel):
+    source_node_id: str
+    name: str
+    description: str = ""
+
+
+class BranchOut(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    description: str
+    source_node_id: Optional[str]
+    status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # === Agent Session ===
 
 class AssignAgentRequest(BaseModel):

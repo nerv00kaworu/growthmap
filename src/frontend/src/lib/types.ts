@@ -15,6 +15,7 @@ export interface GNode {
   ancestor_path?: LineageNode[];
   children?: GNode[];
   is_mainline?: boolean;
+  branch_id?: string | null;
 }
 
 export interface LineageNode {
@@ -50,6 +51,16 @@ export interface Project {
   settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+}
+
+export interface Branch {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  source_node_id: string;
+  status: string;
+  created_at: string;
 }
 
 export interface Suggestion {

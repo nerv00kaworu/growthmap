@@ -52,6 +52,8 @@ class Node(Base):
     questions_text = Column(Text, default="")
     decision_notes = Column(Text, default="")
     tags = Column(JSON, default=[])
+    # 分支
+    branch_id = Column(String(36), ForeignKey("branches.id", ondelete="SET NULL"), nullable=True)
     # 追蹤
     created_by = Column(Text, default="human")
     last_edited_by = Column(Text, default="human")
@@ -166,6 +168,22 @@ class ProviderConfig(Base):
     settings = Column(JSON, default={})
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Branch(Base):
+    __tablename__ = "branches"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, default="")
+    source_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
+    status = Column(String(20), default="active")  # active, merged, archived
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("idx_branches_project", "project_id"),
+    )
 
 
 class AgentSession(Base):

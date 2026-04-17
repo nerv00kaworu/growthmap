@@ -6,6 +6,7 @@ import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
 import { Toast } from "@/components/Toast";
 import { Settings } from "@/components/Settings";
+import { api } from "@/lib/api";
 
 export default function HomePage() {
   const loadProjects = useStore((s) => s.loadProjects);
@@ -28,6 +29,10 @@ export default function HomePage() {
   const expandNode = useStore((s) => s.expandNode);
   const deepenNode = useStore((s) => s.deepenNode);
   const deleteNode = useStore((s) => s.deleteNode);
+
+  const branches = useStore((s) => s.branches);
+  const currentBranch = useStore((s) => s.currentBranch);
+  const selectBranch = useStore((s) => s.selectBranch);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");
@@ -64,6 +69,22 @@ export default function HomePage() {
     setNewName("");
     setNewDesc("");
     setShowNewProject(false);
+  };
+
+  const handleExportSpec = async () => {
+    if (!currentProject) return;
+    try {
+      const md = await api.exportSpec(currentProject.id);
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${currentProject.name}_spec.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      useStore.setState({ error: (e as Error).message });
+    }
   };
 
   const handleExport = async () => {
@@ -180,6 +201,28 @@ export default function HomePage() {
           ))}
         </select>
 
+        {/* Branch selector */}
+        {currentProject && (
+          <select
+            value={currentBranch?.id || "main"}
+            aria-label="選擇分支"
+            onChange={(e) => {
+              if (e.target.value === "main") {
+                selectBranch(null);
+              } else {
+                const b = branches.find((b) => b.id === e.target.value);
+                if (b) selectBranch(b);
+              }
+            }}
+            className="surface-subtle rounded px-2.5 py-1.5 text-xs shrink-0 text-purple-300 border-purple-700/30"
+          >
+            <option value="main">🌿 main</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>🔀 {b.name}</option>
+            ))}
+          </select>
+        )}
+
         <button
           type="button"
           onClick={() => setShowNewProject(!showNewProject)}
@@ -198,6 +241,13 @@ export default function HomePage() {
 
         {currentProject && (
           <>
+            <button
+              type="button"
+              onClick={handleExportSpec}
+              className="rounded-md border border-green-600/40 bg-green-950/30 px-3 py-1.5 text-xs text-green-300 hover:text-green-200 shrink-0"
+            >
+              📋 匯出規格
+            </button>
             <button
               type="button"
               onClick={handleExport}
