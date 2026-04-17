@@ -28,14 +28,31 @@ async def _load_ancestor_path(node_id: str, db: AsyncSession) -> tuple[list[dict
     )
 
     result = await db.execute(
-        select(ancestor_chain.c.ancestor_id, ancestor_chain.c.depth, Node.title, Node.node_type)
+        select(ancestor_chain.c.ancestor_id, ancestor_chain.c.depth, Node.title, Node.node_type, Node.summary)
         .join(Node, Node.id == ancestor_chain.c.ancestor_id)
         .order_by(ancestor_chain.c.depth.desc())
     )
 
     rows = result.all()
+    ancestor_ids = [row.ancestor_id for row in rows]
+
+    # Load content blocks for all ancestors in one query
+    ancestor_blocks: dict[str, list[dict]] = {}
+    if ancestor_ids:
+        blocks_result = await db.execute(
+            select(ContentBlock).where(ContentBlock.node_id.in_(ancestor_ids)).order_by(ContentBlock.order_index)
+        )
+        for b in blocks_result.scalars().all():
+            ancestor_blocks.setdefault(b.node_id, []).append({"block_type": b.block_type, "content": b.content})
+
     ancestors = [
-        {"id": row.ancestor_id, "title": row.title, "type": row.node_type}
+        {
+            "id": row.ancestor_id,
+            "title": row.title,
+            "type": row.node_type,
+            "summary": row.summary or "",
+            "content_blocks": ancestor_blocks.get(row.ancestor_id, []),
+        }
         for row in rows
     ]
     direct_parent_id = rows[-1].ancestor_id if rows else None
