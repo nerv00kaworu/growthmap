@@ -24,10 +24,10 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
   }[tone];
 
   return (
-    <section className={`rounded-xl border p-5 space-y-3 ${toneClass}`}>
+    <section className={`rounded-xl border p-4 space-y-2.5 ${toneClass}`}>
       <div className="space-y-1">
-        <div className="eyebrow-label">{title}</div>
-        {subtitle && <p className="text-[11px] text-[var(--text-faint)]">{subtitle}</p>}
+        <h3 className="text-xs font-semibold tracking-wide text-[var(--text-primary)] uppercase">{title}</h3>
+        {subtitle && <p className="text-[11px] leading-5 text-[var(--text-faint)]">{subtitle}</p>}
       </div>
       {children}
     </section>
@@ -114,16 +114,16 @@ export function NodePanel() {
       />
 
       {/* Tab bar */}
-      <div className="flex border-b border-[var(--border)] bg-[var(--bg-panel)]/80 px-2 gap-0 shrink-0">
+      <div className="flex border-b border-[var(--border)] bg-[var(--bg-panel)]/80 px-1.5 gap-0 shrink-0">
         {TABS.map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => setActiveTab(t.key)}
-            className={`px-4 py-2.5 text-xs font-medium transition-colors border-b-2 -mb-px ${
+            className={`px-3 py-2 text-[11px] font-medium transition-colors border-b-2 -mb-px ${
               activeTab === t.key
-                ? "border-blue-500 text-blue-300"
-                : "border-transparent text-gray-500 hover:text-gray-300"
+                ? "border-blue-400 text-blue-200 bg-blue-950/20"
+                : "border-transparent text-gray-400 hover:text-gray-200"
             }`}
           >
             {t.label}
@@ -131,7 +131,7 @@ export function NodePanel() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 space-y-4 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[linear-gradient(180deg,rgba(17,24,39,0.16)_0%,rgba(10,10,10,0)_100%)]">
         {activeTab === "content" && (
           <NodeContent
             selectedNode={selectedNode as GNode}
@@ -178,25 +178,25 @@ export function NodePanel() {
         )}
       </div>
 
-      <div className="p-3 border-t border-[var(--border)] bg-[var(--bg-panel)]/80 flex gap-2">
+      <div className="p-2 border-t border-[var(--border)] bg-[var(--bg-panel)]/80 flex gap-1.5">
         {editing ? (
           <>
-            <button type="button" onClick={saveEdit} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-500 text-white text-sm rounded-lg">
+            <button type="button" onClick={saveEdit} className="flex-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded-md">
               儲存
             </button>
-            <button type="button" onClick={() => setEditing(false)} className="px-3 py-2 surface-subtle text-[var(--text-muted)] text-sm rounded-lg hover:text-[var(--text-primary)]">
+            <button type="button" onClick={() => setEditing(false)} className="px-3 py-1.5 surface-subtle text-[var(--text-muted)] text-sm rounded-md hover:text-[var(--text-primary)]">
               取消
             </button>
           </>
         ) : (
           <>
-            <button type="button" onClick={startEdit} className="flex-1 px-3 py-2 surface-subtle text-[var(--text-primary)] text-sm rounded-lg hover:border-blue-500/40 hover:text-blue-100">
+            <button type="button" onClick={startEdit} className="flex-1 px-3 py-1.5 surface-subtle text-[var(--text-primary)] text-sm rounded-md hover:border-blue-500/40 hover:text-blue-100">
               ✏️ 編輯
             </button>
             <button
               type="button"
               onClick={() => { if (confirm("確定刪除此節點？")) deleteNode(selectedNode.id); }}
-              className="px-3 py-2 rounded-lg border border-red-900/40 bg-red-950/30 hover:bg-red-900/40 text-red-300 text-sm"
+              className="px-3 py-1.5 rounded-md border border-red-900/40 bg-red-950/30 hover:bg-red-900/40 text-red-300 text-sm"
             >
               🗑️
             </button>

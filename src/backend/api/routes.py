@@ -728,6 +728,63 @@ async def get_node_history(node_id: str, limit: int = 20, db: AsyncSession = Dep
 
 from fastapi.responses import PlainTextResponse
 
+CONTENT_BLOCK_LABELS = {
+    "note": "筆記",
+    "spec": "規格",
+    "decision": "決策",
+    "todo": "待辦",
+    "risk": "風險",
+    "paragraph": "段落",
+    "resource": "文件",
+    "document": "文件",
+    "file": "文件",
+}
+DOC_BLOCK_TYPES = {"resource", "document", "file"}
+
+
+def _block_content(block):
+    return block.content if isinstance(block.content, dict) else {}
+
+
+def _render_content_blocks(blocks: list, heading_level: str = "###") -> list[str]:
+    lines: list[str] = []
+    content_blocks = [b for b in blocks if b.block_type not in DOC_BLOCK_TYPES]
+    if not content_blocks:
+        return lines
+    lines.append(f"{heading_level} 內容區塊")
+    for b in content_blocks:
+        content = _block_content(b)
+        label = CONTENT_BLOCK_LABELS.get(b.block_type, b.block_type)
+        title = content.get("title") or label
+        body = content.get("body") or content.get("summary") or ""
+        lines.append(f"- **{label}｜{title}**")
+        if body:
+            for line in str(body).splitlines():
+                lines.append(f"  {line}" if line else "")
+    lines.append("")
+    return lines
+
+
+def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
+    lines: list[str] = []
+    docs = [b for b in blocks if b.block_type in DOC_BLOCK_TYPES]
+    if not docs:
+        return lines
+    lines.append(f"{heading_level} 綁定文件")
+    for b in docs:
+        content = _block_content(b)
+        title = content.get("title") or content.get("name") or content.get("filename") or content.get("url") or content.get("path") or "未命名文件"
+        href = content.get("url") or content.get("path") or ""
+        summary = content.get("summary") or content.get("body") or ""
+        if href:
+            lines.append(f"- [{title}]({href})")
+        else:
+            lines.append(f"- {title}")
+        if summary:
+            lines.append(f"  - {summary}")
+    lines.append("")
+    return lines
+
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
     """Export entire project tree as Markdown document (bulk-loaded)."""
@@ -779,13 +836,9 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         if n.summary:
             lines.append(f"{n.summary}\n")
 
-        for b in blocks_by_node.get(nid, []):
-            content = b.content or {}
-            title = content.get("title", "")
-            body = content.get("body", "")
-            lines.append(f"**[{b.block_type}] {title}**\n")
-            if body:
-                lines.append(f"{body}\n")
+        node_blocks = blocks_by_node.get(nid, [])
+        lines.extend(_render_content_blocks(node_blocks, heading_level="#" * min(depth + 3, 6)))
+        lines.extend(_render_bound_docs(node_blocks, heading_level="#" * min(depth + 3, 6)))
 
         if n.maturity == "seed":
             lines.append("_⏳ 待展開_\n")
@@ -1108,47 +1161,16 @@ async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
             content_lines.append(f"{prefix} {n.title}")
             if n.summary:
                 content_lines.append(f"\n{n.summary}\n")
-            # Group content blocks by type
-            type_sections: dict[str, list] = {}
-            for b in blocks_by_node.get(nid, []):
-                bt = b.block_type
-                type_sections.setdefault(bt, []).append(b)
-            type_labels = {
-                "decisions": "### 決策記錄",
-                "rules": "### 規則",
-                "constraints": "### 約束條件",
-                "definition": "### 定義",
-                "examples": "### 範例",
-            }
-            for bt, label in type_labels.items():
-                if bt in type_sections:
-                    content_lines.append(label)
-                    for b in type_sections[bt]:
-                        c = b.content or {}
-                        title = c.get("title", "")
-                        body = c.get("body", "")
-                        if title:
-                            content_lines.append(f"**{title}**")
-                        if body:
-                            content_lines.append(body)
-                    content_lines.append("")
-            # Other types
-            other_blocks = [b for bt, blist in type_sections.items() if bt not in type_labels for b in blist]
-            if other_blocks:
-                content_lines.append("### 備註")
-                for b in other_blocks:
-                    c = b.content or {}
-                    title = c.get("title", "")
-                    body = c.get("body", "")
-                    if title:
-                        content_lines.append(f"**{title}**")
-                    if body:
-                        content_lines.append(body)
-                content_lines.append("")
+            node_blocks = blocks_by_node.get(nid, [])
+            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###"))
+            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###"))
         else:
             content_lines.append(f"{prefix} {n.title} （🚧 開發中）")
             if n.summary:
                 content_lines.append(f"\n{n.summary}\n")
+            node_blocks = blocks_by_node.get(nid, [])
+            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###"))
+            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###"))
 
         for cid in child_map.get(nid, []):
             render_spec_node(cid, depth + 1)
@@ -1366,6 +1388,134 @@ async def get_branch_subtree(branch_id: str, db: AsyncSession = Depends(get_db))
         }
 
     return {"branch": {"id": branch.id, "name": branch.name, "status": branch.status}, "tree": build_tree(root_id) if root_id else None}
+
+
+@router.get("/branches/{branch_id}/history")
+async def get_branch_history(branch_id: str, limit: int = 20, db: AsyncSession = Depends(get_db)):
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+
+    result = await db.execute(
+        select(ActionLog)
+        .where(
+            ActionLog.project_id == branch.project_id,
+            or_(
+                ActionLog.payload["branch_id"].as_string() == branch_id,
+                ActionLog.payload["branch_name"].as_string() == branch.name,
+            )
+        )
+        .order_by(ActionLog.created_at.desc())
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+    return [
+        {
+            "id": log.id,
+            "action_type": log.action_type,
+            "actor_type": log.actor_type,
+            "payload": log.payload,
+            "created_at": log.created_at.isoformat() if log.created_at else "",
+        }
+        for log in logs
+    ]
+
+
+@router.get("/branches/{branch_id}/compare")
+async def compare_branch(branch_id: str, db: AsyncSession = Depends(get_db)):
+    branch = await db.get(Branch, branch_id)
+    if not branch:
+        raise HTTPException(404, "Branch not found")
+
+    source_node = await db.get(Node, branch.source_node_id)
+    if not source_node:
+        raise HTTPException(404, "Branch source node not found")
+
+    branch_nodes_result = await db.execute(
+        select(Node).where(Node.branch_id == branch_id, Node.project_id == branch.project_id)
+    )
+    branch_nodes = branch_nodes_result.scalars().all()
+    branch_node_ids = {str(n.id) for n in branch_nodes}
+
+    edges_result = await db.execute(
+        select(Edge).where(
+            Edge.project_id == branch.project_id,
+            Edge.from_node_id.in_(branch_node_ids),
+            Edge.relation_type == "child_of"
+        )
+    )
+    child_ids: set[str] = {str(e.to_node_id) for e in edges_result.scalars().all()}
+    branch_root = next((n for n in branch_nodes if str(n.id) not in child_ids), None)
+
+    def summarize(node: Node | None):
+        if not node:
+            return None
+        return {
+            "id": str(node.id),
+            "title": node.title,
+            "summary": node.summary,
+            "node_type": node.node_type,
+            "maturity": node.maturity,
+            "updated_at": node.updated_at.isoformat() if node.updated_at else None,
+        }
+
+    source_blocks = (await db.execute(
+        select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == source_node.id)
+    )).scalar() or 0
+    branch_blocks = 0
+    if branch_root:
+        branch_blocks = (await db.execute(
+            select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == branch_root.id)
+        )).scalar() or 0
+
+    return {
+        "branch": {"id": branch.id, "name": branch.name, "status": branch.status},
+        "source": summarize(source_node),
+        "branch_root": summarize(branch_root),
+        "diff": {
+            "title_changed": bool(branch_root and branch_root.title != source_node.title),
+            "summary_changed": bool(branch_root and (branch_root.summary or "") != (source_node.summary or "")),
+            "maturity_changed": bool(branch_root and branch_root.maturity != source_node.maturity),
+            "source_block_count": source_blocks,
+            "branch_block_count": branch_blocks,
+            "branch_node_count": len(branch_nodes),
+        },
+    }
+
+
+@router.get("/projects/{project_id}/branches/ranking")
+async def rank_branches(project_id: str, db: AsyncSession = Depends(get_db)):
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    result = await db.execute(
+        select(Branch).where(Branch.project_id == project_id, Branch.status == "active").order_by(Branch.created_at.desc())
+    )
+    branches = result.scalars().all()
+
+    ranked = []
+    for branch in branches:
+        nodes_result = await db.execute(select(Node).where(Node.branch_id == branch.id))
+        nodes = nodes_result.scalars().all()
+        node_ids = [str(n.id) for n in nodes]
+        block_count = 0
+        if node_ids:
+            block_count = (await db.execute(
+                select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id.in_(node_ids))
+            )).scalar() or 0
+        ranked.append({
+            "branch_id": str(branch.id),
+            "name": branch.name,
+            "status": branch.status,
+            "node_count": len(nodes),
+            "block_count": block_count,
+            "score": len(nodes) * 10 + block_count,
+            "created_at": branch.created_at.isoformat() if branch.created_at else None,
+        })
+
+    ranked.sort(key=lambda x: (-x["score"], x["created_at"] or ""))
+    return ranked
 
 
 @router.post("/branches/{branch_id}/merge")

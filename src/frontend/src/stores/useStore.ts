@@ -331,7 +331,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     try {
       const branch = await api.createBranch(currentProject.id, { source_node_id: sourceNodeId, name, description });
       const { branches } = get();
-      set({ branches: [...branches, branch], toast: `✅ 分支「${name}」已建立` });
+      set({ branches: [...branches, branch], toast: `✅ 方案線「${name}」已建立，可在頂欄切換` });
     } catch (e: unknown) {
       set({ error: (e as Error).message });
     }

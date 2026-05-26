@@ -62,7 +62,7 @@ export const api = {
     request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number }[]>(`/nodes/${nodeId}/blocks`),
   createBlock: (nodeId: string, data: { block_type: string; content: Record<string, string> }) =>
     request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify(data) }),
-  updateBlock: (blockId: string, data: { content?: Record<string, string>; block_type?: string }) =>
+  updateBlock: (blockId: string, data: { content?: Record<string, string>; block_type?: string; order_index?: number }) =>
     request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteBlock: (blockId: string) =>
     request<void>(`/blocks/${blockId}`, { method: "DELETE" }),

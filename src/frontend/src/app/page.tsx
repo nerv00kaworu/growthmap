@@ -33,13 +33,16 @@ export default function HomePage() {
   const branches = useStore((s) => s.branches);
   const currentBranch = useStore((s) => s.currentBranch);
   const selectBranch = useStore((s) => s.selectBranch);
+  const loadBranches = useStore((s) => s.loadBranches);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
   // Build id->title map for search display
   const rootNode = useStore((s) => s.rootNode);
@@ -55,6 +58,16 @@ export default function HomePage() {
 
   const idTitleMap = nodeMap();
 
+  useEffect(() => {
+    loadProjects();
+  }, [loadProjects]);
+
+  useEffect(() => {
+    if (!currentProject && projects.length > 0) {
+      selectProject(projects[0]);
+    }
+  }, [currentProject, projects, selectProject]);
+
   // Auto-dismiss toast
   useEffect(() => {
     if (toast) {
@@ -62,6 +75,14 @@ export default function HomePage() {
       return () => clearTimeout(t);
     }
   }, [toast, setToast]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMoreMenu(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -122,6 +143,20 @@ export default function HomePage() {
     }
   };
 
+  const handleDeleteBranch = async () => {
+    if (!currentBranch || !currentProject) return;
+    if (!confirm(`確定刪除方案線「${currentBranch.name}」？此動作不可復原。`)) return;
+
+    try {
+      await api.archiveBranch(currentBranch.id);
+      await selectBranch(null);
+      await loadBranches(currentProject.id);
+      setToast(`🗑️ 已刪除方案線：${currentBranch.name}`);
+    } catch (e: unknown) {
+      useStore.setState({ error: (e as Error).message });
+    }
+  };
+
   const handleImportJSON = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -175,12 +210,13 @@ export default function HomePage() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [selectedNodeId, selectNode, deleteNode, expandNode, deepenNode, undo]);
 
+  const topBtnClass = "rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0";
+
   return (
     <div className="h-screen flex flex-col">
       {/* Top bar */}
-      <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-panel)]/95 backdrop-blur flex items-center px-4 gap-3 shrink-0 flex-wrap">
-        <div className="shrink-0">
-          <div className="eyebrow-label">Project growth workspace</div>
+      <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-panel)]/95 backdrop-blur flex items-center px-3 gap-2 shrink-0 flex-nowrap overflow-x-auto overflow-y-visible relative z-40">
+        <div className="shrink-0 flex items-center h-full">
           <h1 className="text-sm font-semibold text-[var(--text-primary)] tracking-wide">🌳 GrowthMap</h1>
         </div>
         <div className="h-6 w-px bg-[var(--border)] shrink-0" />
@@ -193,7 +229,7 @@ export default function HomePage() {
             const p = projects.find((p) => p.id === e.target.value);
             if (p) selectProject(p);
           }}
-          className="surface-subtle rounded px-2.5 py-1.5 text-xs text-[var(--text-primary)] shrink-0"
+          className="surface-subtle rounded-md px-2.5 py-1.5 text-xs text-[var(--text-primary)] shrink-0 border border-gray-700/60 hover:border-gray-500/70 max-w-36"
         >
           <option value="">選擇專案...</option>
           {projects.map((p) => (
@@ -203,24 +239,26 @@ export default function HomePage() {
 
         {/* Branch selector */}
         {currentProject && (
-          <select
-            value={currentBranch?.id || "main"}
-            aria-label="選擇分支"
-            onChange={(e) => {
-              if (e.target.value === "main") {
-                selectBranch(null);
-              } else {
-                const b = branches.find((b) => b.id === e.target.value);
-                if (b) selectBranch(b);
-              }
-            }}
-            className="surface-subtle rounded px-2.5 py-1.5 text-xs shrink-0 text-purple-300 border-purple-700/30"
-          >
-            <option value="main">🌿 main</option>
-            {branches.map((b) => (
-              <option key={b.id} value={b.id}>🔀 {b.name}</option>
-            ))}
-          </select>
+          <>
+            <select
+              value={currentBranch?.id || "main"}
+              aria-label="選擇分支"
+              onChange={(e) => {
+                if (e.target.value === "main") {
+                  selectBranch(null);
+                } else {
+                  const b = branches.find((b) => b.id === e.target.value);
+                  if (b) selectBranch(b);
+                }
+              }}
+              className="surface-subtle rounded-md px-2.5 py-1.5 text-xs shrink-0 text-purple-300 border border-purple-700/40 hover:border-purple-500/60 max-w-40"
+            >
+              <option value="main">🌿 主線（main）</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>🔀 方案線：{b.name}</option>
+              ))}
+            </select>
+          </>
         )}
 
         <button
@@ -231,61 +269,21 @@ export default function HomePage() {
           + 新專案
         </button>
 
-        <button
-          type="button"
-          onClick={() => setShowSettings(true)}
-          className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0"
-        >
-          ⚙️ LLM 設定
-        </button>
-
         {currentProject && (
-          <>
+          <div ref={moreMenuRef} className="shrink-0">
             <button
               type="button"
-              onClick={handleExportSpec}
-              className="rounded-md border border-green-600/40 bg-green-950/30 px-3 py-1.5 text-xs text-green-300 hover:text-green-200 shrink-0"
+              onClick={() => setShowMoreMenu((v) => !v)}
+              className={topBtnClass}
+              title="更多操作"
             >
-              📋 匯出規格
+              ⋯ 更多
             </button>
-            <button
-              type="button"
-              onClick={handleExport}
-              className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0"
-            >
-              📄 匯出
-            </button>
-            <button
-              type="button"
-              onClick={handleExportJSON}
-              className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0"
-            >
-              📤 匯出 JSON
-            </button>
-            <label className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0 cursor-pointer">
-              📥 匯入
-              <input
-                ref={importRef}
-                type="file"
-                accept=".json"
-                onChange={handleImportJSON}
-                className="hidden"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={undo}
-              disabled={undoStack.length === 0}
-              title={undoStack.length > 0 ? `復原: ${undoStack[0]?.description}` : "無可復原操作"}
-              className="rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
-            </button>
-          </>
+          </div>
         )}
 
         {/* Search */}
-        <div className="relative shrink-0">
+        <div className="relative shrink-0 hidden md:block">
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -319,18 +317,67 @@ export default function HomePage() {
           type="button"
           onClick={() => setShowShortcuts(true)}
           title="鍵盤快捷鍵"
-          className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0"
+          className={`${topBtnClass} px-2.5 hidden md:inline-block`}
         >
           ⌨️
         </button>
 
-        {currentProject && (
-          <div className="ml-auto min-w-0 text-right shrink-0">
-            <div className="eyebrow-label">Current project</div>
-            <span className="block truncate text-xs text-[var(--text-muted)]">{currentProject.description || currentProject.name}</span>
-          </div>
-        )}
       </header>
+
+      {showMoreMenu && currentProject && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowMoreMenu(false)}>
+          <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-100">⋯ 更多操作</h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  {currentBranch ? `目前方案線：${currentBranch.name}` : "匯入匯出、復原與方案線管理"}
+                </p>
+              </div>
+              <button type="button" onClick={() => setShowMoreMenu(false)} className="text-gray-500 hover:text-gray-300 text-lg">×</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">📋 匯出規格</button>
+              <button type="button" onClick={() => { handleExport(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📄 匯出 Markdown</button>
+              <button type="button" onClick={() => { handleExportJSON(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📤 匯出 JSON</button>
+              <label className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 cursor-pointer">
+                📥 匯入 JSON
+                <input
+                  ref={importRef}
+                  type="file"
+                  accept=".json"
+                  onChange={(e) => { handleImportJSON(e); setShowMoreMenu(false); }}
+                  className="hidden"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => { undo(); setShowMoreMenu(false); }}
+                disabled={undoStack.length === 0}
+                className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
+              </button>
+              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⚙️ LLM 設定</button>
+              <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
+            </div>
+
+            <div className="rounded-lg border border-red-900/30 bg-red-950/10 p-3 space-y-2">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-red-400/70">危險操作</div>
+              <button
+                type="button"
+                onClick={() => { handleDeleteBranch(); setShowMoreMenu(false); }}
+                disabled={!currentBranch}
+                className="w-full rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2.5 text-left text-xs text-red-300 hover:bg-red-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
+                title={currentBranch ? `刪除方案線：${currentBranch.name}` : "目前是主線，請先切到方案線後才能刪除"}
+              >
+                🗑️ {currentBranch ? `刪除方案線：${currentBranch.name}` : "主線不可刪除"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* New project modal */}
       {showNewProject && (
@@ -368,7 +415,10 @@ export default function HomePage() {
         <div className="flex-1 relative">
           {loading ? (
             <div className="flex items-center justify-center h-full text-gray-500">
-              <div className="animate-pulse">載入中...</div>
+              <div className="text-center animate-pulse space-y-1">
+                <div className="text-sm text-gray-400">正在切換{currentBranch ? "分支" : "專案"}…</div>
+                <div className="text-xs text-gray-600">同步樹狀資料中</div>
+              </div>
             </div>
           ) : (
             <MindMap />
@@ -377,7 +427,7 @@ export default function HomePage() {
 
         <div
           className="border-l border-[var(--border)] bg-[var(--bg-panel)] transition-all duration-300 overflow-hidden surface-panel rounded-none border-y-0 border-r-0"
-          style={{ width: selectedNode ? 420 : 0 }}
+          style={{ width: selectedNode ? "50vw" : 0 }}
         >
           <NodePanel />
         </div>
