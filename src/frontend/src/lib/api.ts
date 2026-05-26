@@ -97,6 +97,13 @@ export const api = {
       body: JSON.stringify({ node_id: nodeId, message, history, llm_config: getLLMPayload() }),
     }),
 
+  // Test LLM connection
+  testConnection: (provider: string, apiKey?: string, baseUrl?: string, model?: string) =>
+    request<{ ok: boolean; provider: string; model?: string; message: string }>("/ai/test-connection", {
+      method: "POST",
+      body: JSON.stringify({ provider, api_key: apiKey, base_url: baseUrl, model }),
+    }),
+
   // Spec export (returns text)
   exportSpec: async (projectId: string): Promise<string> => {
     const res = await fetch(`${BASE}/projects/${projectId}/export-spec`);

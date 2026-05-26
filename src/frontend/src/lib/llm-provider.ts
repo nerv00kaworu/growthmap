@@ -1,4 +1,4 @@
-export type LLMProviderType = "openai" | "anthropic" | "google" | "openclaw" | "custom";
+export type LLMProviderType = "openai" | "anthropic" | "google" | "openclaw" | "custom" | "mock";
 
 export interface LLMConfig {
   provider: LLMProviderType;
@@ -13,6 +13,7 @@ export const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   google: "gemini-2.0-flash",
   openclaw: "gpt-5-codex-mini",
   custom: "",
+  mock: "demo",
 };
 
 const LS_KEY = "growthmap_llm_config";

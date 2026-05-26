@@ -6,15 +6,16 @@ from typing import Literal, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
-from ai.provider import llm_complete, parse_json_response
+from ai.providers import LLMConfig, get_provider
 from ai.context import build_node_context
 from models.models import ActionLog, Node
+from ai.provider import parse_json_response  # Reuse existing JSON parser
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
 
 class LLMConfigOverride(BaseModel):
-    provider: Optional[str] = None  # openai, anthropic, google, openclaw, custom
+    provider: Optional[str] = None  # mock, openai_compatible, custom, openai
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
@@ -32,6 +33,20 @@ class DeepenRequest(BaseModel):
     node_id: str
     instruction: Optional[str] = None
     llm_config: Optional[LLMConfigOverride] = None
+
+
+class TestConnectionRequest(BaseModel):
+    provider: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+class TestConnectionResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: Optional[str] = None
+    message: str
 
 
 class Suggestion(BaseModel):
@@ -76,7 +91,7 @@ EXPAND_SYSTEM = """你是一個專案結構分析師。根據提供的上下文�
 
 DEEPEN_SYSTEM = """你是一個知識深化分析師。根據提供的上下文，對指定節點進行內容深化。
 
-重要：上下文中包含「祖先路徑」（ancestor_path），其中有從根節點到當前節點的完整脈絡（含每個祖先的 summary 和 content_blocks）。你必須閱讀並理解這條脈絡，確保深化內容與整個知識鏈一致，不要重複祖先已涵蓋的內容。
+重要：上下文中包含「祖先路徑」（ancestor_path），其中有從根節點到當前節點的完整脈絡（含每個祖先的 summary 和 content_blocks）。你必須閱讀並理解這條脈絡，確保深化內容與整個知識鏈一致，不要重複��先已涵蓋的內容。
 
 規則：
 1. 不要改變節點的核心方向，而是充實其內容
@@ -105,19 +120,16 @@ DEEPEN_SYSTEM = """你是一個知識深化分析師。根據提供的上下文�
 }"""
 
 
-def _build_llm_kwargs(config: Optional[LLMConfigOverride]) -> dict:
-    """Convert frontend LLM config to kwargs for llm_complete."""
+def _to_llm_config(config: Optional[LLMConfigOverride]) -> Optional[LLMConfig]:
+    """Convert optional LLMConfigOverride to LLMConfig for provider adapter."""
     if not config:
-        return {}
-    kwargs: dict = {}
-    if config.model:
-        kwargs["model"] = config.model
-    if config.api_key and config.base_url:
-        kwargs["base_url_override"] = config.base_url.rstrip("/")
-        kwargs["api_key_override"] = config.api_key
-    elif config.api_key:
-        kwargs["api_key_override"] = config.api_key
-    return kwargs
+        return None
+    return LLMConfig(
+        provider=config.provider or "openai_compatible",
+        api_key=config.api_key,
+        base_url=config.base_url,
+        model=config.model,
+    )
 
 
 def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"]) -> str:
@@ -127,6 +139,23 @@ def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"]) -> 
         "challenge": "模式：challenge（挑戰假設）。請優先提出會打破僵化的替代方向、反例、風險、限制與對立觀點，至少有一個建議應直接質疑當前思路。",
     }
     return prompts[mode]
+
+
+@router.post("/test-connection", response_model=TestConnectionResponse)
+async def test_connection(req: TestConnectionRequest):
+    """Test LLM provider connection with given config."""
+    config = LLMConfig(
+        provider=req.provider or "openai_compatible",
+        api_key=req.api_key,
+        base_url=req.base_url,
+        model=req.model,
+    )
+    
+    # Use the provider adapter to test connection
+    from ai.providers.registry import test_connection as test_conn
+    result = test_conn(config)
+    
+    return TestConnectionResponse(**result)
 
 
 @router.post("/expand", response_model=ExpandResponse)
@@ -155,8 +184,19 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        llm_kwargs = _build_llm_kwargs(req.llm_config)
-        raw = await llm_complete(EXPAND_SYSTEM, user_prompt, **llm_kwargs)
+        llm_cfg = _to_llm_config(req.llm_config)
+        if llm_cfg:
+            provider = get_provider(llm_cfg)
+            raw = await provider.complete(
+                EXPAND_SYSTEM, 
+                user_prompt, 
+                model=llm_cfg.model,
+            )
+        else:
+            # Fallback to existing provider
+            from ai.provider import llm_complete
+            raw = await llm_complete(EXPAND_SYSTEM, user_prompt)
+            
         suggestions = parse_json_response(raw)
         if not isinstance(suggestions, list):
             raise ValueError("LLM returned an invalid suggestions payload")
@@ -215,8 +255,18 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        llm_kwargs = _build_llm_kwargs(req.llm_config)
-        raw = await llm_complete(DEEPEN_SYSTEM, user_prompt, **llm_kwargs)
+        llm_cfg = _to_llm_config(req.llm_config)
+        if llm_cfg:
+            provider = get_provider(llm_cfg)
+            raw = await provider.complete(
+                DEEPEN_SYSTEM, 
+                user_prompt, 
+                model=llm_cfg.model,
+            )
+        else:
+            from ai.provider import llm_complete
+            raw = await llm_complete(DEEPEN_SYSTEM, user_prompt)
+            
         result = parse_json_response(raw)
         if not isinstance(result, dict):
             raise ValueError("LLM returned an invalid deepen payload")
@@ -296,8 +346,17 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     context_summary += f"使用者的最新問題：{req.message}"
 
     try:
-        llm_kwargs = _build_llm_kwargs(req.llm_config)
-        reply = await llm_complete(system_prompt, context_summary, **llm_kwargs)
+        llm_cfg = _to_llm_config(req.llm_config)
+        if llm_cfg:
+            provider = get_provider(llm_cfg)
+            reply = await provider.complete(
+                system_prompt,
+                context_summary,
+                model=llm_cfg.model,
+            )
+        else:
+            from ai.provider import llm_complete
+            reply = await llm_complete(system_prompt, context_summary)
 
         node = await db.get(Node, req.node_id)
         if node:

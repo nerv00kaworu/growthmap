@@ -4,11 +4,11 @@ import { useState, useEffect } from "react";
 import {
   loadLLMConfig,
   saveLLMConfig,
-  llmComplete,
   DEFAULT_MODELS,
   type LLMConfig,
   type LLMProviderType,
 } from "@/lib/llm-provider";
+import { api } from "@/lib/api";
 
 interface SettingsProps {
   onClose: () => void;
@@ -20,6 +20,7 @@ const PROVIDER_LABELS: Record<LLMProviderType, string> = {
   google: "Google Gemini",
   openclaw: "OpenClaw",
   custom: "Custom",
+  mock: "Mock (Demo)",
 };
 
 export function Settings({ onClose }: SettingsProps) {
@@ -57,15 +58,20 @@ export function Settings({ onClose }: SettingsProps) {
     setTestStatus("testing");
     setTestMsg("");
     try {
-      const config: LLMConfig = {
+      // Call backend test-connection endpoint
+      const result = await api.testConnection(
         provider,
-        apiKey,
-        baseUrl: showBaseUrl ? baseUrl : undefined,
-        model: model || DEFAULT_MODELS[provider],
-      };
-      const result = await llmComplete(config, "你是一個助理。", "請回應「連線成功」四個字，不要加其他任何內容。");
-      setTestStatus("ok");
-      setTestMsg(`✅ 連線成功：${result.trim().slice(0, 50)}`);
+        apiKey || undefined,
+        showBaseUrl ? baseUrl : undefined,
+        model || DEFAULT_MODELS[provider] || undefined
+      );
+      if (result.ok) {
+        setTestStatus("ok");
+        setTestMsg(`✅ ${result.message}`);
+      } else {
+        setTestStatus("fail");
+        setTestMsg(`❌ ${result.message}`);
+      }
     } catch (e: unknown) {
       setTestStatus("fail");
       setTestMsg(`❌ 連線失敗：${(e as Error).message}`);
@@ -163,14 +169,14 @@ export function Settings({ onClose }: SettingsProps) {
         <div className="flex gap-2 pt-1">
           <button
             onClick={handleTest}
-            disabled={testStatus === "testing" || !apiKey}
+            disabled={testStatus === "testing" || (!apiKey && provider !== "mock")}
             className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-gray-300 hover:text-gray-100 disabled:opacity-50"
           >
             {testStatus === "testing" ? "測試中..." : "🔌 測試連線"}
           </button>
           <button
             onClick={handleSave}
-            disabled={!apiKey}
+            disabled={!apiKey && provider !== "mock"}
             className="flex-1 rounded-lg bg-blue-600 hover:bg-blue-500 px-3 py-2 text-xs text-white font-medium disabled:opacity-50"
           >
             儲存
