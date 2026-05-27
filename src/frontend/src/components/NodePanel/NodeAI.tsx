@@ -9,6 +9,18 @@ import {
   type GrowthMode,
 } from "@/lib/types";
 
+const NODE_TYPE_LABELS: Record<string, string> = {
+  idea: "想法",
+  concept: "概念",
+  task: "任務",
+  question: "問題",
+  decision: "決策",
+  risk: "風險",
+  resource: "資源",
+  note: "筆記",
+  module: "模組",
+};
+
 interface NodeAIProps {
   selectedNode: GNode;
   aiInstruction: string;
@@ -20,6 +32,7 @@ interface NodeAIProps {
   deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
   acceptSuggestion: (index: number) => Promise<void>;
+  ignoreSuggestion: (index: number) => void;
   acceptAllSuggestions: () => Promise<void>;
   deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
   acceptDeepen: () => Promise<void>;
@@ -41,6 +54,7 @@ export function NodeAI({
   deepenNode,
   expandSuggestions,
   acceptSuggestion,
+  ignoreSuggestion,
   acceptAllSuggestions,
   deepenResult,
   acceptDeepen,
@@ -106,16 +120,25 @@ export function NodeAI({
                 <span className="text-base text-gray-200">
                   {NODE_TYPE_ICONS[s.node_type] || "📌"} {s.title}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => acceptSuggestion(i)}
-                  className="text-sm px-2 py-0.5 bg-green-800 hover:bg-green-700 text-green-200 rounded"
-                >
-                  ✓ 採用
-                </button>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => acceptSuggestion(i)}
+                    className="text-sm px-2 py-0.5 bg-green-800 hover:bg-green-700 text-green-200 rounded"
+                  >
+                    ✓ 採用
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => ignoreSuggestion(i)}
+                    className="text-sm px-2 py-0.5 border border-gray-700 text-gray-400 hover:text-gray-200 rounded"
+                  >
+                    忽略
+                  </button>
+                </div>
               </div>
               <p className="text-sm text-gray-400">{s.summary}</p>
-              <span className="text-xs text-gray-600">{s.node_type}</span>
+              <span className="text-xs text-gray-600">{NODE_TYPE_LABELS[s.node_type] || s.node_type}</span>
             </div>
           ))}
           <button

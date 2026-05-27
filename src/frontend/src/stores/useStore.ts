@@ -58,6 +58,7 @@ interface GrowthMapStore {
   expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
   deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
   acceptSuggestion: (index: number) => Promise<void>;
+  ignoreSuggestion: (index: number) => void;
   acceptAllSuggestions: () => Promise<void>;
   acceptDeepen: () => Promise<void>;
   acceptDeepenSummary: () => Promise<void>;
@@ -427,6 +428,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     set({
       rootNode: updated,
       expandSuggestions: remaining.length > 0 ? remaining : null,
+      toast: `✅ 已建立 AI 建議節點「${s.title}」`,
     });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
@@ -434,9 +436,20 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
   },
 
+  ignoreSuggestion: (index) => {
+    const { expandSuggestions } = get();
+    if (!expandSuggestions) return;
+    const remaining = expandSuggestions.filter((_, i) => i !== index);
+    set({
+      expandSuggestions: remaining.length > 0 ? remaining : null,
+      toast: "已忽略一個 AI 分支建議",
+    });
+  },
+
   acceptAllSuggestions: async () => {
     const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
+    if (!confirm(`確定採用全部 ${expandSuggestions.length} 個 AI 分支建議？`)) return;
     const newUndoStack = pushUndo(undoStack, rootNode, `接受全部 AI 建議`);
     set({ undoStack: newUndoStack });
     let tree = rootNode;
@@ -464,7 +477,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       };
       tree = insertChild(tree, expandTargetNodeId, child);
     }
-    set({ rootNode: tree, expandSuggestions: null });
+    set({ rootNode: tree, expandSuggestions: null, toast: `✅ 已建立 ${expandSuggestions.length} 個 AI 建議節點` });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(tree, selectedNodeId) });
@@ -587,6 +600,7 @@ interface GrowthMapStore {
   expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
   deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
   acceptSuggestion: (index: number) => Promise<void>;
+  ignoreSuggestion: (index: number) => void;
   acceptAllSuggestions: () => Promise<void>;
   acceptDeepen: () => Promise<void>;
   dismissAI: () => void;
