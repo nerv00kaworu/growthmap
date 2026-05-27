@@ -23,6 +23,9 @@ interface NodeAIProps {
   acceptAllSuggestions: () => Promise<void>;
   deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
   acceptDeepen: () => Promise<void>;
+  acceptDeepenSummary: () => Promise<void>;
+  acceptDeepenBlock: (index: number) => Promise<void>;
+  ignoreDeepenBlock: (index: number) => void;
   dismissAI: () => void;
   Section: (props: { title: string; subtitle?: string; tone?: "neutral" | "ai" | "edit"; children: React.ReactNode }) => React.JSX.Element;
 }
@@ -41,6 +44,9 @@ export function NodeAI({
   acceptAllSuggestions,
   deepenResult,
   acceptDeepen,
+  acceptDeepenSummary,
+  acceptDeepenBlock,
+  ignoreDeepenBlock,
   dismissAI,
   Section,
 }: NodeAIProps) {
@@ -128,14 +134,41 @@ export function NodeAI({
             <div className="eyebrow-label text-teal-300">🔍 深化建議</div>
             <button type="button" onClick={dismissAI} className="text-sm text-[var(--text-faint)] hover:text-[var(--text-primary)]">✕ 關閉</button>
           </div>
-          <div className="bg-gray-800/80 border border-teal-800/40 rounded-lg p-3 space-y-2">
-            <div>
-              <span className="eyebrow-label">更新摘要</span>
-              <p className="text-base text-[var(--text-primary)] mt-1">{deepenResult.enriched_summary}</p>
+          <div className="bg-gray-800/80 border border-teal-800/40 rounded-lg p-3 space-y-3">
+            <div className="rounded-lg border border-gray-700/70 bg-gray-900/40 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="eyebrow-label">摘要建議</span>
+                <button
+                  type="button"
+                  onClick={acceptDeepenSummary}
+                  className="text-xs px-2 py-1 bg-green-800 hover:bg-green-700 text-green-200 rounded"
+                >
+                  ✓ 套用摘要
+                </button>
+              </div>
+              <p className="text-base text-[var(--text-primary)] mt-1 whitespace-pre-wrap">{deepenResult.enriched_summary}</p>
             </div>
-            {deepenResult.content_blocks.map((block) => (
-              <div key={`${block.block_type}-${block.title}`} className="border-t border-gray-700 pt-2">
-                <span className="text-xs text-teal-500">{block.block_type}</span>
+            {deepenResult.content_blocks.map((block, index) => (
+              <div key={`${block.block_type}-${block.title}-${index}`} className="rounded-lg border border-gray-700/70 bg-gray-900/40 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-teal-500">{block.block_type}</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => acceptDeepenBlock(index)}
+                      className="text-xs px-2 py-1 bg-green-800 hover:bg-green-700 text-green-200 rounded"
+                    >
+                      ✓ 接受
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => ignoreDeepenBlock(index)}
+                      className="text-xs px-2 py-1 border border-gray-700 text-gray-400 hover:text-gray-200 rounded"
+                    >
+                      忽略
+                    </button>
+                  </div>
+                </div>
                 <p className="text-sm text-gray-300 font-medium">{block.title}</p>
                 <p className="text-sm text-gray-400 mt-0.5 whitespace-pre-wrap">{block.body}</p>
               </div>
@@ -146,7 +179,7 @@ export function NodeAI({
             onClick={acceptDeepen}
             className="w-full text-sm py-1.5 bg-teal-900/40 hover:bg-teal-800/60 text-teal-300 rounded border border-teal-700/30"
           >
-            ✓ 接受深化
+            ✓ 全部接受
           </button>
         </Section>
       )}

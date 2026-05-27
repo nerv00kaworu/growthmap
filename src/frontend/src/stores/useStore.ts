@@ -60,6 +60,9 @@ interface GrowthMapStore {
   acceptSuggestion: (index: number) => Promise<void>;
   acceptAllSuggestions: () => Promise<void>;
   acceptDeepen: () => Promise<void>;
+  acceptDeepenSummary: () => Promise<void>;
+  acceptDeepenBlock: (index: number) => Promise<void>;
+  ignoreDeepenBlock: (index: number) => void;
   dismissAI: () => void;
 }
 
@@ -469,36 +472,67 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptDeepen: async () => {
+    await get().acceptDeepenSummary();
+    const { deepenResult } = get();
+    if (!deepenResult) return;
+    for (let i = deepenResult.content_blocks.length - 1; i >= 0; i--) {
+      await get().acceptDeepenBlock(i);
+    }
+    set({ deepenResult: null });
+  },
+
+  acceptDeepenSummary: async () => {
     const { deepenResult, rootNode, undoStack } = get();
     if (!deepenResult || !rootNode) return;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 深化`);
-    set({ undoStack: newUndoStack });
     const targetId = deepenResult.target_node_id;
+    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 摘要建議`);
+    set({ undoStack: newUndoStack });
     await api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>);
-    for (const block of deepenResult.content_blocks) {
-      await api.createBlock(targetId, {
-        block_type: block.block_type,
-        content: { title: block.title, body: block.body },
-      });
-    }
-    const newBlocks = deepenResult.content_blocks.map((b, i) => ({
-      id: `temp-${Date.now()}-${i}`,
-      node_id: targetId,
-      block_type: b.block_type,
-      content: { title: b.title, body: b.body },
-      order_index: i,
-    }));
-    const target = findNode(rootNode, targetId);
-    const existingBlocks = target?.content_blocks || [];
-    const updated = patchNode(rootNode, targetId, {
-      summary: deepenResult.enriched_summary,
-      content_blocks: [...existingBlocks, ...newBlocks],
-    } as Partial<GNode>);
-    set({ rootNode: updated, deepenResult: null });
+    const updated = patchNode(rootNode, targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>);
+    set({ rootNode: updated, toast: "✅ 已套用 AI 摘要建議" });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
     }
+  },
+
+  acceptDeepenBlock: async (index) => {
+    const { deepenResult, rootNode, undoStack } = get();
+    if (!deepenResult || !rootNode) return;
+    const block = deepenResult.content_blocks[index];
+    if (!block) return;
+    const targetId = deepenResult.target_node_id;
+    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 內容區塊: ${block.title}`);
+    set({ undoStack: newUndoStack });
+    const created = await api.createBlock(targetId, {
+      block_type: block.block_type,
+      content: { title: block.title, body: block.body },
+    }) as { id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number };
+    const target = findNode(rootNode, targetId);
+    const existingBlocks = target?.content_blocks || [];
+    const updated = patchNode(rootNode, targetId, {
+      content_blocks: [...existingBlocks, created],
+    } as Partial<GNode>);
+    const remainingBlocks = deepenResult.content_blocks.filter((_, i) => i !== index);
+    set({
+      rootNode: updated,
+      deepenResult: remainingBlocks.length > 0 ? { ...deepenResult, content_blocks: remainingBlocks } : null,
+      toast: "✅ 已寫入 AI 內容區塊",
+    });
+    const { selectedNodeId } = get();
+    if (selectedNodeId) {
+      set({ selectedNode: findNode(updated, selectedNodeId) });
+    }
+  },
+
+  ignoreDeepenBlock: (index) => {
+    const { deepenResult } = get();
+    if (!deepenResult) return;
+    const remainingBlocks = deepenResult.content_blocks.filter((_, i) => i !== index);
+    set({
+      deepenResult: remainingBlocks.length > 0 ? { ...deepenResult, content_blocks: remainingBlocks } : null,
+      toast: "已忽略一個 AI 內容區塊",
+    });
   },
 
   dismissAI: () => {

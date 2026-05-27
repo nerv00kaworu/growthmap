@@ -48,6 +48,9 @@ export function NodePanel() {
   const acceptSuggestion = useStore((s) => s.acceptSuggestion);
   const acceptAllSuggestions = useStore((s) => s.acceptAllSuggestions);
   const acceptDeepen = useStore((s) => s.acceptDeepen);
+  const acceptDeepenSummary = useStore((s) => s.acceptDeepenSummary);
+  const acceptDeepenBlock = useStore((s) => s.acceptDeepenBlock);
+  const ignoreDeepenBlock = useStore((s) => s.ignoreDeepenBlock);
   const dismissAI = useStore((s) => s.dismissAI);
   const expandSuggestions = useStore((s) => s.expandSuggestions);
   const deepenResult = useStore((s) => s.deepenResult);
@@ -162,6 +165,9 @@ export function NodePanel() {
             acceptAllSuggestions={acceptAllSuggestions}
             deepenResult={deepenResult}
             acceptDeepen={acceptDeepen}
+            acceptDeepenSummary={acceptDeepenSummary}
+            acceptDeepenBlock={acceptDeepenBlock}
+            ignoreDeepenBlock={ignoreDeepenBlock}
             dismissAI={dismissAI}
             Section={Section}
           />
