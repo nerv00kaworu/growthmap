@@ -1,6 +1,6 @@
 "use client";
 
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   GROWTH_MODE_HELP,
   GROWTH_MODE_LABELS,
@@ -8,6 +8,17 @@ import {
   type GNode,
   type GrowthMode,
 } from "@/lib/types";
+import { DEFAULT_MODELS, loadLLMConfig } from "@/lib/llm-provider";
+
+const PROVIDER_LABELS: Record<string, string> = {
+  mock: "Mock / Demo",
+  openai_compatible: "OpenAI-compatible",
+  custom: "Custom Endpoint",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google Gemini",
+  openclaw: "OpenClaw",
+};
 
 const NODE_TYPE_LABELS: Record<string, string> = {
   idea: "想法",
@@ -64,9 +75,51 @@ export function NodeAI({
   dismissAI,
   Section,
 }: NodeAIProps) {
+  const [llmConfig, setLlmConfig] = useState(() => loadLLMConfig());
+
+  useEffect(() => {
+    const refreshConfig = () => setLlmConfig(loadLLMConfig());
+    window.addEventListener("storage", refreshConfig);
+    window.addEventListener("focus", refreshConfig);
+    return () => {
+      window.removeEventListener("storage", refreshConfig);
+      window.removeEventListener("focus", refreshConfig);
+    };
+  }, []);
+
+  const aiProvider = llmConfig?.provider || "mock";
+  const aiModel = llmConfig?.model || DEFAULT_MODELS[aiProvider] || "未設定";
+  const isMockProvider = aiProvider === "mock";
+  const costHint = useMemo(() => {
+    if (isMockProvider) return "Mock 模式不會呼叫外部 API。";
+    return "真模型模式：每次展開/深化可能消耗 API 額度。";
+  }, [isMockProvider]);
+
+  const confirmRealModel = (action: string) => {
+    if (isMockProvider) return true;
+    return confirm(`目前使用真模型 provider（${PROVIDER_LABELS[aiProvider] || aiProvider} / ${aiModel}）。\n\n「${action}」可能消耗 API 額度，是否繼續？`);
+  };
+
+  const handleExpand = () => {
+    if (!confirmRealModel("展開分支")) return;
+    expandNode(selectedNode.id, aiInstruction || undefined, aiMode);
+  };
+
+  const handleDeepen = () => {
+    if (!confirmRealModel("深化內容")) return;
+    deepenNode(selectedNode.id, aiInstruction || undefined);
+  };
+
   return (
     <>
       <Section title="AI 生長" subtitle="切換模式，避免所有衍生結果都走同一種形狀。" tone="ai">
+        <div className={`rounded-lg border px-3 py-2 text-xs leading-5 ${isMockProvider ? "border-green-800/40 bg-green-950/20 text-green-200/80" : "border-amber-800/40 bg-amber-950/20 text-amber-200/80"}`}>
+          <div className="font-medium">
+            目前 AI：{PROVIDER_LABELS[aiProvider] || aiProvider} / {aiModel}
+          </div>
+          <div>{costHint}</div>
+        </div>
+
         <div className="surface-subtle rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="eyebrow-label">生長模式</span>
@@ -91,7 +144,7 @@ export function NodeAI({
         <div className="flex gap-2">
           <button
             type="button"
-            onClick={() => expandNode(selectedNode.id, aiInstruction || undefined, aiMode)}
+            onClick={handleExpand}
             disabled={aiLoading}
             className="flex-1 px-3 py-2 bg-purple-900/60 hover:bg-purple-800 disabled:bg-gray-800 disabled:text-gray-600 text-purple-200 text-sm rounded-lg transition-colors border border-purple-700/50"
           >
@@ -99,7 +152,7 @@ export function NodeAI({
           </button>
           <button
             type="button"
-            onClick={() => deepenNode(selectedNode.id, aiInstruction || undefined)}
+            onClick={handleDeepen}
             disabled={aiLoading}
             className="flex-1 px-3 py-2 bg-teal-900/60 hover:bg-teal-800 disabled:bg-gray-800 disabled:text-gray-600 text-teal-200 text-sm rounded-lg transition-colors border border-teal-700/50"
           >

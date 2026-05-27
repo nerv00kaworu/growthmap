@@ -112,6 +112,11 @@ export function Settings({ onClose }: SettingsProps) {
             </select>
           </div>
 
+          <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs leading-5 text-amber-200/80">
+            <div className="font-medium text-amber-200">費用提醒</div>
+            <div>Mock 不會花錢；OpenAI-compatible / Custom / 其他真模型測試會送出極短請求，可能產生極低 API 費用。</div>
+          </div>
+
           {/* API Key */}
           <div>
             <label className="block text-xs text-gray-400 mb-1">API Key</label>
@@ -132,7 +137,7 @@ export function Settings({ onClose }: SettingsProps) {
                 type="text"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://..."
+                placeholder={provider === "openai_compatible" ? "https://api.openai.com/v1 或 https://openrouter.ai/api/v1" : "https://..."}
                 className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-600"
               />
             </div>
@@ -147,9 +152,14 @@ export function Settings({ onClose }: SettingsProps) {
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder={DEFAULT_MODELS[provider] || "填入模型名稱"}
+              placeholder={DEFAULT_MODELS[provider] || "例：gpt-4o-mini / deepseek-chat / llama3.1"}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-600"
             />
+            {provider === "openai_compatible" && (
+              <p className="mt-1 text-[11px] leading-5 text-gray-500">
+                常見 Base URL：OpenAI <code>https://api.openai.com/v1</code>、OpenRouter <code>https://openrouter.ai/api/v1</code>、本地 Ollama/LM Studio <code>http://localhost:11434/v1</code>
+              </p>
+            )}
           </div>
         </div>
 
@@ -170,6 +180,7 @@ export function Settings({ onClose }: SettingsProps) {
         <div className="flex gap-2 pt-1">
           <button
             onClick={handleTest}
+            title={provider === "mock" ? "Mock 不會呼叫外部 API" : "會送出一個極短真模型請求，可能產生極低費用"}
             disabled={testStatus === "testing" || (!apiKey && provider !== "mock")}
             className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-gray-300 hover:text-gray-100 disabled:opacity-50"
           >
