@@ -1,4 +1,4 @@
-export type LLMProviderType = "openai" | "anthropic" | "google" | "openclaw" | "custom" | "mock";
+export type LLMProviderType = "openai" | "anthropic" | "google" | "openclaw" | "custom" | "openai_compatible" | "mock";
 
 export interface LLMConfig {
   provider: LLMProviderType;
@@ -13,6 +13,7 @@ export const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   google: "gemini-2.0-flash",
   openclaw: "gpt-5-codex-mini",
   custom: "",
+  openai_compatible: "",
   mock: "demo",
 };
 
@@ -42,7 +43,8 @@ export async function llmComplete(
   switch (config.provider) {
     case "openai":
     case "openclaw":
-    case "custom": {
+    case "custom":
+    case "openai_compatible": {
       const baseUrl =
         config.provider === "openai"
           ? "https://api.openai.com/v1"

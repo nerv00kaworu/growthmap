@@ -49,7 +49,7 @@ def get_provider(config: LLMConfig) -> LLMProvider:
     return OpenAICompatibleProvider()
 
 
-def test_connection(config: LLMConfig) -> dict:
+async def test_connection(config: LLMConfig) -> dict:
     """Test if a provider configuration is valid.
     
     Returns dict with ok, provider, model, message.
@@ -70,14 +70,11 @@ def test_connection(config: LLMConfig) -> dict:
                 "message": "Mock provider ready",
             }
         
-        # For real providers, try a simple completion
-        import asyncio
-        result = asyncio.run(
-            provider.complete(
-                system="你是助理。",
-                user="回覆「OK」一字。",
-                max_tokens=10,
-            )
+        # For real providers, try a simple completion in the current async loop.
+        result = await provider.complete(
+            system="你是助理。",
+            user="回覆「OK」一字。",
+            max_tokens=10,
         )
         
         return {

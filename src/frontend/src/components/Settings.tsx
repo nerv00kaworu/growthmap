@@ -20,6 +20,7 @@ const PROVIDER_LABELS: Record<LLMProviderType, string> = {
   google: "Google Gemini",
   openclaw: "OpenClaw",
   custom: "Custom",
+  openai_compatible: "OpenAI-compatible",
   mock: "Mock (Demo)",
 };
 
@@ -41,7 +42,7 @@ export function Settings({ onClose }: SettingsProps) {
     }
   }, []);
 
-  const showBaseUrl = provider === "openclaw" || provider === "custom";
+  const showBaseUrl = provider === "openclaw" || provider === "custom" || provider === "openai_compatible";
 
   const handleSave = () => {
     const config: LLMConfig = {

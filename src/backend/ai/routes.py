@@ -153,7 +153,7 @@ async def test_connection(req: TestConnectionRequest):
     
     # Use the provider adapter to test connection
     from ai.providers.registry import test_connection as test_conn
-    result = test_conn(config)
+    result = await test_conn(config)
     
     return TestConnectionResponse(**result)
 
