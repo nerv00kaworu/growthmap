@@ -13,6 +13,7 @@ src/backend/**/__pycache__/
 
 # Database
 *.db
+*.db.bak
 *.sqlite3
 
 # Env & secrets
@@ -29,3 +30,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
