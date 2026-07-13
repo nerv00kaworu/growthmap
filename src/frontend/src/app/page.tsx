@@ -6,6 +6,7 @@ import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
 import { Toast } from "@/components/Toast";
 import { Settings } from "@/components/Settings";
+import { AgentSessions } from "@/components/AgentSessions";
 import { api } from "@/lib/api";
 
 export default function HomePage() {
@@ -33,14 +34,18 @@ export default function HomePage() {
   const branches = useStore((s) => s.branches);
   const currentBranch = useStore((s) => s.currentBranch);
   const selectBranch = useStore((s) => s.selectBranch);
-  const loadBranches = useStore((s) => s.loadBranches);
+  const archiveBranch = useStore((s) => s.archiveBranch);
 
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showAgentSessions, setShowAgentSessions] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showBranchHistory, setShowBranchHistory] = useState(false);
+  const [branchHistory, setBranchHistory] = useState<{ id: string; action_type: string; created_at: string }[]>([]);
+  const [branchHistoryLoading, setBranchHistoryLoading] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
@@ -143,17 +148,28 @@ export default function HomePage() {
     }
   };
 
-  const handleDeleteBranch = async () => {
-    if (!currentBranch || !currentProject) return;
-    if (!confirm(`確定刪除方案線「${currentBranch.name}」？此動作不可復原。`)) return;
+  const handleArchiveBranch = async () => {
+    if (!currentBranch) return;
+    if (!confirm(`確定封存方案線「${currentBranch.name}」？\n\n封存後不會刪除資料，可在方案線管理中查看歷史紀錄。`)) return;
+    await archiveBranch(currentBranch.id);
+  };
 
+  const openBranchHistory = async () => {
+    if (!currentProject) return;
+    setBranchHistoryLoading(true);
+    setShowBranchHistory(true);
     try {
-      await api.archiveBranch(currentBranch.id);
-      await selectBranch(null);
-      await loadBranches(currentProject.id);
-      setToast(`🗑️ 已刪除方案線：${currentBranch.name}`);
+      const allBranches = await api.listBranches(currentProject.id, true);
+      const rows = await Promise.all(allBranches.map(async (branch) => {
+        const history = await api.getBranchHistory(branch.id);
+        return history.map((entry) => ({ id: entry.id, action_type: `${branch.name} · ${entry.action_type}`, created_at: entry.created_at }));
+      }));
+      setBranchHistory(rows.flat().sort((a, b) => b.created_at.localeCompare(a.created_at)));
     } catch (e: unknown) {
       useStore.setState({ error: (e as Error).message });
+      setShowBranchHistory(false);
+    } finally {
+      setBranchHistoryLoading(false);
     }
   };
 
@@ -360,20 +376,44 @@ export default function HomePage() {
                 ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
               </button>
               <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⚙️ LLM 設定</button>
+              <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
               <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
+              <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">🗂️ 方案線歷史</button>
             </div>
 
             <div className="rounded-lg border border-red-900/30 bg-red-950/10 p-3 space-y-2">
               <div className="text-[10px] uppercase tracking-[0.18em] text-red-400/70">危險操作</div>
               <button
                 type="button"
-                onClick={() => { handleDeleteBranch(); setShowMoreMenu(false); }}
+                onClick={() => { handleArchiveBranch(); setShowMoreMenu(false); }}
                 disabled={!currentBranch}
                 className="w-full rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2.5 text-left text-xs text-red-300 hover:bg-red-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                title={currentBranch ? `刪除方案線：${currentBranch.name}` : "目前是主線，請先切到方案線後才能刪除"}
+                title={currentBranch ? `封存方案線：${currentBranch.name}` : "目前是主線，請先切到方案線後才能封存"}
               >
-                🗑️ {currentBranch ? `刪除方案線：${currentBranch.name}` : "主線不可刪除"}
+                🗃️ {currentBranch ? `封存方案線：${currentBranch.name}` : "主線不可封存"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showBranchHistory && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/60 px-4" onClick={() => setShowBranchHistory(false)}>
+          <div className="w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-100">🗂️ 方案線歷史</h2>
+                <p className="mt-1 text-xs text-gray-500">包含建立、合併與封存紀錄；封存資料仍可追溯。</p>
+              </div>
+              <button type="button" onClick={() => setShowBranchHistory(false)} className="text-lg text-gray-500 hover:text-gray-300">×</button>
+            </div>
+            <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
+              {branchHistoryLoading ? <div className="py-6 text-center text-sm text-gray-500">讀取方案線歷史中…</div> : branchHistory.length === 0 ? <div className="py-6 text-center text-sm text-gray-500">此專案尚無方案線歷史。</div> : branchHistory.map((entry) => (
+                <div key={entry.id} className="rounded-lg border border-gray-800 bg-gray-950/40 px-3 py-2">
+                  <div className="text-sm text-gray-200">{entry.action_type.replaceAll("_", " ")}</div>
+                  <div className="mt-0.5 text-[11px] text-gray-500">{new Date(entry.created_at).toLocaleString()}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -435,6 +475,7 @@ export default function HomePage() {
 
       {/* Settings Modal */}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showAgentSessions && currentProject && rootNode && <AgentSessions projectId={currentProject.id} rootNode={rootNode} branches={branches} onClose={() => setShowAgentSessions(false)} />}
 
       {/* Keyboard Shortcuts Modal */}
       {showShortcuts && (

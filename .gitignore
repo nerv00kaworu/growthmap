@@ -23,6 +23,9 @@ src/backend/**/__pycache__/
 # Logs
 *.log
 
+# Local manual QA screenshots
+qa/
+
 # OS
 .DS_Store
 Thumbs.db

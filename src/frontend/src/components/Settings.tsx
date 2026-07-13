@@ -1,14 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  loadLLMConfig,
-  saveLLMConfig,
-  DEFAULT_MODELS,
-  type LLMConfig,
-  type LLMProviderType,
-} from "@/lib/llm-provider";
+import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import { DEFAULT_MODELS, loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
+import type { ProviderConfig } from "@/lib/types";
 
 interface SettingsProps {
   onClose: () => void;
@@ -25,174 +20,140 @@ const PROVIDER_LABELS: Record<LLMProviderType, string> = {
 };
 
 export function Settings({ onClose }: SettingsProps) {
-  const [provider, setProvider] = useState<LLMProviderType>("openai");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [profiles, setProfiles] = useState<ProviderConfig[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [name, setName] = useState("");
+  const [provider, setProvider] = useState<LLMProviderType>("openai_compatible");
+  const [endpoint, setEndpoint] = useState("");
+  const [envKey, setEnvKey] = useState("LLM_API_KEY");
   const [model, setModel] = useState("");
-  const [testStatus, setTestStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
-  const [testMsg, setTestMsg] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
 
-  useEffect(() => {
+  const loadProfiles = async () => {
+    const rows = await api.listProviders();
+    setProfiles(rows);
     const saved = loadLLMConfig();
-    if (saved) {
-      setProvider(saved.provider);
-      setApiKey(saved.apiKey);
-      setBaseUrl(saved.baseUrl || "");
-      setModel(saved.model || "");
+    if (saved?.providerId && rows.some((row) => row.id === saved.providerId)) {
+      setSelectedId(saved.providerId);
     }
-  }, []);
-
-  const showBaseUrl = provider === "openclaw" || provider === "custom" || provider === "openai_compatible";
-
-  const handleSave = () => {
-    const config: LLMConfig = {
-      provider,
-      apiKey,
-      baseUrl: showBaseUrl ? baseUrl : undefined,
-      model: model || DEFAULT_MODELS[provider],
-    };
-    saveLLMConfig(config);
-    onClose();
   };
 
-  const handleTest = async () => {
-    setTestStatus("testing");
-    setTestMsg("");
+  useEffect(() => {
+    loadProfiles().catch((error: unknown) => setMessage(`讀取設定失敗：${(error as Error).message}`));
+  }, []);
+
+  const selectProfile = (id: string) => {
+    setSelectedId(id);
+    const profile = profiles.find((row) => row.id === id);
+    if (!profile) return;
+    setName(profile.name);
+    setProvider(profile.provider_type as LLMProviderType);
+    setEndpoint(profile.endpoint || "");
+    setEnvKey(profile.secret_env_key || "LLM_API_KEY");
+    setModel(profile.model_name || "");
+  };
+
+  const saveProfile = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    setMessage("");
     try {
-      // Call backend test-connection endpoint
-      const result = await api.testConnection(
-        provider,
-        apiKey || undefined,
-        showBaseUrl ? baseUrl : undefined,
-        model || DEFAULT_MODELS[provider] || undefined
-      );
-      if (result.ok) {
-        setTestStatus("ok");
-        setTestMsg(`✅ ${result.message}`);
-      } else {
-        setTestStatus("fail");
-        setTestMsg(`❌ ${result.message}`);
+      const payload = {
+        name: name.trim(),
+        provider_type: provider,
+        endpoint: endpoint.trim(),
+        secret_env_key: envKey.trim() || "LLM_API_KEY",
+        model_name: model.trim() || DEFAULT_MODELS[provider],
+        capabilities: ["expand", "deepen", "chat"],
+        cost_level: provider === "mock" ? "none" : "variable",
+        enabled: true,
+      };
+      const saved = selectedId
+        ? await api.updateProvider(selectedId, payload)
+        : await api.createProvider(payload);
+      if (apiKey.trim() && saved.provider_type !== "mock") {
+        await api.writeProviderSecret(saved.id, apiKey.trim());
+        setApiKey("");
       }
-    } catch (e: unknown) {
-      setTestStatus("fail");
-      setTestMsg(`❌ 連線失敗：${(e as Error).message}`);
+      const nextProfiles = selectedId
+        ? profiles.map((row) => row.id === saved.id ? saved : row)
+        : [saved, ...profiles];
+      setProfiles(nextProfiles);
+      setSelectedId(saved.id);
+      saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name });
+      setMessage("✅ 已儲存。API key 僅從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。");
+    } catch (error: unknown) {
+      setMessage(`儲存失敗：${(error as Error).message}`);
+    } finally {
+      setSaving(false);
     }
+  };
+
+  const createNew = () => {
+    setSelectedId("");
+    setName("");
+    setProvider("openai_compatible");
+    setEndpoint("");
+    setEnvKey("LLM_API_KEY");
+    setModel("");
+    setApiKey("");
+    setMessage("");
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md space-y-4 rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-100">⚙️ LLM 設定</h2>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-300 text-lg"
-          >
-            ×
-          </button>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-100">⚙️ LLM Provider 設定</h2>
+            <p className="mt-1 text-xs text-gray-500">設定檔存本機資料庫；密鑰只留在 `.env`。</p>
+          </div>
+          <button type="button" onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
         </div>
 
-        <div className="space-y-3">
-          {/* Provider */}
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Provider</label>
-            <select
-              value={provider}
-              onChange={(e) => {
-                setProvider(e.target.value as LLMProviderType);
-                setModel("");
-              }}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100"
-            >
-              {(Object.keys(PROVIDER_LABELS) as LLMProviderType[]).map((p) => (
-                <option key={p} value={p}>
-                  {PROVIDER_LABELS[p]}
-                </option>
-              ))}
+        <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">
+          API key 不會出現在這個畫面、瀏覽器 localStorage 或 SQLite。請在專案根目錄 `.env` 設定對應變數，例如 `LLM_API_KEY=...`。
+        </div>
+
+        {profiles.length > 0 && (
+          <label className="block text-xs text-gray-400">
+            已儲存 Provider
+            <select value={selectedId} onChange={(event) => selectProfile(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100">
+              <option value="">建立新的 Provider…</option>
+              {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.enabled ? "●" : "○"} {profile.name} · {profile.model_name || profile.provider_type}</option>)}
             </select>
-          </div>
-
-          <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs leading-5 text-amber-200/80">
-            <div className="font-medium text-amber-200">費用提醒</div>
-            <div>Mock 不會花錢；OpenAI-compatible / Custom / 其他真模型測試會送出極短請求，可能產生極低 API 費用。</div>
-          </div>
-
-          {/* API Key */}
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-600"
-            />
-          </div>
-
-          {/* Base URL — only for openclaw/custom */}
-          {showBaseUrl && (
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Base URL</label>
-              <input
-                type="text"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={provider === "openai_compatible" ? "https://api.openai.com/v1 或 https://openrouter.ai/api/v1" : "https://..."}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-600"
-              />
-            </div>
-          )}
-
-          {/* Model override */}
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">
-              模型（選填，預設：{DEFAULT_MODELS[provider] || "自訂"}）
-            </label>
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={DEFAULT_MODELS[provider] || "例：gpt-4o-mini / deepseek-chat / llama3.1"}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-100 placeholder-gray-600"
-            />
-            {provider === "openai_compatible" && (
-              <p className="mt-1 text-[11px] leading-5 text-gray-500">
-                常見 Base URL：OpenAI <code>https://api.openai.com/v1</code>、OpenRouter <code>https://openrouter.ai/api/v1</code>、本地 Ollama/LM Studio <code>http://localhost:11434/v1</code>
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Test result */}
-        {testMsg && (
-          <div
-            className={`text-xs rounded px-3 py-2 ${
-              testStatus === "ok"
-                ? "bg-green-900/40 text-green-300 border border-green-700/40"
-                : "bg-red-900/40 text-red-300 border border-red-700/40"
-            }`}
-          >
-            {testMsg}
-          </div>
+          </label>
         )}
 
-        {/* Buttons */}
-        <div className="flex gap-2 pt-1">
-          <button
-            onClick={handleTest}
-            title={provider === "mock" ? "Mock 不會呼叫外部 API" : "會送出一個極短真模型請求，可能產生極低費用"}
-            disabled={testStatus === "testing" || (!apiKey && provider !== "mock")}
-            className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-2 text-xs text-gray-300 hover:text-gray-100 disabled:opacity-50"
-          >
-            {testStatus === "testing" ? "測試中..." : "🔌 測試連線"}
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={!apiKey && provider !== "mock"}
-            className="flex-1 rounded-lg bg-blue-600 hover:bg-blue-500 px-3 py-2 text-xs text-white font-medium disabled:opacity-50"
-          >
-            儲存
-          </button>
+        <div className="space-y-3">
+          <label className="block text-xs text-gray-400">顯示名稱
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例：OpenAI 主要模型" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          </label>
+          <label className="block text-xs text-gray-400">Provider
+            <select value={provider} onChange={(event) => setProvider(event.target.value as LLMProviderType)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100">
+              {(Object.keys(PROVIDER_LABELS) as LLMProviderType[]).map((value) => <option key={value} value={value}>{PROVIDER_LABELS[value]}</option>)}
+            </select>
+          </label>
+          <label className="block text-xs text-gray-400">Base URL（Mock 可留空）
+            <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          </label>
+          <label className="block text-xs text-gray-400">API key 的環境變數名稱
+            <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="LLM_API_KEY" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100" />
+          </label>
+          {provider !== "mock" && <label className="block text-xs text-gray-400">API Key（僅寫入本機 `.env`）
+            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selectedId ? "留空則維持現有 key" : "sk-..."} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          </label>}
+          <label className="block text-xs text-gray-400">模型
+            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={DEFAULT_MODELS[provider] || "例：gpt-4o-mini"} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          </label>
+        </div>
+
+        {message && <div className="rounded border border-gray-700 bg-gray-800/70 px-3 py-2 text-xs text-gray-300">{message}</div>}
+        <div className="flex gap-2">
+          <button type="button" onClick={createNew} className="rounded-lg border border-gray-600 px-3 py-2 text-xs text-gray-300 hover:text-white">新增</button>
+          <button type="button" onClick={saveProfile} disabled={saving || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? "儲存中…" : "儲存並使用"}</button>
         </div>
       </div>
     </div>

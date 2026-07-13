@@ -16,7 +16,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { GrowthNode } from "./GrowthNode";
-import type { GNode, Maturity } from "@/lib/types";
+import type { Edge as GraphEdge, GNode, Maturity } from "@/lib/types";
+import { api } from "@/lib/api";
 import { MATURITY_COLORS } from "@/lib/types";
 import { useStore } from "@/stores/useStore";
 
@@ -95,7 +96,10 @@ function treeToFlow(
   highlightedIds: string[],
   heatmapMode: boolean,
   focusNodeId: string | null,
-  extraEdges?: { from: string; to: string; relation: string }[]
+  extraEdges?: { id: string; from: string; to: string; relation: string }[],
+  graphMode = false,
+  relationFilter: Set<string> = new Set(),
+  graphVisibleIds: Set<string> | null = null
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -190,15 +194,41 @@ function treeToFlow(
 
   place(root, 400, 0);
 
+  if (graphMode && graphVisibleIds) {
+    const visible = new Set(graphVisibleIds);
+    for (let index = nodes.length - 1; index >= 0; index--) {
+      if (!visible.has(nodes[index].id)) nodes.splice(index, 1);
+    }
+    for (let index = edges.length - 1; index >= 0; index--) {
+      if (!visible.has(edges[index].source) || !visible.has(edges[index].target)) edges.splice(index, 1);
+    }
+  }
+
+  // Stable layered graph layout: keeps the tree backbone readable; graph links cross layers.
+  if (graphMode) {
+    const byDepth = new Map<number, Node[]>();
+    const depthById = new Map<string, number>();
+    const walkDepth = (node: GNode, depth: number) => { depthById.set(node.id, depth); (node.children || []).forEach((child) => walkDepth(child, depth + 1)); };
+    walkDepth(root, 0);
+    nodes.forEach((flowNode) => {
+      const depth = depthById.get(flowNode.id) || 0;
+      byDepth.set(depth, [...(byDepth.get(depth) || []), flowNode]);
+    });
+    Array.from(byDepth.entries()).sort(([a], [b]) => a - b).forEach(([depth, layer]) => {
+      layer.sort((a, b) => a.id.localeCompare(b.id));
+      layer.forEach((flowNode, index) => { flowNode.position = { x: 300 + index * 280, y: depth * 180 }; });
+    });
+  }
+
   // Add non-child_of relation edges
   if (extraEdges) {
     const nodeSet = new Set(nodes.map((n) => n.id));
     for (const e of extraEdges) {
-      if (!nodeSet.has(e.from) || !nodeSet.has(e.to)) continue;
+      if (!nodeSet.has(e.from) || !nodeSet.has(e.to) || (relationFilter.size > 0 && !relationFilter.has(e.relation))) continue;
       const style = RELATION_EDGE_STYLES[e.relation] || { stroke: "#888", strokeWidth: 1 };
       const dash = RELATION_DASH[e.relation];
       edges.push({
-        id: `rel-${e.from}-${e.to}-${e.relation}`,
+        id: `rel-${e.id}`,
         source: e.from,
         target: e.to,
         style: {
@@ -243,10 +273,56 @@ export function MindMap() {
   const highlightedNodeIds = useStore((s) => s.highlightedNodeIds);
 
   const [heatmapMode, setHeatmapMode] = useState(false);
+  const [graphMode, setGraphMode] = useState(false);
+  const [relations, setRelations] = useState<GraphEdge[]>([]);
+  const [activeRelations, setActiveRelations] = useState<Set<string>>(new Set());
+  const [newRelationType, setNewRelationType] = useState("depends_on");
+  const [relationError, setRelationError] = useState("");
+  const [nodeQuery, setNodeQuery] = useState("");
+  const [hopDepth, setHopDepth] = useState<0 | 1 | 2>(0);
+  const [graphDirection, setGraphDirection] = useState<"both" | "upstream" | "downstream">("both");
+  const [minWeight, setMinWeight] = useState(0);
+  const relationTypes = Array.from(new Set(relations.filter((edge) => edge.relation_type !== "child_of").map((edge) => edge.relation_type)));
+  const nodeTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    const walk = (node: GNode) => { titles.set(node.id, node.title); (node.children || []).forEach(walk); };
+    if (rootNode) walk(rootNode);
+    return titles;
+  }, [rootNode]);
+  const saveRelation = async (edge: GraphEdge, changes: { weight?: number; note?: string }) => {
+    try {
+      const updated = await api.updateEdge(edge.id, changes);
+      setRelations((rows) => rows.map((row) => row.id === edge.id ? updated : row));
+    } catch (error: unknown) { setRelationError(`更新關係失敗：${(error as Error).message}`); }
+  };
   const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
+  const graphVisibleIds = useMemo(() => {
+    if (!graphMode) return null;
+    const allIds = new Set(nodeTitles.keys());
+    const query = nodeQuery.trim().toLowerCase();
+    let seedIds = new Set(query ? Array.from(nodeTitles.entries()).filter(([, title]) => title.toLowerCase().includes(query)).map(([id]) => id) : allIds);
+    if (selectedNodeId && hopDepth > 0) seedIds = new Set([selectedNodeId]);
+    if (hopDepth === 0) return seedIds;
+    const visible = new Set(seedIds);
+    let frontier = new Set(seedIds);
+    for (let hop = 0; hop < hopDepth; hop++) {
+      const next = new Set<string>();
+      relations.filter((edge) => edge.relation_type !== "child_of" && edge.weight >= minWeight).forEach((edge) => {
+        if ((graphDirection === "both" || graphDirection === "downstream") && frontier.has(edge.from_node_id)) { next.add(edge.to_node_id); }
+        if ((graphDirection === "both" || graphDirection === "upstream") && frontier.has(edge.to_node_id)) { next.add(edge.from_node_id); }
+      });
+      next.forEach((id) => visible.add(id)); frontier = next;
+    }
+    return visible;
+  }, [graphMode, nodeTitles, nodeQuery, selectedNodeId, hopDepth, relations, graphDirection, minWeight]);
   const fitViewTrigger = useRef(0);
   const [fitTrigger, setFitTrigger] = useState(0);
   const prevProjectId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!rootNode) { setRelations([]); return; }
+    api.listEdges(rootNode.project_id).then(setRelations).catch((error: unknown) => setRelationError((error as Error).message));
+  }, [rootNode]);
 
   // Trigger fit when project changes
   useEffect(() => {
@@ -260,9 +336,9 @@ export function MindMap() {
 
   const { flowNodes, flowEdges } = useMemo(() => {
     if (!rootNode) return { flowNodes: [], flowEdges: [] };
-    const { nodes, edges } = treeToFlow(rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId);
+    const { nodes, edges } = treeToFlow(rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId, relations.filter((edge) => edge.relation_type !== "child_of" && edge.weight >= minWeight).map((edge) => ({ id: edge.id, from: edge.from_node_id, to: edge.to_node_id, relation: edge.relation_type })), graphMode, activeRelations, graphVisibleIds);
     return { flowNodes: nodes, flowEdges: edges };
-  }, [rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId]);
+  }, [rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId, relations, graphMode, activeRelations, graphVisibleIds, minWeight]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
@@ -293,10 +369,16 @@ export function MindMap() {
   const onConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
-        reparentNode(connection.source, connection.target);
+        if (!graphMode) {
+          reparentNode(connection.source, connection.target);
+          return;
+        }
+        api.createEdge({ from_node_id: connection.source, to_node_id: connection.target, relation_type: newRelationType })
+          .then((edge) => setRelations((rows) => [...rows, edge as typeof rows[number]]))
+          .catch((error: unknown) => setRelationError(`建立關係失敗：${(error as Error).message}`));
       }
     },
-    [reparentNode]
+    [reparentNode, graphMode, newRelationType]
   );
 
   const maturityColorForNode = useCallback((n: Node) => {
@@ -345,6 +427,10 @@ export function MindMap() {
 
       {/* Overlay controls */}
       <div className="absolute top-3 right-3 flex flex-col gap-1.5 z-10">
+        <button type="button" onClick={() => setGraphMode((value) => !value)} className={`px-2.5 py-1.5 rounded-lg text-xs border transition-colors ${graphMode ? "bg-purple-700 border-purple-500 text-white" : "bg-gray-900/80 border-gray-700 text-gray-400 hover:text-gray-200"}`} title="圖譜模式僅建立非樹狀關係">
+          {graphMode ? "◉ 圖譜模式" : "◎ 樹狀模式"}
+        </button>
+        {graphMode && <><select value={newRelationType} onChange={(event) => setNewRelationType(event.target.value)} className="rounded border border-purple-800 bg-gray-900/90 px-2 py-1 text-xs text-purple-100"><option value="depends_on">depends_on</option><option value="supports">supports</option><option value="contradicts">contradicts</option><option value="references">references</option><option value="blocks">blocks</option><option value="relates_to">relates_to</option></select><div className="rounded border border-gray-700 bg-gray-900/90 p-2 text-[11px] text-gray-400"><input value={nodeQuery} onChange={(event) => setNodeQuery(event.target.value)} placeholder="搜尋節點…" className="mb-2 w-full rounded border border-gray-700 bg-gray-800 px-2 py-1 text-xs text-gray-100" /><div className="mb-1">關係範圍</div><div className="flex gap-1"><select value={hopDepth} onChange={(event) => setHopDepth(Number(event.target.value) as 0 | 1 | 2)} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-1 py-1"><option value={0}>全部</option><option value={1}>1 跳</option><option value={2}>2 跳</option></select><select value={graphDirection} onChange={(event) => setGraphDirection(event.target.value as "both" | "upstream" | "downstream")} className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800 px-1 py-1"><option value="both">雙向</option><option value="upstream">上游</option><option value="downstream">下游</option></select></div><label className="mt-2 block">最低權重 {minWeight.toFixed(2)}<input type="range" min="0" max="1" step="0.05" value={minWeight} onChange={(event) => setMinWeight(Number(event.target.value))} className="w-full accent-purple-500" /></label><div className="mb-1 mt-2">顯示關係</div>{relationTypes.length === 0 ? <div className="text-gray-600">尚無非樹狀關係</div> : relationTypes.map((relation) => <label key={relation} className="flex items-center gap-1"><input type="checkbox" checked={activeRelations.size === 0 || activeRelations.has(relation)} onChange={() => setActiveRelations((previous) => { const next = new Set(previous); if (previous.size === 0) relationTypes.forEach((type) => next.add(type)); if (next.has(relation)) next.delete(relation); else next.add(relation); return next; })} />{relation}</label>)}</div></>}
         <button
           type="button"
           onClick={() => setHeatmapMode((v) => !v)}
@@ -368,6 +454,10 @@ export function MindMap() {
           </button>
         )}
       </div>
+
+      {relationError && <div className="absolute top-3 left-3 max-w-sm rounded border border-red-800 bg-red-950/90 px-3 py-2 text-xs text-red-200 z-10">{relationError}</div>}
+
+      {graphMode && selectedNodeId && <div className="absolute bottom-3 left-3 max-h-[45vh] w-80 overflow-y-auto rounded-xl border border-purple-800/60 bg-gray-900/95 p-3 text-xs z-10"><div className="font-medium text-purple-100">已選節點的關係</div><div className="mt-1 flex gap-2 text-[11px]"><span className="text-orange-300">依賴／阻塞 {relations.filter((edge) => edge.to_node_id === selectedNodeId && ["depends_on", "blocks"].includes(edge.relation_type)).length}</span><span className="text-emerald-300">支援 {relations.filter((edge) => edge.to_node_id === selectedNodeId && edge.relation_type === "supports").length}</span><span className="text-red-300">反駁 {relations.filter((edge) => edge.to_node_id === selectedNodeId && edge.relation_type === "contradicts").length}</span></div><div className="mt-2 space-y-2">{relations.filter((edge) => edge.relation_type !== "child_of" && (edge.from_node_id === selectedNodeId || edge.to_node_id === selectedNodeId)).length === 0 ? <div className="text-gray-500">拖曳節點到另一節點建立關係。</div> : relations.filter((edge) => edge.relation_type !== "child_of" && (edge.from_node_id === selectedNodeId || edge.to_node_id === selectedNodeId)).map((edge) => <div key={edge.id} className="rounded border border-gray-800 bg-gray-950/60 p-2"><div className="flex items-center justify-between gap-2 text-gray-300"><span>{edge.from_node_id === selectedNodeId ? "→" : "←"} {edge.relation_type}</span><button type="button" onClick={() => api.deleteEdge(edge.id).then(() => setRelations((rows) => rows.filter((row) => row.id !== edge.id))).catch((error: unknown) => setRelationError(`刪除失敗：${(error as Error).message}`))} className="text-red-300 hover:text-red-200">移除</button></div><div className="mt-1 text-[11px] text-gray-500">{nodeTitles.get(edge.from_node_id) || "未知"} → {nodeTitles.get(edge.to_node_id) || "未知"}</div><label className="mt-2 block text-[11px] text-gray-500">權重 {edge.weight.toFixed(2)}<input type="range" min="0" max="1" step="0.05" value={edge.weight} onChange={(event) => void saveRelation(edge, { weight: Number(event.target.value) })} className="mt-1 w-full accent-purple-500" /></label><textarea defaultValue={edge.note} onBlur={(event) => { if (event.target.value !== edge.note) void saveRelation(edge, { note: event.target.value }); }} placeholder="關係依據／備註" className="mt-2 min-h-12 w-full rounded border border-gray-700 bg-gray-900 px-2 py-1 text-[11px] text-gray-200" /></div>)}</div></div>}
 
       {/* Heatmap legend */}
       {heatmapMode && (

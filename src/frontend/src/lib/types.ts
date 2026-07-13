@@ -34,11 +34,14 @@ export interface ContentBlock {
 
 export interface Edge {
   id: string;
-  source_id: string;
-  target_id: string;
-  relation: string;
-  meta: Record<string, unknown>;
-  is_mainline?: boolean;
+  project_id: string;
+  from_node_id: string;
+  to_node_id: string;
+  relation_type: string;
+  weight: number;
+  note: string;
+  is_mainline: boolean;
+  created_at: string;
 }
 
 export interface Project {
@@ -53,6 +56,52 @@ export interface Project {
   updated_at: string;
 }
 
+export interface AgentArtifact {
+  id: string;
+  session_id: string;
+  project_id: string;
+  target_node_id: string;
+  artifact_type: "create_child" | "update_node" | "create_block";
+  payload: Record<string, unknown>;
+  status: "pending" | "applied" | "rejected";
+  review_note: string;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export type AgentSessionStatus = "idle" | "active" | "waiting_review" | "completed" | "cancelled";
+
+export interface AgentSession {
+  id: string;
+  project_id: string;
+  assigned_node_id: string | null;
+  assigned_branch_root_id: string | null;
+  provider_id: string | null;
+  objective: string;
+  mode: "one_shot" | "collab" | "background";
+  status: AgentSessionStatus;
+  handoff_context: Record<string, unknown>;
+  result_summary: string;
+  last_heartbeat_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderConfig {
+  id: string;
+  name: string;
+  provider_type: string;
+  endpoint: string;
+  auth_type: string;
+  secret_env_key: string;
+  model_name: string;
+  capabilities: string[];
+  cost_level: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Branch {
   id: string;
   project_id: string;
@@ -61,6 +110,29 @@ export interface Branch {
   source_node_id: string;
   status: string;
   created_at: string;
+}
+
+export interface BranchNodeSummary {
+  id: string;
+  title: string;
+  summary: string;
+  node_type: string;
+  maturity: string;
+  updated_at: string | null;
+}
+
+export interface BranchComparison {
+  branch: Pick<Branch, "id" | "name" | "status">;
+  source: BranchNodeSummary | null;
+  branch_root: BranchNodeSummary | null;
+  diff: {
+    title_changed: boolean;
+    summary_changed: boolean;
+    maturity_changed: boolean;
+    source_block_count: number;
+    branch_block_count: number;
+    branch_node_count: number;
+  };
 }
 
 export interface Suggestion {

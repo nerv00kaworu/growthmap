@@ -160,7 +160,8 @@ class ProviderConfig(Base):
     name = Column(Text, nullable=False)
     provider_type = Column(String(30), nullable=False)
     endpoint = Column(Text, default="")
-    auth_type = Column(String(20), default="none")
+    auth_type = Column(String(20), default="env")
+    secret_env_key = Column(String(128), default="")
     model_name = Column(Text, default="")
     capabilities = Column(JSON, default=[])
     cost_level = Column(String(10), default="low")
@@ -183,6 +184,26 @@ class Branch(Base):
 
     __table_args__ = (
         Index("idx_branches_project", "project_id"),
+    )
+
+
+class AgentArtifact(Base):
+    __tablename__ = "agent_artifacts"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(36), ForeignKey("agent_sessions.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    target_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
+    artifact_type = Column(String(30), nullable=False)  # create_child / update_node / create_block
+    payload = Column(JSON, nullable=False, default={})
+    status = Column(String(20), nullable=False, default="pending")  # pending / applied / rejected
+    review_note = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_agent_artifacts_session", "session_id"),
+        Index("idx_agent_artifacts_status", "status"),
     )
 
 

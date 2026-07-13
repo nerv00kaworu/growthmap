@@ -1,11 +1,16 @@
 import { create } from "zustand";
-import type { GNode, GrowthMode, Project, Branch } from "@/lib/types";
+import type { GNode, GrowthMode, Project, Branch, BranchComparison } from "@/lib/types";
 import { api } from "@/lib/api";
-
-interface UndoEntry {
-  rootNode: GNode;
-  description: string;
-}
+import {
+  findNode,
+  insertChild,
+  markMainlineChild,
+  patchNode,
+  pushUndo,
+  removeNode,
+  searchNodes,
+  type UndoEntry,
+} from "./tree-utils";
 
 interface GrowthMapStore {
   // State
@@ -28,6 +33,8 @@ interface GrowthMapStore {
   // Branches
   branches: Branch[];
   currentBranch: Branch | null;
+  branchComparison: BranchComparison | null;
+  branchLoading: boolean;
 
   // Actions
   loadProjects: () => Promise<void>;
@@ -48,6 +55,8 @@ interface GrowthMapStore {
   loadBranches: (projectId: string) => Promise<void>;
   createBranch: (sourceNodeId: string, name: string, description?: string) => Promise<void>;
   selectBranch: (branch: Branch | null) => Promise<void>;
+  compareBranch: (branchId: string) => Promise<BranchComparison | null>;
+  archiveBranch: (branchId: string) => Promise<void>;
   mergeBranch: (branchId: string, targetNodeId: string) => Promise<void>;
 
   // AI
@@ -65,82 +74,6 @@ interface GrowthMapStore {
   acceptDeepenBlock: (index: number) => Promise<void>;
   ignoreDeepenBlock: (index: number) => void;
   dismissAI: () => void;
-}
-
-// Recursively find a node in the tree
-function findNode(node: GNode, id: string): GNode | null {
-  if (node.id === id) return node;
-  for (const child of node.children || []) {
-    const found = findNode(child, id);
-    if (found) return found;
-  }
-  return null;
-}
-
-// Insert a child node into a tree (in-place returns new tree)
-function insertChild(root: GNode, parentId: string, child: GNode): GNode {
-  if (root.id === parentId) {
-    return { ...root, children: [...(root.children || []), child] };
-  }
-  return {
-    ...root,
-    children: (root.children || []).map((c) => insertChild(c, parentId, child)),
-  };
-}
-
-// Remove a node from the tree by id
-function removeNode(root: GNode, nodeId: string): GNode {
-  return {
-    ...root,
-    children: (root.children || [])
-      .filter((c) => c.id !== nodeId)
-      .map((c) => removeNode(c, nodeId)),
-  };
-}
-
-// Update a node in the tree by id
-function patchNode(root: GNode, nodeId: string, patch: Partial<GNode>): GNode {
-  if (root.id === nodeId) {
-    return { ...root, ...patch };
-  }
-  return {
-    ...root,
-    children: (root.children || []).map((c) => patchNode(c, nodeId, patch)),
-  };
-}
-
-function markMainlineChild(root: GNode, parentId: string, childId: string): GNode {
-  if (root.id === parentId) {
-    return {
-      ...root,
-      children: (root.children || []).map((child) => ({
-        ...child,
-        is_mainline: child.id === childId,
-      })),
-    };
-  }
-  return {
-    ...root,
-    children: (root.children || []).map((c) => markMainlineChild(c, parentId, childId)),
-  };
-}
-
-function searchNodes(node: GNode, query: string): string[] {
-  const results: string[] = [];
-  if (query && node.title.toLowerCase().includes(query.toLowerCase())) {
-    results.push(node.id);
-  }
-  for (const child of node.children || []) {
-    results.push(...searchNodes(child, query));
-  }
-  return results;
-}
-
-const MAX_UNDO = 10;
-
-function pushUndo(stack: UndoEntry[], rootNode: GNode, description: string): UndoEntry[] {
-  const newStack = [{ rootNode, description }, ...stack];
-  return newStack.slice(0, MAX_UNDO);
 }
 
 export const useStore = create<GrowthMapStore>((set, get) => ({
@@ -161,6 +94,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   highlightedNodeIds: [],
   branches: [],
   currentBranch: null,
+  branchComparison: null,
+  branchLoading: false,
 
   loadProjects: async () => {
     try {
@@ -172,7 +107,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   selectProject: async (project) => {
-    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [], currentBranch: null, branches: [] });
+    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [], currentBranch: null, branches: [], branchComparison: null });
     try {
       const rootNode = await api.getSubtree(project.root_node_id);
       set({ rootNode, loading: false });
@@ -201,7 +136,12 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (!currentProject || !rootNode) return;
     const { undoStack } = get();
     const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`);
-    const newNode = await api.createNode(currentProject.id, { title, parent_id: parentId, node_type: nodeType });
+    const newNode = await api.createNode(currentProject.id, {
+      title,
+      parent_id: parentId,
+      branch_id: get().currentBranch?.id,
+      node_type: nodeType,
+    });
     const child: GNode = {
       id: newNode.id,
       title: newNode.title,
@@ -262,7 +202,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   refreshTree: async () => {
     const { currentProject } = get();
     if (!currentProject) return;
-    const rootNode = await api.getSubtree(currentProject.root_node_id);
+    const { currentBranch } = get();
+    const rootNode = currentBranch
+      ? (await api.getBranchSubtree(currentBranch.id)).tree
+      : await api.getSubtree(currentProject.root_node_id);
     set({ rootNode });
     const { selectedNodeId } = get();
     if (selectedNodeId && rootNode) {
@@ -335,44 +278,78 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     try {
       const branch = await api.createBranch(currentProject.id, { source_node_id: sourceNodeId, name, description });
       const { branches } = get();
-      set({ branches: [...branches, branch], toast: `✅ 方案線「${name}」已建立，可在頂欄切換` });
+      set({ branches: [...branches, branch], toast: `✅ 方案線「${name}」已建立` });
+      await get().selectBranch(branch);
     } catch (e: unknown) {
       set({ error: (e as Error).message });
     }
   },
 
   selectBranch: async (branch) => {
-    if (!branch) {
-      // Go back to main
-      const { currentProject } = get();
-      if (!currentProject) return;
-      const rootNode = await api.getSubtree(currentProject.root_node_id);
-      set({ currentBranch: null, rootNode });
-      return;
-    }
+    const { currentProject } = get();
+    if (!currentProject) return;
+    set({ loading: true, branchLoading: true, selectedNodeId: null, selectedNode: null, branchComparison: null });
     try {
+      if (!branch) {
+        const rootNode = await api.getSubtree(currentProject.root_node_id);
+        set({ currentBranch: null, rootNode, loading: false, branchLoading: false });
+        return;
+      }
       const result = await api.getBranchSubtree(branch.id);
-      set({ currentBranch: branch, rootNode: result.tree });
+      if (!result.tree) throw new Error("方案線沒有可顯示的根節點");
+      set({ currentBranch: branch, rootNode: result.tree, loading: false, branchLoading: false });
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, loading: false, branchLoading: false });
+    }
+  },
+
+  compareBranch: async (branchId) => {
+    set({ branchLoading: true });
+    try {
+      const branchComparison = await api.compareBranch(branchId);
+      set({ branchComparison, branchLoading: false });
+      return branchComparison;
+    } catch (e: unknown) {
+      set({ error: (e as Error).message, branchLoading: false });
+      return null;
+    }
+  },
+
+  archiveBranch: async (branchId) => {
+    try {
+      await api.archiveBranch(branchId);
+      const { currentProject, branches, currentBranch } = get();
+      const remaining = branches.filter((branch) => branch.id !== branchId);
+      set({ branches: remaining, branchComparison: null, toast: "🗃️ 方案線已封存" });
+      if (currentBranch?.id === branchId && currentProject) {
+        await get().selectBranch(null);
+      }
     } catch (e: unknown) {
       set({ error: (e as Error).message });
     }
   },
 
   mergeBranch: async (branchId, targetNodeId) => {
+    set({ branchLoading: true });
     try {
       await api.mergeBranch(branchId, targetNodeId);
       const { currentProject, branches } = get();
       set({
         branches: branches.filter((b) => b.id !== branchId),
         currentBranch: null,
-        toast: "✅ 分支已合併",
+        branchComparison: null,
+        selectedNodeId: null,
+        selectedNode: null,
+        toast: "✅ 方案線已合併回主線",
       });
       if (currentProject) {
         const rootNode = await api.getSubtree(currentProject.root_node_id);
-        set({ rootNode });
+        set({ rootNode, branchLoading: false });
+      } else {
+        set({ branchLoading: false });
       }
     } catch (e: unknown) {
-      set({ error: (e as Error).message });
+      set({ error: (e as Error).message, branchLoading: false });
     }
   },
 
@@ -406,6 +383,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       title: s.title,
       summary: s.summary,
       parent_id: expandTargetNodeId,
+      branch_id: get().currentBranch?.id,
       node_type: s.node_type,
     });
     const child: GNode = {
@@ -458,6 +436,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         title: s.title,
         summary: s.summary,
         parent_id: expandTargetNodeId,
+        branch_id: get().currentBranch?.id,
         node_type: s.node_type,
       });
       const child: GNode = {
@@ -552,57 +531,3 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     set({ expandSuggestions: null, deepenResult: null });
   },
 }));
-
-
-interface UndoEntry {
-  rootNode: GNode;
-  description: string;
-}
-
-interface GrowthMapStore {
-  // State
-  projects: Project[];
-  currentProject: Project | null;
-  rootNode: GNode | null;
-  selectedNodeId: string | null;
-  selectedNode: GNode | null;
-  loading: boolean;
-  error: string | null;
-
-  // Undo
-  undoStack: UndoEntry[];
-  toast: string | null;
-
-  // Search
-  searchQuery: string;
-  highlightedNodeIds: string[];
-
-  // Actions
-  loadProjects: () => Promise<void>;
-  selectProject: (project: Project) => Promise<void>;
-  selectNode: (nodeId: string | null) => void;
-  createProject: (name: string, description?: string, goal?: string) => Promise<void>;
-  addChildNode: (parentId: string, title: string, nodeType?: string) => Promise<void>;
-  updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
-  deleteNode: (nodeId: string) => Promise<void>;
-  refreshTree: () => Promise<void>;
-  promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
-  reparentNode: (nodeId: string, newParentId: string) => Promise<void>;
-  undo: () => void;
-  setSearchQuery: (q: string) => void;
-  setToast: (msg: string | null) => void;
-
-  // AI
-  expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
-  expandTargetNodeId: string | null;
-  deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
-  aiLoading: boolean;
-  expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
-  deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
-  acceptSuggestion: (index: number) => Promise<void>;
-  ignoreSuggestion: (index: number) => void;
-  acceptAllSuggestions: () => Promise<void>;
-  acceptDeepen: () => Promise<void>;
-  dismissAI: () => void;
-}
-

@@ -158,6 +158,7 @@ export function NodeContent({
 }: NodeContentProps) {
   const [newChildType, setNewChildType] = useState("idea");
   const [showBranchModal, setShowBranchModal] = useState(false);
+  const [showBranchReview, setShowBranchReview] = useState(false);
   const [branchName, setBranchName] = useState("");
   const [branchDesc, setBranchDesc] = useState("");
   const [newBlockType, setNewBlockType] = useState("note");
@@ -171,7 +172,13 @@ export function NodeContent({
   );
   const createBranch = useStore((s) => s.createBranch);
   const currentBranch = useStore((s) => s.currentBranch);
+  const currentProject = useStore((s) => s.currentProject);
+  const branchComparison = useStore((s) => s.branchComparison);
+  const branchLoading = useStore((s) => s.branchLoading);
+  const compareBranch = useStore((s) => s.compareBranch);
   const mergeBranch = useStore((s) => s.mergeBranch);
+  const [mergeTargets, setMergeTargets] = useState<GNode[]>([]);
+  const [mergeTargetId, setMergeTargetId] = useState("");
   const boundDocs: BoundDoc[] = [
     ...readBoundDocs(selectedNode.meta || {}),
     ...blocks
@@ -211,16 +218,25 @@ export function NodeContent({
     await refreshTree();
   };
 
-  const handleMergeCurrentBranch = async () => {
-    if (!currentBranch) return;
-    const targetId = currentBranch.source_node_id || selectedNode.id;
-    if (!confirm(`將方案線「${currentBranch.name}」合併回主線？\n\n合併後，這條方案線的根節點會接回原本開出的主線節點下方。`)) return;
+  const flattenTree = (node: GNode): GNode[] => [node, ...(node.children || []).flatMap(flattenTree)];
 
-    try {
-      await mergeBranch(currentBranch.id, targetId);
-    } catch (error) {
-      alert(`合併方案線失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
-    }
+  const openBranchReview = async () => {
+    if (!currentBranch || !currentProject) return;
+    const [comparison, mainTree] = await Promise.all([
+      compareBranch(currentBranch.id),
+      api.getSubtree(currentProject.root_node_id),
+    ]);
+    if (!comparison) return;
+    setMergeTargets(flattenTree(mainTree));
+    setMergeTargetId(currentBranch.source_node_id || mainTree.id);
+    setShowBranchReview(true);
+  };
+
+  const handleMergeCurrentBranch = async () => {
+    if (!currentBranch || !mergeTargetId) return;
+    if (!confirm(`確定將方案線「${currentBranch.name}」合併到選定主線節點？\n\n合併後方案線會結束，並把整個方案子樹接到目標節點下方。`)) return;
+    await mergeBranch(currentBranch.id, mergeTargetId);
+    setShowBranchReview(false);
   };
 
   const moveBlock = async (index: number, direction: -1 | 1) => {
@@ -318,10 +334,11 @@ export function NodeContent({
             </div>
             <button
               type="button"
-              onClick={handleMergeCurrentBranch}
-              className="shrink-0 rounded-lg border border-purple-500/50 bg-purple-700/40 px-3 py-1.5 text-xs text-purple-100 hover:bg-purple-600/50"
+              onClick={openBranchReview}
+              disabled={branchLoading}
+              className="shrink-0 rounded-lg border border-purple-500/50 bg-purple-700/40 px-3 py-1.5 text-xs text-purple-100 hover:bg-purple-600/50 disabled:opacity-50"
             >
-              合併回主線
+              {branchLoading ? "讀取中…" : "檢視並合併"}
             </button>
           </div>
         </div>
@@ -593,6 +610,47 @@ export function NodeContent({
           </div>
         </div>
       </Section>
+
+      {showBranchReview && currentBranch && branchComparison && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 px-4" onClick={() => setShowBranchReview(false)}>
+          <div className="w-full max-w-lg space-y-4 rounded-xl border border-purple-800/60 bg-[#111] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-100">🔎 方案線檢視：{currentBranch.name}</h3>
+              <p className="mt-1 text-xs text-gray-500">比較目前方案根節點與開出來源；確認目標後才會合併。</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+                <div className="text-gray-500">來源主線</div>
+                <div className="mt-1 font-medium text-gray-200">{branchComparison.source?.title || "來源已不存在"}</div>
+                <div className="mt-1 text-gray-500">內容區塊 {branchComparison.diff.source_block_count}</div>
+              </div>
+              <div className="rounded-lg border border-purple-800/50 bg-purple-950/20 p-3">
+                <div className="text-purple-300/70">方案根節點</div>
+                <div className="mt-1 font-medium text-purple-100">{branchComparison.branch_root?.title || "無方案根節點"}</div>
+                <div className="mt-1 text-purple-200/60">節點 {branchComparison.diff.branch_node_count} · 內容區塊 {branchComparison.diff.branch_block_count}</div>
+              </div>
+            </div>
+            <div className="rounded-lg border border-gray-800 bg-gray-900/40 p-3 text-xs text-gray-400">
+              <div className="mb-1 text-gray-300">差異摘要</div>
+              <div className="flex flex-wrap gap-2">
+                <span className={branchComparison.diff.title_changed ? "text-amber-300" : "text-gray-600"}>標題{branchComparison.diff.title_changed ? "已變更" : "未變更"}</span>
+                <span className={branchComparison.diff.summary_changed ? "text-amber-300" : "text-gray-600"}>摘要{branchComparison.diff.summary_changed ? "已變更" : "未變更"}</span>
+                <span className={branchComparison.diff.maturity_changed ? "text-amber-300" : "text-gray-600"}>成熟度{branchComparison.diff.maturity_changed ? "已變更" : "未變更"}</span>
+              </div>
+            </div>
+            <label className="block text-xs text-gray-400">
+              合併到主線節點
+              <select value={mergeTargetId} onChange={(e) => setMergeTargetId(e.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 focus:border-purple-500 focus:outline-none">
+                {mergeTargets.map((target) => <option key={target.id} value={target.id}>{"  ".repeat(target.ancestor_path?.length || 0)}{target.title}</option>)}
+              </select>
+            </label>
+            <div className="flex gap-2">
+              <button type="button" onClick={handleMergeCurrentBranch} disabled={!mergeTargetId || branchLoading} className="flex-1 rounded-lg bg-purple-700 px-3 py-2 text-sm text-white hover:bg-purple-600 disabled:bg-gray-700">確認合併</button>
+              <button type="button" onClick={() => setShowBranchReview(false)} className="px-3 py-2 text-sm text-gray-500 hover:text-gray-300">取消</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showBranchModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center" onClick={() => setShowBranchModal(false)}>

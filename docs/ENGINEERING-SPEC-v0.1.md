@@ -1,7 +1,7 @@
 # GrowthMap 工程規格 v0.1
 
 > Status note: this is a **target engineering spec**. The current repository only implements a subset of this document.
-> In the shipped MVP, SQLite is the active database, the frontend behaves as a tree editor, and most provider / agent / multi-relation flows remain unimplemented.
+> In the shipped MVP, SQLite is the active database and the frontend remains tree-first. Proposal branches and mainline selection are usable, while persistent provider management, agent sessions, and general multi-relation graph governance remain unimplemented.
 
 ---
 
@@ -9,9 +9,9 @@
 
 Current implementation status in this repository:
 
-- **Implemented**: projects, nodes, `child_of` edges, content blocks, action logs for node history, AI expand/deepen suggestion endpoints, subtree fetch, Markdown export, tree-oriented frontend editing
-- **Partially implemented**: edge persistence for non-`child_of` relation types exists in the model/API, but the frontend and main workflows are still tree-first
-- **Not implemented**: provider config management, agent session workflows, branch/mainline governance, compare/merge/rebase-to-mainline mechanics, frontend graph governance for non-tree relations
+- **Implemented**: projects, nodes, `child_of` edges, content blocks, action logs for node history, AI expand/deepen/chat endpoints, subtree fetch, Markdown/JSON/spec export, tree-oriented frontend editing, mainline selection, and proposal branch create/switch/compare/merge/archive flows
+- **Partially implemented**: edge persistence for non-`child_of` relation types exists in the model/API, but the frontend and primary workflows are still tree-first
+- **Not implemented**: persistent provider config management, agent session workflows, and frontend graph governance for non-tree relations
 
 Use this document as the desired system shape, not as a description of the current shipped product.
 

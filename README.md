@@ -14,8 +14,9 @@ AI-powered project growth system — build ideas as trees, let AI expand branche
 - **Keyboard Shortcuts** — Esc, E, D, Delete, Ctrl+Z
 - **Auto-maturity** — nodes auto-advance maturity as content grows
 - **Node Types** — idea, concept, task, question, decision, risk, resource, note, module
-- **Mainline tracking** — mark primary branch for structured paths
-- **DB auto-backup** — DB backed up before any destructive operation
+- **Mainline tracking** — mark primary child paths for structured work
+- **Parallel branches** — create, switch, merge, and archive proposal branches
+- **DB auto-backup** — local SQLite backup before destructive operations
 - **Dark theme** throughout
 
 ## 🚀 Quick Start
@@ -79,6 +80,7 @@ Click ⌨️ in the header to view shortcuts overlay.
 ```
 growthmap/
 ├── start.sh                  # One-click launcher
+├── .github/workflows/ci.yml  # Frontend + backend quality gates
 ├── src/
 │   ├── backend/              # FastAPI + SQLAlchemy + SQLite
 │   │   ├── main.py
@@ -98,6 +100,23 @@ growthmap/
 Browser ──► Next.js (3100) ──► FastAPI (8100) ──► SQLite
                                       └──► LLM API (OpenAI/compat)
 ```
+
+## ✅ Quality Gates
+
+The repository runs these checks locally and in GitHub Actions:
+
+```bash
+cd src/frontend
+npm ci
+npm run lint
+npm run typecheck
+npm run build
+
+cd ../backend
+DATABASE_URL='sqlite+aiosqlite:///:memory:' python -m unittest discover -s tests -v
+```
+
+The backend smoke test uses an in-memory SQLite database and does not call an LLM provider.
 
 ## 📸 Screenshots
 

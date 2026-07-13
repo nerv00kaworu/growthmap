@@ -43,6 +43,7 @@ class NodeCreate(BaseModel):
     summary: str = ""
     node_type: str = "idea"
     parent_id: Optional[str] = None  # 自動建 child_of edge
+    branch_id: Optional[str] = None  # 由目前方案線建立的節點
     description: str = ""
     tags: list[str] = []
 
@@ -87,6 +88,7 @@ class NodeOut(BaseModel):
     last_edited_by: str
     position_x: float
     position_y: float
+    branch_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -114,6 +116,11 @@ class EdgeCreate(BaseModel):
     weight: float = 1.0
     note: str = ""
     is_mainline: bool = False
+
+
+class EdgeUpdate(BaseModel):
+    weight: Optional[float] = None
+    note: Optional[str] = None
 
 
 class EdgeOut(BaseModel):
@@ -229,6 +236,45 @@ class DetectGapsRequest(BaseModel):
 
 # === Branch ===
 
+class ProviderConfigCreate(BaseModel):
+    name: str
+    provider_type: str = "openai_compatible"
+    endpoint: str = ""
+    secret_env_key: str = "LLM_API_KEY"
+    model_name: str = ""
+    capabilities: list[str] = []
+    cost_level: str = "low"
+    enabled: bool = True
+
+
+class ProviderConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    provider_type: Optional[str] = None
+    endpoint: Optional[str] = None
+    secret_env_key: Optional[str] = None
+    model_name: Optional[str] = None
+    capabilities: Optional[list[str]] = None
+    cost_level: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class ProviderConfigOut(BaseModel):
+    id: str
+    name: str
+    provider_type: str
+    endpoint: str
+    auth_type: str
+    secret_env_key: str
+    model_name: str
+    capabilities: list[str]
+    cost_level: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class BranchCreate(BaseModel):
     source_node_id: str
     name: str
@@ -249,8 +295,60 @@ class BranchOut(BaseModel):
 
 # === Agent Session ===
 
-class AssignAgentRequest(BaseModel):
-    objective: str
+class AgentArtifactCreate(BaseModel):
+    target_node_id: str
+    artifact_type: str  # create_child / update_node / create_block
+    payload: dict
+
+
+class AgentArtifactReview(BaseModel):
+    review_note: str = ""
+
+
+class AgentArtifactOut(BaseModel):
+    id: str
+    session_id: str
+    project_id: str
+    target_node_id: str
+    artifact_type: str
+    payload: dict
+    status: str
+    review_note: str
+    created_at: datetime
+    reviewed_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class AgentSessionCreate(BaseModel):
+    project_id: str
+    assigned_node_id: Optional[str] = None
+    assigned_branch_root_id: Optional[str] = None
     provider_id: Optional[str] = None
+    objective: str
     mode: str = "one_shot"  # one_shot / collab / background
-    scope: str = "node"  # node / branch
+    handoff_context: dict = {}
+
+
+class AgentSessionUpdate(BaseModel):
+    status: Optional[str] = None  # idle / active / waiting_review / completed / cancelled
+    result_summary: Optional[str] = None
+    handoff_context: Optional[dict] = None
+
+
+class AgentSessionOut(BaseModel):
+    id: str
+    project_id: str
+    assigned_node_id: Optional[str]
+    assigned_branch_root_id: Optional[str]
+    provider_id: Optional[str]
+    objective: str
+    mode: str
+    status: str
+    handoff_context: dict
+    result_summary: str
+    last_heartbeat_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}

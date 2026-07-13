@@ -2,7 +2,8 @@ export type LLMProviderType = "openai" | "anthropic" | "google" | "openclaw" | "
 
 export interface LLMConfig {
   provider: LLMProviderType;
-  apiKey: string;
+  providerId?: string;
+  apiKey?: string;
   baseUrl?: string;
   model: string;
 }
@@ -55,7 +56,7 @@ export async function llmComplete(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${config.apiKey}`,
+          Authorization: `Bearer ${config.apiKey || ""}`,
         },
         body: JSON.stringify({
           model,
@@ -78,7 +79,7 @@ export async function llmComplete(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": config.apiKey,
+          "x-api-key": config.apiKey || "",
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
         },
@@ -98,7 +99,7 @@ export async function llmComplete(
     }
 
     case "google": {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.apiKey || ""}`;
       const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

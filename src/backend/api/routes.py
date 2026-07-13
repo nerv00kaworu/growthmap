@@ -1,23 +1,31 @@
 """Project & Node API routes"""
 import uuid
+import json
 import shutil
 import os
+import re
+import tempfile
+from pathlib import Path
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel
 from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.database import get_db
-from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch
+from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
-    EdgeCreate, EdgeOut,
+    EdgeCreate, EdgeUpdate, EdgeOut,
     ContentBlockCreate, ContentBlockUpdate, ContentBlockOut,
     NodeMoveRequest, AncestorNode, MainlinePathOut, BranchInfo,
     BranchCreate, BranchOut,
+    ProviderConfigCreate, ProviderConfigUpdate, ProviderConfigOut,
+    AgentSessionCreate, AgentSessionUpdate, AgentSessionOut,
+    AgentArtifactCreate, AgentArtifactReview, AgentArtifactOut,
 )
 
 router = APIRouter()
@@ -35,6 +43,293 @@ def backup_db():
 def touch_project(project: Project | None):
     if project:
         project.updated_at = datetime.now(timezone.utc)
+
+
+# ─── Provider configurations ───
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+ENV_FILE = Path(os.getenv("GROWTHMAP_ENV_FILE", str(PROJECT_ROOT / ".env")))
+SAFE_ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+
+
+class ProviderSecretWrite(BaseModel):
+    api_key: str
+
+
+def _write_env_value(env_key: str, secret: str) -> None:
+    """Atomically update one local .env value while preserving other entries."""
+    if not SAFE_ENV_KEY.fullmatch(env_key):
+        raise HTTPException(400, "Invalid environment variable name")
+    if not secret or "\x00" in secret:
+        raise HTTPException(400, "API key is required")
+    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    assignment = f"{env_key}={json.dumps(secret)}"
+    updated: list[str] = []
+    found = False
+    for line in lines:
+        if re.match(rf"^\s*(?:export\s+)?{re.escape(env_key)}\s*=", line):
+            updated.append(assignment)
+            found = True
+        else:
+            updated.append(line)
+    if not found:
+        updated.append(assignment)
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=ENV_FILE.parent, delete=False) as handle:
+        handle.write("\n".join(updated).rstrip() + "\n")
+        temp_path = Path(handle.name)
+    os.chmod(temp_path, 0o600)
+    temp_path.replace(ENV_FILE)
+    os.environ[env_key] = secret
+
+
+@router.get("/providers", response_model=list[ProviderConfigOut])
+async def list_providers(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(ProviderConfig).order_by(ProviderConfig.created_at.desc()))
+    return result.scalars().all()
+
+
+@router.post("/providers", response_model=ProviderConfigOut, status_code=201)
+async def create_provider(data: ProviderConfigCreate, db: AsyncSession = Depends(get_db)):
+    provider = ProviderConfig(**data.model_dump(), auth_type="env")
+    db.add(provider)
+    await db.commit()
+    await db.refresh(provider)
+    return provider
+
+
+@router.put("/providers/{provider_id}/secret", status_code=204)
+async def write_provider_secret(provider_id: str, data: ProviderSecretWrite, request: Request, db: AsyncSession = Depends(get_db)):
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}: # testclient is FastAPI's in-process test transport
+        raise HTTPException(403, "Provider secrets can only be configured from localhost")
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    if provider.provider_type == "mock":
+        raise HTTPException(400, "Mock provider does not use an API key")
+    _write_env_value(provider.secret_env_key, data.api_key)
+
+
+@router.patch("/providers/{provider_id}", response_model=ProviderConfigOut)
+async def update_provider(provider_id: str, data: ProviderConfigUpdate, db: AsyncSession = Depends(get_db)):
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(provider, key, value)
+    provider.auth_type = "env"
+    await db.commit()
+    await db.refresh(provider)
+    return provider
+
+
+@router.delete("/providers/{provider_id}", status_code=204)
+async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    await db.delete(provider)
+    await db.commit()
+
+
+# ─── Agent sessions (manual workflow only; no external dispatch) ───
+
+AGENT_SESSION_STATUSES = {"idle", "active", "waiting_review", "completed", "cancelled"}
+AGENT_SESSION_TRANSITIONS = {
+    "idle": {"active", "cancelled"},
+    "active": {"waiting_review", "completed", "cancelled"},
+    "waiting_review": {"active", "completed", "cancelled"},
+    "completed": set(),
+    "cancelled": set(),
+}
+
+
+@router.get("/agent-sessions", response_model=list[AgentSessionOut])
+async def list_agent_sessions(project_id: str, status: str | None = None, db: AsyncSession = Depends(get_db)):
+    query = select(AgentSession).where(AgentSession.project_id == project_id)
+    if status:
+        if status not in AGENT_SESSION_STATUSES:
+            raise HTTPException(400, "Invalid agent session status")
+        query = query.where(AgentSession.status == status)
+    result = await db.execute(query.order_by(AgentSession.updated_at.desc()))
+    return result.scalars().all()
+
+
+@router.post("/agent-sessions", response_model=AgentSessionOut, status_code=201)
+async def create_agent_session(data: AgentSessionCreate, db: AsyncSession = Depends(get_db)):
+    project = await db.get(Project, data.project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    if not data.objective.strip():
+        raise HTTPException(400, "Objective is required")
+    if data.mode not in {"one_shot", "collab", "background"}:
+        raise HTTPException(400, "Invalid agent session mode")
+    if bool(data.assigned_node_id) == bool(data.assigned_branch_root_id):
+        raise HTTPException(400, "Assign exactly one node or branch root")
+    if data.assigned_node_id:
+        node = await db.get(Node, data.assigned_node_id)
+        if not node or node.project_id != project.id:
+            raise HTTPException(400, "Assigned node must belong to the project")
+    if data.assigned_branch_root_id:
+        root = await db.get(Node, data.assigned_branch_root_id)
+        branch = await db.get(Branch, root.branch_id) if root and root.branch_id else None
+        if not root or root.project_id != project.id or not branch or branch.status != "active":
+            raise HTTPException(400, "Assigned branch root must belong to an active branch")
+    if data.provider_id:
+        provider = await db.get(ProviderConfig, data.provider_id)
+        if not provider or not provider.enabled:
+            raise HTTPException(400, "Selected provider is unavailable")
+    session = AgentSession(**data.model_dump(), status="idle")
+    db.add(session)
+    await db.flush()
+    db.add(ActionLog(project_id=project.id, node_id=data.assigned_node_id or data.assigned_branch_root_id, actor_type="human", action_type="agent_session_created", payload={"session_id": session.id, "mode": session.mode, "provider_id": session.provider_id}))
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+@router.get("/agent-sessions/{session_id}/history")
+async def get_agent_session_history(session_id: str, db: AsyncSession = Depends(get_db)):
+    session = await db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(404, "Agent session not found")
+    result = await db.execute(
+        select(ActionLog)
+        .where(ActionLog.project_id == session.project_id, ActionLog.payload["session_id"].as_string() == session_id)
+        .order_by(ActionLog.created_at.desc())
+    )
+    return [{"id": log.id, "action_type": log.action_type, "actor_type": log.actor_type, "payload": log.payload, "created_at": log.created_at.isoformat() if log.created_at else ""} for log in result.scalars().all()]
+
+
+@router.patch("/agent-sessions/{session_id}", response_model=AgentSessionOut)
+async def update_agent_session(session_id: str, data: AgentSessionUpdate, db: AsyncSession = Depends(get_db)):
+    session = await db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(404, "Agent session not found")
+    changes = data.model_dump(exclude_unset=True)
+    new_status = changes.pop("status", None)
+    if new_status:
+        if new_status not in AGENT_SESSION_STATUSES:
+            raise HTTPException(400, "Invalid agent session status")
+        if new_status != session.status and new_status not in AGENT_SESSION_TRANSITIONS[session.status]:
+            raise HTTPException(400, f"Cannot transition from {session.status} to {new_status}")
+        session.status = new_status
+        if new_status == "active":
+            session.last_heartbeat_at = datetime.now(timezone.utc)
+    if "result_summary" in changes and session.status not in {"waiting_review", "completed", "cancelled"}:
+        raise HTTPException(400, "Result summary requires review or terminal status")
+    for key, value in changes.items():
+        setattr(session, key, value)
+    db.add(ActionLog(project_id=session.project_id, node_id=session.assigned_node_id or session.assigned_branch_root_id, actor_type="human", action_type="agent_session_updated", payload={"session_id": session.id, "status": session.status, "has_result_summary": bool(session.result_summary)}))
+    await db.commit()
+    await db.refresh(session)
+    return session
+
+
+# ─── Agent artifacts (manual review/writeback; no automatic execution) ───
+
+ARTIFACT_TYPES = {"create_child", "update_node", "create_block"}
+
+
+def _valid_artifact_payload(artifact_type: str, payload: dict) -> bool:
+    if artifact_type == "create_child":
+        return isinstance(payload.get("title"), str) and bool(payload["title"].strip())
+    if artifact_type == "update_node":
+        return bool(set(payload).intersection({"title", "summary", "description", "maturity", "tags"}))
+    if artifact_type == "create_block":
+        return isinstance(payload.get("block_type"), str) and isinstance(payload.get("content"), dict)
+    return False
+
+
+@router.get("/agent-sessions/{session_id}/artifacts", response_model=list[AgentArtifactOut])
+async def list_agent_artifacts(session_id: str, status: str | None = None, db: AsyncSession = Depends(get_db)):
+    session = await db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(404, "Agent session not found")
+    query = select(AgentArtifact).where(AgentArtifact.session_id == session_id)
+    if status:
+        if status not in {"pending", "applied", "rejected"}:
+            raise HTTPException(400, "Invalid artifact status")
+        query = query.where(AgentArtifact.status == status)
+    result = await db.execute(query.order_by(AgentArtifact.created_at.desc()))
+    return result.scalars().all()
+
+
+@router.post("/agent-sessions/{session_id}/artifacts", response_model=AgentArtifactOut, status_code=201)
+async def create_agent_artifact(session_id: str, data: AgentArtifactCreate, db: AsyncSession = Depends(get_db)):
+    session = await db.get(AgentSession, session_id)
+    if not session:
+        raise HTTPException(404, "Agent session not found")
+    if session.status not in {"active", "waiting_review"}:
+        raise HTTPException(400, "Artifacts require an active or review session")
+    if data.artifact_type not in ARTIFACT_TYPES or not _valid_artifact_payload(data.artifact_type, data.payload):
+        raise HTTPException(400, "Invalid artifact payload")
+    target = await db.get(Node, data.target_node_id)
+    if not target or target.project_id != session.project_id:
+        raise HTTPException(400, "Target node must belong to the session project")
+    if session.assigned_node_id and data.target_node_id != session.assigned_node_id:
+        raise HTTPException(400, "Node-scoped session can only write back to its assigned node")
+    if session.assigned_branch_root_id and target.branch_id != (await db.get(Node, session.assigned_branch_root_id)).branch_id:
+        raise HTTPException(400, "Branch-scoped session target must belong to the assigned branch")
+    artifact = AgentArtifact(session_id=session_id, project_id=session.project_id, target_node_id=data.target_node_id, artifact_type=data.artifact_type, payload=data.payload)
+    db.add(artifact)
+    await db.flush()
+    db.add(ActionLog(project_id=session.project_id, node_id=data.target_node_id, actor_type="human", action_type="agent_artifact_created", payload={"session_id": session_id, "artifact_id": artifact.id, "artifact_type": artifact.artifact_type}))
+    await db.commit()
+    await db.refresh(artifact)
+    return artifact
+
+
+@router.post("/agent-artifacts/{artifact_id}/approve", response_model=AgentArtifactOut)
+async def approve_agent_artifact(artifact_id: str, data: AgentArtifactReview, db: AsyncSession = Depends(get_db)):
+    artifact = await db.get(AgentArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Agent artifact not found")
+    if artifact.status != "pending":
+        raise HTTPException(400, "Artifact has already been reviewed")
+    session = await db.get(AgentSession, artifact.session_id)
+    target = await db.get(Node, artifact.target_node_id)
+    if not session or not target:
+        raise HTTPException(400, "Artifact target is unavailable")
+    if artifact.artifact_type == "create_child":
+        child = Node(project_id=target.project_id, branch_id=target.branch_id, title=artifact.payload["title"].strip(), summary=artifact.payload.get("summary", ""), node_type=artifact.payload.get("node_type", "idea"), created_by="agent")
+        db.add(child)
+        await db.flush()
+        count = (await db.execute(select(func.count()).select_from(Edge).where(Edge.from_node_id == target.id, Edge.relation_type == "child_of"))).scalar() or 0
+        db.add(Edge(project_id=target.project_id, from_node_id=target.id, to_node_id=child.id, relation_type="child_of", is_mainline=count == 0))
+    elif artifact.artifact_type == "update_node":
+        for key in {"title", "summary", "description", "maturity", "tags"}.intersection(artifact.payload):
+            setattr(target, key, artifact.payload[key])
+        target.last_edited_by = "agent"
+    else:
+        block_count = (await db.execute(select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == target.id))).scalar() or 0
+        db.add(ContentBlock(node_id=target.id, block_type=artifact.payload["block_type"], content=artifact.payload["content"], order_index=block_count, created_by="agent"))
+    artifact.status = "applied"
+    artifact.review_note = data.review_note
+    artifact.reviewed_at = datetime.now(timezone.utc)
+    project = await db.get(Project, artifact.project_id)
+    touch_project(project)
+    db.add(ActionLog(project_id=artifact.project_id, node_id=target.id, actor_type="human", action_type="agent_artifact_applied", payload={"session_id": session.id, "artifact_id": artifact.id, "artifact_type": artifact.artifact_type, "review_note": data.review_note}))
+    await db.commit()
+    await db.refresh(artifact)
+    return artifact
+
+
+@router.post("/agent-artifacts/{artifact_id}/reject", response_model=AgentArtifactOut)
+async def reject_agent_artifact(artifact_id: str, data: AgentArtifactReview, db: AsyncSession = Depends(get_db)):
+    artifact = await db.get(AgentArtifact, artifact_id)
+    if not artifact:
+        raise HTTPException(404, "Agent artifact not found")
+    if artifact.status != "pending":
+        raise HTTPException(400, "Artifact has already been reviewed")
+    artifact.status = "rejected"
+    artifact.review_note = data.review_note
+    artifact.reviewed_at = datetime.now(timezone.utc)
+    db.add(ActionLog(project_id=artifact.project_id, node_id=artifact.target_node_id, actor_type="human", action_type="agent_artifact_rejected", payload={"session_id": artifact.session_id, "artifact_id": artifact.id, "review_note": data.review_note}))
+    await db.commit()
+    await db.refresh(artifact)
+    return artifact
 
 
 # ─── Projects ───
@@ -121,8 +416,15 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
     if not project:
         raise HTTPException(404, "Project not found")
 
+    branch = None
+    if data.branch_id:
+        branch = await db.get(Branch, data.branch_id)
+        if not branch or branch.project_id != project_id or branch.status != "active":
+            raise HTTPException(400, "Invalid active branch")
+
     node = Node(
         project_id=project_id,
+        branch_id=data.branch_id,
         title=data.title,
         summary=data.summary,
         node_type=data.node_type,
@@ -138,6 +440,8 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         parent = await db.get(Node, data.parent_id)
         if not parent or parent.project_id != project_id:
             raise HTTPException(400, "Invalid parent node")
+        if (parent.branch_id or None) != (data.branch_id or None):
+            raise HTTPException(400, "Parent and child must belong to the same branch")
 
         # Determine if child should be mainline (first child)
         result = await db.execute(
@@ -304,6 +608,8 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
 
         return {
             "id": str(n.id),
+            "project_id": str(n.project_id),
+            "branch_id": str(n.branch_id) if n.branch_id else None,
             "title": n.title,
             "summary": n.summary,
             "node_type": n.node_type,
@@ -323,6 +629,20 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── Edges ───
 
+GRAPH_RELATION_TYPES = {"depends_on", "contradicts", "references", "supports", "blocks", "relates_to"}
+
+@router.get("/projects/{project_id}/edges", response_model=list[EdgeOut])
+async def list_project_edges(project_id: str, relation_type: str | None = None, db: AsyncSession = Depends(get_db)):
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    query = select(Edge).where(Edge.project_id == project_id)
+    if relation_type:
+        query = query.where(Edge.relation_type == relation_type)
+    result = await db.execute(query.order_by(Edge.created_at))
+    return result.scalars().all()
+
+
 @router.post("/edges", response_model=EdgeOut, status_code=201)
 async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
     from_node = await db.get(Node, data.from_node_id)
@@ -331,6 +651,13 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "Invalid node id")
     if from_node.project_id != to_node.project_id:
         raise HTTPException(400, "Nodes must be in same project")
+    if data.from_node_id == data.to_node_id:
+        raise HTTPException(400, "Cannot create a self-relation")
+    if data.relation_type != "child_of" and data.relation_type not in GRAPH_RELATION_TYPES:
+        raise HTTPException(400, "Unsupported graph relation type")
+    duplicate = await db.execute(select(Edge).where(Edge.from_node_id == data.from_node_id, Edge.to_node_id == data.to_node_id, Edge.relation_type == data.relation_type))
+    if duplicate.scalar_one_or_none():
+        raise HTTPException(409, "Duplicate relation")
 
     payload = data.model_dump()
     is_mainline = payload.pop("is_mainline", False)
@@ -352,6 +679,28 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
         is_mainline=is_mainline,
     )
     db.add(edge)
+    await db.commit()
+    await db.refresh(edge)
+    return edge
+
+
+@router.patch("/edges/{edge_id}", response_model=EdgeOut)
+async def update_edge(edge_id: str, data: EdgeUpdate, db: AsyncSession = Depends(get_db)):
+    edge = await db.get(Edge, edge_id)
+    if not edge:
+        raise HTTPException(404, "Edge not found")
+    if edge.relation_type == "child_of":
+        raise HTTPException(400, "Tree parent relations cannot be edited as graph relations")
+    values = data.model_dump(exclude_unset=True)
+    if not values:
+        raise HTTPException(400, "No edge fields provided")
+    if "weight" in values and not 0 <= values["weight"] <= 1:
+        raise HTTPException(400, "Weight must be between 0 and 1")
+    if "note" in values and len(values["note"]) > 2000:
+        raise HTTPException(400, "Note is too long")
+    for key, value in values.items():
+        setattr(edge, key, value)
+    db.add(ActionLog(project_id=edge.project_id, node_id=edge.from_node_id, actor_type="human", action_type="graph_relation_updated", payload={"edge_id": edge.id, "changes": values}))
     await db.commit()
     await db.refresh(edge)
     return edge
@@ -409,6 +758,8 @@ async def delete_edge(edge_id: str, db: AsyncSession = Depends(get_db)):
     edge = await db.get(Edge, edge_id)
     if not edge:
         raise HTTPException(404, "Edge not found")
+    if edge.relation_type == "child_of":
+        raise HTTPException(400, "Tree parent relations must be changed through node move actions")
     await db.delete(edge)
     await db.commit()
 
@@ -1321,11 +1672,14 @@ async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = 
 
 
 @router.get("/projects/{project_id}/branches", response_model=list[BranchOut])
-async def list_branches(project_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Branch).where(Branch.project_id == project_id, Branch.status == "active")
-        .order_by(Branch.created_at.desc())
-    )
+async def list_branches(project_id: str, include_inactive: bool = False, db: AsyncSession = Depends(get_db)):
+    project = await db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    query = select(Branch).where(Branch.project_id == project_id)
+    if not include_inactive:
+        query = query.where(Branch.status == "active")
+    result = await db.execute(query.order_by(Branch.created_at.desc()))
     return result.scalars().all()
 
 
@@ -1381,9 +1735,19 @@ async def get_branch_subtree(branch_id: str, db: AsyncSession = Depends(get_db))
         if not n:
             return {}
         return {
-            "id": n.id, "title": n.title, "summary": n.summary,
-            "node_type": n.node_type, "maturity": n.maturity,
+            "id": str(n.id),
+            "project_id": str(n.project_id),
+            "title": n.title,
+            "summary": n.summary,
+            "node_type": n.node_type,
+            "status": n.status,
+            "maturity": n.maturity,
+            "tags": n.tags or [],
+            "meta": {},
+            "content_blocks": [],
             "branch_id": n.branch_id,
+            "created_at": n.created_at.isoformat() if n.created_at else "",
+            "updated_at": n.updated_at.isoformat() if n.updated_at else "",
             "children": [build_tree(cid) for cid in child_map.get(nid, []) if cid in nodes_by_id],
         }
 
@@ -1524,9 +1888,14 @@ async def merge_branch(branch_id: str, body: dict = Body(...), db: AsyncSession 
     branch = await db.get(Branch, branch_id)
     if not branch:
         raise HTTPException(404, "Branch not found")
+    if branch.status != "active":
+        raise HTTPException(400, "Only active branches can be merged")
     target_node_id = body.get("target_node_id")
     if not target_node_id:
         raise HTTPException(400, "target_node_id required")
+    target_node = await db.get(Node, target_node_id)
+    if not target_node or target_node.project_id != branch.project_id or target_node.branch_id:
+        raise HTTPException(400, "Target node must be on this project mainline")
 
     # Find branch nodes
     branch_nodes_result = await db.execute(
@@ -1551,6 +1920,8 @@ async def merge_branch(branch_id: str, body: dict = Body(...), db: AsyncSession 
 
     if not root_node_id:
         raise HTTPException(400, "Cannot find branch root")
+    if target_node_id in branch_node_ids:
+        raise HTTPException(400, "Cannot merge a branch into itself")
 
     # Clear branch_id from all nodes
     for n in branch_nodes:
@@ -1582,6 +1953,8 @@ async def merge_branch(branch_id: str, body: dict = Body(...), db: AsyncSession 
         ))
 
     branch.status = "merged"
+    project = await db.get(Project, branch.project_id)
+    touch_project(project)
     db.add(ActionLog(
         project_id=branch.project_id,
         actor_type="human",
@@ -1597,6 +1970,16 @@ async def archive_branch(branch_id: str, db: AsyncSession = Depends(get_db)):
     branch = await db.get(Branch, branch_id)
     if not branch:
         raise HTTPException(404, "Branch not found")
+    if branch.status != "active":
+        raise HTTPException(400, "Only active branches can be archived")
     branch.status = "archived"
+    project = await db.get(Project, branch.project_id)
+    touch_project(project)
+    db.add(ActionLog(
+        project_id=branch.project_id,
+        actor_type="human",
+        action_type="archive_branch",
+        payload={"branch_id": branch_id},
+    ))
     await db.commit()
 

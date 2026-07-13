@@ -21,7 +21,6 @@ interface GrowthNodeData {
 function GrowthNodeComponent({ data }: NodeProps) {
   const d = data as unknown as GrowthNodeData;
   const maturityColor = MATURITY_COLORS[d.maturity] || "#666";
-  const effectiveColor = d.isSelected ? maturityColor : d.heatColor || maturityColor;
   const icon = NODE_TYPE_ICONS[d.nodeType] || "📌";
 
   return (

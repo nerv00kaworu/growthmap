@@ -1,5 +1,6 @@
 """AI growth routes — expand & deepen nodes via LLM"""
 import json
+import os
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Literal, Optional
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import get_db
 from ai.providers import LLMConfig, get_provider
 from ai.context import build_node_context
-from models.models import ActionLog, Node
+from models.models import ActionLog, Node, ProviderConfig
 from ai.provider import parse_json_response  # Reuse existing JSON parser
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -19,6 +20,7 @@ class LLMConfigOverride(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     model: Optional[str] = None
+    provider_id: Optional[str] = None
 
 
 class ExpandRequest(BaseModel):
@@ -120,16 +122,29 @@ DEEPEN_SYSTEM = """你是一個知識深化分析師。根據提供的上下文�
 }"""
 
 
-def _to_llm_config(config: Optional[LLMConfigOverride]) -> Optional[LLMConfig]:
-    """Convert optional LLMConfigOverride to LLMConfig for provider adapter."""
+async def _to_llm_config(config: Optional[LLMConfigOverride], db: AsyncSession) -> tuple[Optional[LLMConfig], str | None]:
+    """Resolve an optional browser override or a server-stored env-backed provider."""
     if not config:
-        return None
+        return None, None
+    if config.provider_id:
+        provider_config = await db.get(ProviderConfig, config.provider_id)
+        if not provider_config or not provider_config.enabled:
+            raise ValueError("Selected provider is unavailable")
+        api_key = os.getenv(provider_config.secret_env_key)
+        if provider_config.provider_type != "mock" and not api_key:
+            raise ValueError(f"Environment variable {provider_config.secret_env_key} is not configured")
+        return LLMConfig(
+            provider=provider_config.provider_type,
+            api_key=api_key,
+            base_url=provider_config.endpoint or None,
+            model=provider_config.model_name or None,
+        ), provider_config.id
     return LLMConfig(
         provider=config.provider or "openai_compatible",
         api_key=config.api_key,
         base_url=config.base_url,
         model=config.model,
-    )
+    ), None
 
 
 def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"]) -> str:
@@ -184,7 +199,7 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        llm_cfg = _to_llm_config(req.llm_config)
+        llm_cfg, provider_id = await _to_llm_config(req.llm_config, db)
         if llm_cfg:
             provider = get_provider(llm_cfg)
             raw = await provider.complete(
@@ -220,7 +235,7 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_expand",
-                payload={"count": len(validated), "instruction": req.instruction, "mode": req.mode},
+                payload={"count": len(validated), "instruction": req.instruction, "mode": req.mode, "provider_id": provider_id, "model": llm_cfg.model if llm_cfg else None, "outcome": "success"},
             ))
             await db.commit()
 
@@ -255,7 +270,7 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
 {"使用者指示：" + req.instruction if req.instruction else ""}"""
 
     try:
-        llm_cfg = _to_llm_config(req.llm_config)
+        llm_cfg, provider_id = await _to_llm_config(req.llm_config, db)
         if llm_cfg:
             provider = get_provider(llm_cfg)
             raw = await provider.complete(
@@ -289,7 +304,7 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_deepen",
-                payload={"instruction": req.instruction, "blocks_generated": len(content_blocks)},
+                payload={"instruction": req.instruction, "blocks_generated": len(content_blocks), "provider_id": provider_id, "model": llm_cfg.model if llm_cfg else None, "outcome": "success"},
             ))
             await db.commit()
 
@@ -346,7 +361,7 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     context_summary += f"使用者的最新問題：{req.message}"
 
     try:
-        llm_cfg = _to_llm_config(req.llm_config)
+        llm_cfg, provider_id = await _to_llm_config(req.llm_config, db)
         if llm_cfg:
             provider = get_provider(llm_cfg)
             reply = await provider.complete(
@@ -365,7 +380,7 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_chat",
-                payload={"message": req.message[:200], "reply": reply[:200]},
+                payload={"message": req.message[:200], "reply": reply[:200], "provider_id": provider_id, "model": llm_cfg.model if llm_cfg else None, "outcome": "success"},
             ))
             await db.commit()
 
