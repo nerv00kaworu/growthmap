@@ -5,6 +5,7 @@ import shutil
 import os
 import re
 import tempfile
+import asyncio
 from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
@@ -16,6 +17,8 @@ from sqlalchemy.orm import selectinload
 
 from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
+from desktop.entitlements import current_entitlement
+from desktop.secrets import desktop_mode, put as put_memory_secret
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
@@ -30,6 +33,9 @@ from models.schemas import (
 )
 
 router = APIRouter()
+# One desktop sidecar process serializes count+commit seat mutations. Reads,
+# exports and archive operations do not acquire this lock.
+_project_seat_lock = asyncio.Lock()
 
 
 def backup_db():
@@ -60,6 +66,8 @@ class ProviderSecretWrite(BaseModel):
 
 def _write_env_value(env_key: str, secret: str) -> None:
     """Atomically update one local .env value while preserving other entries."""
+    if desktop_mode():
+        raise HTTPException(403, "Desktop mode forbids env-file secret writes; use secure desktop storage")
     try:
         validate_app_secret_env_key(env_key)
     except ValueError as exc:
@@ -121,7 +129,12 @@ async def write_provider_secret(provider_id: str, data: ProviderSecretWrite, req
         raise HTTPException(400, str(exc))
     if provider.provider_type == "mock":
         raise HTTPException(400, "Mock provider does not use an API key")
-    _write_env_value(provider.secret_env_key, data.api_key)
+    if desktop_mode():
+        # Compatibility endpoint stores only in this sidecar process. The Electron
+        # safeStorage IPC remains the source of persistence and never exposes reads.
+        put_memory_secret(provider.id, data.api_key)
+    else:
+        _write_env_value(provider.secret_env_key, data.api_key)
 
 
 @router.patch("/providers/{provider_id}", response_model=ProviderConfigOut)
@@ -355,6 +368,16 @@ async def list_projects(db: AsyncSession = Depends(get_db)):
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
 async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db)):
+    async with _project_seat_lock:
+        entitlement = current_entitlement()
+        if desktop_mode() and entitlement.max_active_projects is not None:
+            active = await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
+            if active >= entitlement.max_active_projects:
+                raise HTTPException(402, f"Active project limit reached ({active}/{entitlement.max_active_projects}); archive a project or import a license")
+        return await _create_project_committed(data, db)
+
+
+async def _create_project_committed(data: ProjectCreate, db: AsyncSession):
     project = Project(**data.model_dump())
     db.add(project)
     await db.flush()
@@ -396,8 +419,19 @@ async def update_project(project_id: str, data: ProjectUpdate, db: AsyncSession 
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(project, k, v)
+    changes = data.model_dump(exclude_unset=True)
+    if changes.get("status") == "active" and project.status != "active":
+        async with _project_seat_lock:
+            entitlement = current_entitlement()
+            if desktop_mode() and entitlement.max_active_projects is not None:
+                active = await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
+                if active >= entitlement.max_active_projects:
+                    raise HTTPException(409, f"Cannot restore project: active project limit reached ({active}/{entitlement.max_active_projects})")
+            for k, v in changes.items(): setattr(project, k, v)
+            await db.commit()
+            await db.refresh(project)
+            return project
+    for k, v in changes.items(): setattr(project, k, v)
     await db.commit()
     await db.refresh(project)
     return project

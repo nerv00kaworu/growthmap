@@ -11,8 +11,11 @@ from contextlib import asynccontextmanager
 from db.database import engine, Base
 from api.routes import router
 from ai.routes import router as ai_router
+from desktop.routes import router as desktop_router
+from desktop.security import DesktopSessionMiddleware
+from desktop.secrets import desktop_mode
 
-STATIC_DIR = Path(__file__).parent.parent / "frontend" / "out"
+STATIC_DIR = Path(os.getenv("GROWTHMAP_STATIC_DIR", Path(__file__).parent.parent / "frontend" / "out"))
 
 # 安全邊界：CORS 必須是精確 origin allowlist；正式環境預設不允許跨站。
 # 開發／測試僅開放本機 Editor 與 Player Web 的固定 origin，可用環境變數明確覆寫。
@@ -119,6 +122,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Added before other middleware so every desktop route, including readiness and
+# static assets, requires the per-launch unguessable token.
+app.add_middleware(DesktopSessionMiddleware)
+
 app.add_middleware(
     TrustedHostMiddleware,
     allowed_hosts=["localhost", "127.0.0.1", "testserver"],
@@ -134,6 +141,12 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+if desktop_mode():
+    app.include_router(desktop_router, prefix="/api")
+else:
+    @app.api_route("/api/desktop/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"], include_in_schema=False)
+    async def desktop_surface_absent(path: str):
+        raise HTTPException(404, "Not Found")
 
 
 @app.get("/api")

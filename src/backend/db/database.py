@@ -6,7 +6,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from sqlalchemy.orm import DeclarativeBase
 from dotenv import load_dotenv
 
-load_dotenv()
+# Authoring launcher keeps its explicit env-file mode. Desktop must never read or
+# mutate an env file; Electron supplies only ephemeral process environment.
+if os.getenv("GROWTHMAP_DESKTOP_MODE") != "1":
+    load_dotenv()
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "growthmap.db"
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DEFAULT_DB_PATH}")

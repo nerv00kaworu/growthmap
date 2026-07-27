@@ -74,7 +74,8 @@ export function Settings({ onClose }: SettingsProps) {
         ? await api.updateProvider(selectedId, payload)
         : await api.createProvider(payload);
       if (apiKey.trim() && saved.provider_type !== "mock") {
-        await api.writeProviderSecret(saved.id, apiKey.trim());
+        if (window.growthmapDesktop) await window.growthmapDesktop.secrets.set(saved.id, apiKey.trim());
+        else await api.writeProviderSecret(saved.id, apiKey.trim());
         setApiKey("");
       }
       const nextProfiles = selectedId
@@ -83,7 +84,7 @@ export function Settings({ onClose }: SettingsProps) {
       setProfiles(nextProfiles);
       setSelectedId(saved.id);
       saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name });
-      setMessage("✅ 已儲存。API key 僅從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。");
+      setMessage(window.growthmapDesktop ? "✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。" : "✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。");
     } catch (error: unknown) {
       setMessage(`儲存失敗：${(error as Error).message}`);
     } finally {
@@ -108,13 +109,13 @@ export function Settings({ onClose }: SettingsProps) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-gray-100">⚙️ LLM Provider 設定</h2>
-            <p className="mt-1 text-xs text-gray-500">設定檔存本機資料庫；密鑰只留在 `.env`。</p>
+            <p className="mt-1 text-xs text-gray-500">設定檔存本機資料庫；桌面密鑰由作業系統安全儲存保護。</p>
           </div>
           <button type="button" onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
         </div>
 
         <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">
-          API key 不會出現在這個畫面、瀏覽器 localStorage 或 SQLite。請在專案根目錄 `.env` 設定對應變數，例如 `GROWTHMAP_LLM_KEY_DEFAULT=...`。
+          API key 不會出現在這個畫面、localStorage 或 SQLite。桌面版使用 Windows DPAPI／macOS Keychain；安全儲存不可用時會拒絕儲存。
         </div>
 
         {profiles.length > 0 && (
@@ -142,7 +143,7 @@ export function Settings({ onClose }: SettingsProps) {
           <label className="block text-xs text-gray-400">API key 的環境變數名稱
             <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="GROWTHMAP_LLM_KEY_DEFAULT" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100" />
           </label>
-          {provider !== "mock" && <label className="block text-xs text-gray-400">API Key（僅寫入本機 `.env`）
+          {provider !== "mock" && <label className="block text-xs text-gray-400">API Key（桌面版使用系統安全儲存）
             <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selectedId ? "留空則維持現有 key" : "sk-..."} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>}
           <label className="block text-xs text-gray-400">模型

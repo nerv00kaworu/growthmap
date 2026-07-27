@@ -46,6 +46,7 @@ memory/
 reports/
 state/
 dist/
+build/
 
 # The player-runtime implementation was split to abyss-bureau.
 # Keep historical/export residue out of the authoring-editor package.

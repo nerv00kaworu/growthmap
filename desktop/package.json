@@ -1,0 +1,103 @@
+{
+  "name": "growthmap-desktop",
+  "version": "0.1.0-desktop.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "electron .",
+    "pack:dir": "npm run preflight && electron-builder --dir",
+    "dist:win": "npm run preflight:win && electron-builder --win nsis --publish never",
+    "preflight": "node scripts/preflight.js",
+    "preflight:win": "node scripts/preflight.js win32"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.growthmap.desktop",
+    "productName": "GrowthMap",
+    "artifactName": "GrowthMap-Setup-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "secret-store.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../src/frontend/out",
+        "to": "frontend"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "legal/LICENSE"
+      },
+      {
+        "from": "../EULA.md",
+        "to": "legal/EULA.md"
+      },
+      {
+        "from": "../PRIVACY.md",
+        "to": "legal/PRIVACY.md"
+      },
+      {
+        "from": "../THIRD_PARTY_NOTICES.md",
+        "to": "legal/THIRD_PARTY_NOTICES.md"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "../src/backend/dist/growthmap-sidecar.exe",
+          "to": "sidecar/growthmap-sidecar.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity",
+      "extraResources": [
+        {
+          "from": "../src/backend/dist/growthmap-sidecar",
+          "to": "sidecar/growthmap-sidecar"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "extraResources": [
+        {
+          "from": "../src/backend/dist/growthmap-sidecar",
+          "to": "sidecar/growthmap-sidecar"
+        }
+      ]
+    }
+  },
+  "description": "Windows-first local GrowthMap authoring desktop application",
+  "author": "GrowthMap Project Contributors"
+}

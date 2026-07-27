@@ -46,6 +46,7 @@ export default function HomePage() {
   const [showBranchHistory, setShowBranchHistory] = useState(false);
   const [branchHistory, setBranchHistory] = useState<{ id: string; action_type: string; created_at: string }[]>([]);
   const [branchHistoryLoading, setBranchHistoryLoading] = useState(false);
+  const [entitlement, setEntitlement] = useState<{ edition: string; valid: boolean; max_active_projects: number | null } | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
@@ -65,6 +66,7 @@ export default function HomePage() {
 
   useEffect(() => {
     loadProjects();
+    api.getEntitlement().then(setEntitlement).catch(() => setEntitlement({ edition: "free", valid: false, max_active_projects: 2 }));
   }, [loadProjects]);
 
   useEffect(() => {
@@ -146,6 +148,22 @@ export default function HomePage() {
     } catch (e: unknown) {
       useStore.setState({ error: (e as Error).message });
     }
+  };
+
+  const handleProjectStatus = async (status: "active" | "archived") => {
+    if (!currentProject) return;
+    try {
+      await api.updateProject(currentProject.id, { status });
+      await loadProjects();
+      setToast(status === "active" ? "✅ 專案已恢復" : "✅ 專案已封存；資料仍可讀與匯出");
+    } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  };
+
+  const importLicense = async () => {
+    const desktop = (window as typeof window & { growthmapDesktop?: { license: { import(): Promise<unknown> } } }).growthmapDesktop;
+    if (!desktop) { setToast("License 匯入僅在桌面版提供"); return; }
+    try { await desktop.license.import(); setEntitlement(await api.getEntitlement()); setToast("✅ License 已驗證並匯入"); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
   const handleArchiveBranch = async () => {
@@ -249,7 +267,7 @@ export default function HomePage() {
         >
           <option value="">選擇專案...</option>
           {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
+            <option key={p.id} value={p.id}>{p.status === "archived" ? "🗄 " : ""}{p.name}</option>
           ))}
         </select>
 
@@ -277,6 +295,9 @@ export default function HomePage() {
           </>
         )}
 
+        <span className="shrink-0 text-[10px] text-gray-400">
+          {entitlement?.valid && entitlement.max_active_projects === null ? "Licensed · unlimited" : `Free · ${projects.filter(p => p.status === "active").length}/2`}
+        </span>
         <button
           type="button"
           onClick={() => setShowNewProject(!showNewProject)}
@@ -376,6 +397,8 @@ export default function HomePage() {
                 ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
               </button>
               <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⚙️ LLM 設定</button>
+              <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
+              <button type="button" onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
               <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
               <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">🗂️ 方案線歷史</button>

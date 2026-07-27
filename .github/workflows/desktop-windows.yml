@@ -1,0 +1,41 @@
+name: Desktop Windows foundation
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ["desktop/**", "src/backend/**", "src/frontend/**", ".github/workflows/desktop-windows.yml"]
+permissions: { contents: read }
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm, cache-dependency-path: "**/package-lock.json" }
+      - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt
+      - run: python -m pytest -q
+        working-directory: src/backend
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm run lint && npm run typecheck && npm run build
+        working-directory: src/frontend
+      - run: ./packaging/build-sidecar.ps1
+        working-directory: src/backend
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - run: npm run preflight:win && npx electron-builder --dir --win --publish never
+        working-directory: desktop
+      - name: Verify unpacked resources and packaged sidecar
+        shell: pwsh
+        run: ./.github/workflows/scripts/verify-windows-package.ps1
+      - run: npm run dist:win
+        working-directory: desktop
+      - name: Assert NSIS artifact exists (never publish)
+        shell: pwsh
+        run: if (-not (Get-ChildItem desktop/dist/GrowthMap-Setup-*.exe)) { throw "NSIS artifact missing" }
+      - name: Installer GUI lifecycle status
+        shell: pwsh
+        run: Write-Host "[blocked: interactive Windows runner required for silent install/app lifecycle/uninstall evidence]"

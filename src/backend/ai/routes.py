@@ -11,6 +11,7 @@ from ai.providers import LLMConfig, get_provider
 from ai.context import build_node_context
 from models.models import ActionLog, Node, ProviderConfig
 from models.schemas import validate_app_secret_env_key
+from desktop.secrets import desktop_mode, get as get_desktop_secret
 from ai.provider import parse_json_response  # Reuse existing JSON parser
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -122,9 +123,12 @@ async def _to_llm_config(provider_id: str, db: AsyncSession) -> tuple[LLMConfig,
     if not provider_config or not provider_config.enabled:
         raise ValueError("Selected provider is unavailable")
     validate_app_secret_env_key(provider_config.secret_env_key)
-    api_key = os.getenv(provider_config.secret_env_key)
+    # Desktop BYOK has a strict process-memory boundary. Never fall back to an
+    # inherited environment key, even when an identically named variable exists.
+    api_key = get_desktop_secret(provider_config.id) if desktop_mode() else os.getenv(provider_config.secret_env_key)
     if provider_config.provider_type != "mock" and not api_key:
-        raise ValueError(f"Environment variable {provider_config.secret_env_key} is not configured")
+        source = "desktop secure storage" if desktop_mode() else f"environment variable {provider_config.secret_env_key}"
+        raise ValueError(f"API key is not configured in {source}")
     return LLMConfig(
         provider=provider_config.provider_type,
         api_key=api_key,
