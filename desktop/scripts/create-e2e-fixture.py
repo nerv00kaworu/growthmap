@@ -1,2 +1,28 @@
-import sqlite3,sys
-c=sqlite3.connect(sys.argv[1]);c.executescript('''CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,status TEXT,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),from_node_id TEXT REFERENCES nodes(id),to_node_id TEXT REFERENCES nodes(id),relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id),block_type TEXT,content TEXT,order_index INTEGER);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);''');c.execute('insert into projects values(?,?,?,?,?)',('fixture','Desktop Fixture','active','',''));c.commit();c.close()
+"""Create a canonical GrowthMap desktop DB fixture from production metadata/lifespan."""
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+output = Path(sys.argv[1]).resolve()
+output.parent.mkdir(parents=True, exist_ok=True)
+os.environ["GROWTHMAP_DESKTOP_MODE"] = "1"
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{output.as_posix()}"
+
+# CI invokes this from desktop/. Put the production backend on the import path.
+backend = Path(__file__).resolve().parents[2] / "src" / "backend"
+sys.path.insert(0, str(backend))
+
+from main import app, lifespan  # noqa: E402
+from db.database import async_session  # noqa: E402
+from models.models import Project  # noqa: E402
+
+
+async def create():
+    async with lifespan(app):
+        async with async_session() as session:
+            session.add(Project(id="fixture", name="Desktop Fixture", status="active"))
+            await session.commit()
+
+
+asyncio.run(create())
