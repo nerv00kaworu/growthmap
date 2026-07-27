@@ -138,7 +138,8 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             env_path = os.environ["GROWTHMAP_ENV_FILE"]
             with open(env_path, encoding="utf-8") as handle:
                 self.assertIn('GROWTHMAP_LLM_KEY_NEVER_SENT_TO_BROWSER="test-secret-value"', handle.read())
-            self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
+            if os.name == "posix":
+                self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
 
     def test_manual_agent_session_lifecycle_never_dispatches_ai(self):
         with TestClient(app) as client:

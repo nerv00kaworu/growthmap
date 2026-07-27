@@ -73,7 +73,8 @@ class SecurityRemediationTest(unittest.TestCase):
             response = client.put(f"/api/providers/{provider['id']}/secret", json={"api_key": "not-returned"})
             self.assertEqual(response.status_code, 204)
             self.assertEqual(response.content, b"")
-            self.assertEqual(stat.S_IMODE(env_path.stat().st_mode), 0o600)
+            if os.name == "posix":
+                self.assertEqual(stat.S_IMODE(env_path.stat().st_mode), 0o600)
             self.assertNotIn("not-returned", client.get("/api/providers").text)
 
     def test_secret_env_key_namespace_rejects_dangerous_create_patch_and_write(self):
@@ -119,6 +120,7 @@ class SecurityRemediationTest(unittest.TestCase):
             valid = client.put(f"/api/providers/{provider_id}/secret", json={"api_key": "***"})
             self.assertEqual(valid.status_code, 204, valid.text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX launcher policy is covered by the Windows desktop preflight on Windows")
     def test_launcher_rejects_ipv6_loopback_forms_under_declared_policy(self):
         for host in ("::1", "[::1]"):
             env = os.environ.copy()
@@ -132,6 +134,7 @@ class SecurityRemediationTest(unittest.TestCase):
             response = client.get("/api", headers={"Host": "attacker.example"})
             self.assertEqual(response.status_code, 400)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX launcher policy is covered by the Windows desktop preflight on Windows")
     def test_launcher_refuses_non_loopback_before_prerequisites(self):
         env = os.environ.copy()
         env.update({"GROWTHMAP_BACK_HOST": "0.0.0.0", "GROWTHMAP_FRONT_HOST": "127.0.0.1"})
