@@ -31,6 +31,9 @@ jobs:
       - name: Verify unpacked resources and packaged sidecar
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
+      - name: Remove verified unpacked tree before clean NSIS rebuild
+        shell: pwsh
+        run: Remove-Item desktop/dist/win-unpacked -Recurse -Force -ErrorAction Stop
       - run: npm run dist:win
         working-directory: desktop
       - name: Assert NSIS artifact exists (never publish)

@@ -62,5 +62,7 @@ try {
   Write-Host 'Windows unpacked resource and authenticated sidecar smoke passed.'
 }
 finally {
-  Stop-Process $process -Force -ErrorAction SilentlyContinue
+  if (-not $process.HasExited) { Stop-Process $process -Force -ErrorAction SilentlyContinue }
+  try { $process.WaitForExit(10000) | Out-Null } catch {}
+  $process.Dispose()
 }
