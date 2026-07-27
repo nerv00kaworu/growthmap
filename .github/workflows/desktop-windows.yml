@@ -34,6 +34,7 @@ jobs:
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
       - name: Full packaged Electron renderer smoke
+        timeout-minutes: 3
         run: npm run renderer:e2e
         working-directory: desktop
         env:

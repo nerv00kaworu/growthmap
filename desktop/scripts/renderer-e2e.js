@@ -21,7 +21,7 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
     const deadline=Date.now()+120000;
     while(Date.now()<deadline){
       if(child.exitCode!==null)throw new Error(`Packaged Electron exited early (${child.exitCode}): ${output.slice(-2000)}`);
-      try{browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`);break;}catch{await sleep(500);}
+      try{browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`,{timeout:2000});break;}catch{await sleep(250);}
     }
     if(!browser)throw new Error(`Timed out connecting to packaged Electron renderer: ${output.slice(-2000)}`);
     let page;
