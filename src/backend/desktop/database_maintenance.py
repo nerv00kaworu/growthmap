@@ -87,8 +87,16 @@ def validate(path):
  connection,meta=_open_validated(path);connection.close();return meta
 
 def _durability(file,parent):
+ if os.name=="nt":
+  # Python's os.fsync on a read-only Windows descriptor can fail with EBADF.
+  # Open a writable, non-truncating handle and flush it through the Win32 API.
+  with file.open("r+b",buffering=0) as handle:
+   import msvcrt
+   raw=msvcrt.get_osfhandle(handle.fileno())
+   if not ctypes.windll.kernel32.FlushFileBuffers(ctypes.c_void_p(raw)):
+    raise ctypes.WinError()
+  return {"fileFlush":"FlushFileBuffers","directoryFlush":"unsupported-windows-best-effort"}
  with file.open("rb") as handle: os.fsync(handle.fileno())
- if os.name=="nt": return {"fileFsync":True,"directoryFsync":"unsupported-windows-best-effort"}
  fd=os.open(parent,os.O_RDONLY)
  try: os.fsync(fd)
  finally: os.close(fd)
