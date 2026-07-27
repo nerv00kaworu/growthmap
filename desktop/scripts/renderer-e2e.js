@@ -2,7 +2,7 @@
 const fs=require('node:fs');
 const net=require('node:net');
 const path=require('node:path');
-const {spawn}=require('node:child_process');
+const {spawn,spawnSync}=require('node:child_process');
 const {chromium}=require('playwright-core');
 if(process.platform!=='win32')throw new Error('Packaged renderer smoke must run on Windows');
 if(process.env.CI!=='true')throw new Error('Renderer E2E debug transport is restricted to CI');
@@ -34,7 +34,10 @@ function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
     if(!output.includes('GROWTHMAP_RENDERER_READY'))throw new Error('Packaged app did not emit renderer-ready marker');
     console.log(`Packaged Electron renderer smoke passed; screenshot=${screenshot}`);
   } finally {
-    if(browser)await browser.close().catch(()=>{});
-    if(child.exitCode===null)child.kill();
+    if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(3000)]);
+    if(child.exitCode===null){
+      spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true,timeout:10000});
+      child.kill();
+    }
   }
-})().catch(e=>{console.error(e.stack||e);process.exitCode=1;});
+})().then(()=>process.exit(0)).catch(e=>{console.error(e.stack||e);process.exit(1);});
