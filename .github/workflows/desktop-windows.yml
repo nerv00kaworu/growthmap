@@ -38,4 +38,5 @@ jobs:
         run: if (-not (Get-ChildItem desktop/dist/GrowthMap-Setup-*.exe)) { throw "NSIS artifact missing" }
       - name: Installer GUI lifecycle status
         shell: pwsh
-        run: Write-Host "[blocked: interactive Windows runner required for silent install/app lifecycle/uninstall evidence]"
+        run: |
+          Write-Host "[blocked: interactive Windows runner required for silent install/app lifecycle/uninstall evidence]"
