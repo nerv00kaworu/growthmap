@@ -19,6 +19,8 @@ src/backend/**/__pycache__/
 # Env & secrets
 .env
 .env.*
+!.env.example
+!src/backend/.env.example
 
 # Logs
 *.log
@@ -36,3 +38,31 @@ Thumbs.db
 
 # TypeScript build cache
 tsconfig.tsbuildinfo
+
+# Local runtime and release-working artifacts (never package these)
+.runtime-logs/
+backups/
+memory/
+reports/
+state/
+dist/
+
+# The player-runtime implementation was split to abyss-bureau.
+# Keep historical/export residue out of the authoring-editor package.
+assets/
+docs/CH1-ART-BIBLE-v1.md
+docs/GAME-UI-ENGINEERING-CONTRACT-v1.0.md
+docs/GATE-A-THREAT-MODEL-v1.md
+scripts/simulate_ch1_v02.py
+scripts/backfill_abyss_postsplit_canon_*.py
+src/backend/assets/
+src/backend/content/
+src/backend/domain/
+src/backend/gameplay/
+src/backend/backups/
+src/backend/idempotency.py
+src/backend/scripts/
+
+# SQLite and ad-hoc database copies whose names do not necessarily end in .db
+src/backend/growthmap.db*
+src/backend/*immutable=1&mode=ro

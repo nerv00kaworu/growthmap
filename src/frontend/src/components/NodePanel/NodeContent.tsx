@@ -2,11 +2,20 @@
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "@/lib/api";
-import type { GNode } from "@/lib/types";
+import type { GNode, NodeEditDraft, NodeFormalFieldKey } from "@/lib/types";
 import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
 import { useStore } from "@/stores/useStore";
 
 const NODE_TYPES = ["idea", "concept", "task", "question", "decision", "risk", "resource", "note", "module"];
+const FORMAL_TEXT_FIELDS: { key: NodeFormalFieldKey; label: string }[] = [
+  { key: "description", label: "描述" },
+  { key: "rules_text", label: "規則" },
+  { key: "constraints_text", label: "限制" },
+  { key: "examples_text", label: "範例" },
+  { key: "questions_text", label: "問題／驗收" },
+  { key: "decision_notes", label: "決策紀錄" },
+];
+
 const BLOCK_TYPE_LABELS: Record<string, string> = {
   note: "筆記",
   spec: "規格",
@@ -24,6 +33,8 @@ interface NodeContentProps {
   editing: boolean;
   editSummary: string;
   setEditSummary: Dispatch<SetStateAction<string>>;
+  editFields: NodeEditDraft;
+  setEditFields: Dispatch<SetStateAction<NodeEditDraft>>;
   newChildTitle: string;
   setNewChildTitle: Dispatch<SetStateAction<string>>;
   onAddChild: (nodeType?: string) => Promise<void>;
@@ -149,6 +160,8 @@ export function NodeContent({
   editing,
   editSummary,
   setEditSummary,
+  editFields,
+  setEditFields,
   newChildTitle,
   setNewChildTitle,
   onAddChild,
@@ -344,7 +357,7 @@ export function NodeContent({
         </div>
       )}
 
-      <Section title="內容工作區" subtitle="內容優先：摘要 → 內容區塊 → 已綁定文件。" tone={editing ? "edit" : "neutral"}>
+      <Section title="內容工作區" subtitle="正式欄位與內容區塊分開保存；此處不會自動遷移或複製內容。" tone={editing ? "edit" : "neutral"}>
         <div className="space-y-4">
           <div>
             <label className="text-sm text-gray-500 uppercase tracking-wider">成熟度</label>
@@ -382,8 +395,74 @@ export function NodeContent({
             )}
           </div>
 
-          <div className="space-y-3">
-            <label className="text-sm text-gray-500 uppercase tracking-wider">📄 內容區塊</label>
+          <div className="space-y-3 rounded-xl border border-gray-700/80 bg-gray-900/35 p-3">
+            <div>
+              <label className="text-sm text-gray-300 uppercase tracking-wider">節點正式欄位</label>
+              <p className="mt-1 text-xs text-gray-500">直接對應後端 nodes 欄位；空值仍會明示，不會偽裝成內容區塊。</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <label className="text-xs text-gray-500">節點狀態
+                {editing ? (
+                  <input value={editFields.status} onChange={(e) => setEditFields((prev) => ({ ...prev, status: e.target.value }))} className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200" />
+                ) : <div className="mt-1 text-sm text-gray-300">{selectedNode.status || "（未填）"}</div>}
+              </label>
+              <label className="text-xs text-gray-500">工作流狀態
+                {editing ? (
+                  <input value={editFields.workflow_status} onChange={(e) => setEditFields((prev) => ({ ...prev, workflow_status: e.target.value }))} className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200" />
+                ) : <div className="mt-1 text-sm text-gray-300">{selectedNode.workflow_status || "（未填）"}</div>}
+              </label>
+              <label className="text-xs text-gray-500">優先級
+                {editing ? (
+                  <input type="number" value={editFields.priority} onChange={(e) => setEditFields((prev) => ({ ...prev, priority: Number(e.target.value) }))} className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200" />
+                ) : <div className="mt-1 text-sm text-gray-300">{selectedNode.priority ?? "（未填）"}</div>}
+              </label>
+              <label className="text-xs text-gray-500">信心值
+                {editing ? (
+                  <input type="number" min="0" max="1" step="0.01" value={editFields.confidence} onChange={(e) => setEditFields((prev) => ({ ...prev, confidence: Number(e.target.value) }))} className="mt-1 w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-200" />
+                ) : <div className="mt-1 text-sm text-gray-300">{selectedNode.confidence ?? "（未填）"}</div>}
+              </label>
+            </div>
+
+            {FORMAL_TEXT_FIELDS.map(({ key, label }) => (
+              <div key={key}>
+                <label className="text-xs text-gray-500">{label}</label>
+                {editing ? (
+                  <textarea
+                    value={editFields[key]}
+                    onChange={(e) => setEditFields((prev) => ({ ...prev, [key]: e.target.value }))}
+                    className="mt-1 min-h-[88px] w-full rounded border border-gray-700 bg-gray-900 p-2 text-sm leading-6 text-gray-200"
+                  />
+                ) : (
+                  <div className="mt-1 rounded-lg border border-gray-800 bg-gray-950/40 px-3 py-2 text-sm leading-6 text-gray-300 whitespace-pre-wrap">
+                    {selectedNode[key] || "（未填）"}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            <div>
+              <label className="text-xs text-gray-500">檔案路徑（每行一筆）</label>
+              {editing ? (
+                <textarea
+                  value={editFields.file_paths.join("\n")}
+                  onChange={(e) => setEditFields((prev) => ({ ...prev, file_paths: e.target.value.split("\n").map((path) => path.trim()).filter(Boolean) }))}
+                  className="mt-1 min-h-[72px] w-full rounded border border-gray-700 bg-gray-900 p-2 font-mono text-xs text-gray-200"
+                  placeholder="（未填）"
+                />
+              ) : (selectedNode.file_paths || []).length > 0 ? (
+                <ul className="mt-1 space-y-1 rounded-lg border border-gray-800 bg-gray-950/40 px-3 py-2 font-mono text-xs text-gray-300">
+                  {(selectedNode.file_paths || []).map((path, index) => <li key={`${path}-${index}`} className="break-all">{path}</li>)}
+                </ul>
+              ) : <div className="mt-1 text-sm text-gray-500">（未填）</div>}
+            </div>
+          </div>
+
+          <div className="space-y-3 border-t border-gray-800 pt-4">
+            <div>
+              <label className="text-sm text-gray-500 uppercase tracking-wider">📄 內容區塊</label>
+              <p className="mt-1 text-xs text-gray-600">獨立的 content_blocks 記錄，不與上方正式欄位互相轉換。</p>
+            </div>
 
             {editing && (
               <div className="rounded-xl border border-blue-900/40 bg-blue-950/20 p-3 space-y-2">

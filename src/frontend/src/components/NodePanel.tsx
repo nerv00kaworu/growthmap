@@ -7,7 +7,7 @@ import { NodeContent } from "./NodePanel/NodeContent";
 import { NodeAI } from "./NodePanel/NodeAI";
 import { NodeHistorySection } from "./NodePanel/NodeHistory";
 import { NodeChat } from "./NodePanel/NodeChat";
-import type { GNode, GrowthMode, Maturity } from "@/lib/types";
+import type { GNode, GrowthMode, Maturity, NodeEditDraft } from "@/lib/types";
 
 interface SectionProps {
   title: string;
@@ -63,6 +63,11 @@ export function NodePanel() {
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editSummary, setEditSummary] = useState("");
+  const [editFields, setEditFields] = useState<NodeEditDraft>({
+    description: "", rules_text: "", constraints_text: "", examples_text: "",
+    questions_text: "", decision_notes: "", status: "active", workflow_status: "draft",
+    priority: 0, confidence: 0.5, file_paths: [],
+  });
   const [aiInstruction, setAiInstruction] = useState("");
   const [aiMode, setAiMode] = useState<GrowthMode>("explore");
 
@@ -90,11 +95,24 @@ export function NodePanel() {
   const startEdit = () => {
     setEditTitle(selectedNode.title);
     setEditSummary(selectedNode.summary || "");
+    setEditFields({
+      description: selectedNode.description || "",
+      rules_text: selectedNode.rules_text || "",
+      constraints_text: selectedNode.constraints_text || "",
+      examples_text: selectedNode.examples_text || "",
+      questions_text: selectedNode.questions_text || "",
+      decision_notes: selectedNode.decision_notes || "",
+      status: selectedNode.status || "active",
+      workflow_status: selectedNode.workflow_status || "draft",
+      priority: selectedNode.priority ?? 0,
+      confidence: selectedNode.confidence ?? 0.5,
+      file_paths: selectedNode.file_paths || [],
+    });
     setEditing(true);
   };
 
   const saveEdit = async () => {
-    await updateNode(selectedNode.id, { title: editTitle, summary: editSummary });
+    await updateNode(selectedNode.id, { title: editTitle, summary: editSummary, ...editFields });
     setEditing(false);
   };
 
@@ -142,6 +160,8 @@ export function NodePanel() {
             editing={editing}
             editSummary={editSummary}
             setEditSummary={setEditSummary}
+            editFields={editFields}
+            setEditFields={setEditFields}
             newChildTitle={newChildTitle}
             setNewChildTitle={setNewChildTitle}
             onAddChild={handleAddChild}

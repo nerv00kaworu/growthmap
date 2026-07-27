@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "package": {
+    "name": "growthmap-authoring",
+    "version": "0.1.0-authoring.1",
+    "releaseStatus": "release"
+  },
+  "boundary": {
+    "includes": [
+      "GrowthMap authoring/editor frontend and API",
+      "project tree editing, authoring exports, reviewable AI-assisted workflows"
+    ],
+    "excludes": [
+      "Abyss Bureau player Web/API runtime",
+      "player gameplay content/replay/release tooling",
+      "player database, payment, PvP, runtime LLM, runtime image generation",
+      "local databases, backups, logs, runtime state, secrets and historical player artifacts"
+    ]
+  },
+  "source": {
+    "baseCommit": "af6947668e973e54b77a332638860bcc71c38de4",
+    "baseCommitTimestamp": "2026-07-13T16:32:18+08:00",
+    "releaseTag": "growthmap-authoring-v0.1.0-authoring.1",
+    "releaseCommit": "Resolved by immutable annotated tag growthmap-authoring-v0.1.0-authoring.1."
+  },
+  "build": {
+    "node": "22.x",
+    "python": "3.12",
+    "frontendCommands": [
+      "npm ci",
+      "npm run lint",
+      "npm run typecheck",
+      "npm run build"
+    ],
+    "backendCommands": [
+      "pip install -r requirements.lock",
+      "python -m compileall -q -x 'venv|__pycache__' .",
+      "DATABASE_URL='sqlite+aiosqlite:///:memory:' python -m unittest discover -s tests -v"
+    ],
+    "launcher": "./scripts/start_growthmap.sh",
+    "launcherDatabasePolicy": "DATABASE_URL is required explicitly; launcher defaults to loopback and does not install dependencies or kill listeners."
+  },
+  "integrity": {
+    "src/frontend/package-lock.json": "a6c9500f2663935fb4d03904e65922b456dab9f40af4b2ad4ca6692be0a6792c",
+    "src/backend/requirements.txt": "c7cbf926404d4bddc810076b63c1fcd298b8bdb2d70c62f1ee8e3ee28eec8c30",
+    "src/backend/requirements.lock": "ba60c1bdefd974682cd055a04d49ade04a6191bfa0906fd92dc5957e3347fa89",
+    ".gitignore": "5e7d233a8e008305ace277c678d5fed9831322a68006e8a2d06341475a3dde2d",
+    "README.md": "b819eaa5eeb8f29850a901e84e07a1a6d00541e94e06d2b27adec52908842483",
+    "CHANGELOG.md": "48118c657ed83b7bff210a014575900efb63037c34d6d74961bc16822c4cfa1d",
+    "docs/RELEASE-CONVERGENCE-CHECKLIST-v1.md": "2ab318a513a85e4529899708563a02675bb67e346281c6154f42c3edde18ba41"
+  },
+  "releaseGates": {
+    "required": [
+      "all intended source and documentation are reviewed and tracked",
+      "working tree is clean after release commit",
+      "frontend lint/typecheck/build pass from a clean checkout",
+      "backend compile/tests pass against isolated in-memory SQLite",
+      "launcher smoke passes with an explicit temporary DATABASE_URL",
+      "archive file list and SHA-256 are recorded before distribution"
+    ],
+    "notYetSatisfied": []
+  }
+}

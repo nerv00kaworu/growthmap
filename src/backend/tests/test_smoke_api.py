@@ -5,6 +5,7 @@ import unittest
 
 # database.py creates its engine during import. This must happen before main is imported
 # so the test can never read or mutate the developer's local growthmap.db.
+# Override rather than setdefault: tests must never inherit an operator/developer DB URL.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["GROWTHMAP_ENV_FILE"] = os.path.join(tempfile.gettempdir(), "growthmap-test.env")
 
@@ -13,6 +14,22 @@ from main import app
 
 
 class GrowthMapApiSmokeTest(unittest.TestCase):
+    @classmethod
+    def tearDownClass(cls):
+        """Release test runs must close the isolated engine cleanly."""
+        import asyncio
+        from db.database import engine
+        asyncio.run(engine.dispose())
+
+    def test_authoring_health_and_openapi_exclude_player_runtime(self):
+        with TestClient(app) as client:
+            health = client.get("/api/health/deep")
+            self.assertEqual(health.status_code, 200)
+            self.assertEqual(health.json(), {"status": "ok", "surface": "authoring"})
+            paths = client.get("/openapi.json").json()["paths"]
+            self.assertTrue("/api/projects" in paths)
+            self.assertFalse(any(path.startswith("/api/player") for path in paths))
+
     def test_project_lifecycle_basics(self):
         with TestClient(app) as client:
             response = client.get("/api")
@@ -42,6 +59,55 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(nodes[0]["id"], project["root_node_id"])
             subtree = client.get(f"/api/nodes/{project['root_node_id']}/subtree").json()
             self.assertEqual(subtree["project_id"], project["id"])
+
+    def test_node_formal_fields_round_trip_and_subtree_visibility(self):
+        with TestClient(app) as client:
+            project = client.post("/api/projects", json={"name": "Formal fields"}).json()
+            node_id = project["root_node_id"]
+            payload = {
+                "description": "正式描述",
+                "rules_text": "正式規則",
+                "constraints_text": "正式限制",
+                "examples_text": "正式範例",
+                "questions_text": "正式問題",
+                "decision_notes": "正式決策",
+                "status": "active",
+                "workflow_status": "review",
+                "priority": 2,
+                "confidence": 0.86,
+                "file_paths": ["docs/spec.md", "assets/map.json"],
+            }
+            patched = client.patch(f"/api/nodes/{node_id}", json=payload)
+            self.assertEqual(patched.status_code, 200)
+            self.assertEqual({key: patched.json()[key] for key in payload}, payload)
+
+            node = client.get(f"/api/nodes/{node_id}").json()
+            subtree = client.get(f"/api/nodes/{node_id}/subtree").json()
+            for key, value in payload.items():
+                self.assertEqual(node[key], value)
+                self.assertEqual(subtree[key], value)
+            self.assertEqual(subtree["content_blocks"], [])
+
+    def test_export_import_preserves_all_formal_node_fields(self):
+        """Canonical authoring JSON round-trip must not silently drop editor fields."""
+        with TestClient(app) as client:
+            project = client.post("/api/projects", json={"name": "Export formal fields"}).json()
+            node_id = project["root_node_id"]
+            payload = {
+                "description": "正式描述", "rules_text": "規則", "constraints_text": "限制",
+                "examples_text": "範例", "questions_text": "問題", "decision_notes": "裁決",
+                "status": "paused", "maturity": "stable", "workflow_status": "review",
+                "priority": 7, "confidence": 0.91, "file_paths": ["docs/a.md", "src/b.py"],
+                "tags": ["release", "canonical"],
+            }
+            self.assertEqual(client.patch(f"/api/nodes/{node_id}", json=payload).status_code, 200)
+            exported = client.get(f"/api/projects/{project['id']}/export-json")
+            self.assertEqual(exported.status_code, 200, exported.text)
+            imported = client.post("/api/projects/import-json", json=exported.json())
+            self.assertEqual(imported.status_code, 201, imported.text)
+            restored = client.get(f"/api/nodes/{imported.json()['root_node_id']}").json()
+            for key, value in payload.items():
+                self.assertEqual(restored[key], value, key)
 
     def test_env_backed_provider_profile_never_returns_a_secret(self):
         with TestClient(app) as client:
@@ -156,6 +222,107 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             tree_edge = next(item for item in client.get(f"/api/projects/{project['id']}/edges").json() if item["relation_type"] == "child_of")
             self.assertEqual(client.delete(f"/api/edges/{tree_edge['id']}").status_code, 400)
 
+    def test_legacy_null_edge_fields_are_tolerated(self):
+        """歷史 NULL 欄位不得再讓 edges/mainline-path 回傳 500。"""
+        with TestClient(app) as client:
+            project = client.post("/api/projects", json={"name": "Legacy graph project"}).json()
+            root_id = project["root_node_id"]
+            first = client.post(
+                f"/api/projects/{project['id']}/nodes",
+                json={"title": "First", "parent_id": root_id},
+            ).json()
+            second = client.post(
+                f"/api/projects/{project['id']}/nodes",
+                json={"title": "Second", "parent_id": root_id},
+            ).json()
+
+            # 用測試專用 session 模擬舊 DB 的空白 weight/note；主線唯一性另由 DB 約束測試。
+            from db.database import async_session
+            from sqlalchemy import update
+            from models.models import Edge
+            import asyncio
+
+            async def seed_legacy_rows():
+                async with async_session() as session:
+                    await session.execute(
+                        update(Edge)
+                        .where(
+                            Edge.project_id == project["id"],
+                            Edge.from_node_id == root_id,
+                            Edge.relation_type == "child_of",
+                        )
+                        .values(weight=None, note=None)
+                    )
+                    await session.commit()
+
+            asyncio.run(seed_legacy_rows())
+
+            edges = client.get(f"/api/projects/{project['id']}/edges")
+            self.assertEqual(edges.status_code, 200, edges.text)
+            tree_edges = [row for row in edges.json() if row["relation_type"] == "child_of"]
+            self.assertEqual(len(tree_edges), 2)
+            self.assertTrue(all(row["weight"] == 1.0 and row["note"] == "" for row in tree_edges))
+
+            path = client.get(f"/api/projects/{project['id']}/mainline-path")
+            self.assertEqual(path.status_code, 200, path.text)
+            self.assertEqual([row["id"] for row in path.json()["path"]], [root_id, first["id"]])
+            self.assertNotEqual(first["id"], second["id"])
+
+    def test_import_normalizes_duplicate_mainlines_and_legacy_null_fields(self):
+        with TestClient(app) as client:
+            payload = {
+                "project": {"name": "Imported graph", "root_node_id": "old-root"},
+                "nodes": [
+                    {"id": "old-root", "title": "Root"},
+                    {"id": "old-a", "title": "A"},
+                    {"id": "old-b", "title": "B"},
+                ],
+                "edges": [
+                    {"from_node_id": "old-root", "to_node_id": "old-a", "relation_type": "child_of", "is_mainline": True, "weight": None, "note": None},
+                    {"from_node_id": "old-root", "to_node_id": "old-b", "relation_type": "child_of", "is_mainline": True, "weight": None, "note": None},
+                ],
+                "content_blocks": [],
+            }
+            imported = client.post("/api/projects/import-json", json=payload)
+            self.assertEqual(imported.status_code, 201, imported.text)
+            project_id = imported.json()["id"]
+            edges = client.get(f"/api/projects/{project_id}/edges").json()
+            self.assertEqual(len(edges), 2)
+            self.assertEqual(sum(row["is_mainline"] for row in edges), 1)
+            self.assertTrue(all(row["weight"] == 1.0 and row["note"] == "" for row in edges))
+            self.assertEqual(client.get(f"/api/projects/{project_id}/mainline-path").status_code, 200)
+
+    def test_database_rejects_a_new_duplicate_mainline(self):
+        with TestClient(app) as client:
+            project = client.post("/api/projects", json={"name": "Mainline constraint"}).json()
+            root_id = project["root_node_id"]
+            client.post(f"/api/projects/{project['id']}/nodes", json={"title": "First", "parent_id": root_id})
+            second = client.post(f"/api/projects/{project['id']}/nodes", json={"title": "Second", "parent_id": root_id}).json()
+
+            # 繞過 API 的直接 SQL 寫入也必須被 DB trigger／partial unique index 阻擋。
+            from db.database import async_session
+            from sqlalchemy import update
+            from sqlalchemy.exc import IntegrityError
+            from models.models import Edge
+            import asyncio
+
+            async def force_duplicate():
+                async with async_session() as session:
+                    edge = (await session.execute(
+                        __import__("sqlalchemy").select(Edge).where(
+                            Edge.to_node_id == second["id"], Edge.relation_type == "child_of"
+                        )
+                    )).scalar_one()
+                    edge.is_mainline = True
+                    try:
+                        await session.commit()
+                    except IntegrityError:
+                        await session.rollback()
+                        return True
+                    return False
+
+            self.assertTrue(asyncio.run(force_duplicate()))
+
     def test_branch_create_compare_merge_and_archive(self):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Branch project"}).json()
@@ -164,6 +331,21 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 f"/api/projects/{project['id']}/nodes",
                 json={"title": "Source", "parent_id": root_id},
             ).json()
+            source_main = client.post(
+                f"/api/projects/{project['id']}/nodes",
+                json={"title": "Source main", "parent_id": child["id"]},
+            ).json()
+            source_side = client.post(
+                f"/api/projects/{project['id']}/nodes",
+                json={"title": "Source side", "parent_id": child["id"]},
+            ).json()
+            formal_payload = {
+                "workflow_status": "review", "file_paths": ["docs/branch.md"],
+                "priority": 4, "confidence": 0.78, "rules_text": "branch rule",
+                "constraints_text": "branch constraint", "examples_text": "branch example",
+                "questions_text": "branch question", "decision_notes": "branch decision",
+            }
+            self.assertEqual(client.patch(f"/api/nodes/{child['id']}", json=formal_payload).status_code, 200)
 
             created = client.post(
                 f"/api/projects/{project['id']}/branches",
@@ -176,6 +358,13 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(subtree.status_code, 200)
             branch_root = subtree.json()["tree"]
             self.assertEqual(branch_root["title"], "Source")
+            for key, value in formal_payload.items():
+                self.assertEqual(branch_root[key], value, key)
+            branch_edges = client.get(f"/api/projects/{project['id']}/edges?relation_type=child_of").json()
+            copied_child_edges = [row for row in branch_edges if row["from_node_id"] == branch_root["id"]]
+            self.assertEqual(sum(row["is_mainline"] for row in copied_child_edges), 1)
+            self.assertEqual({row["title"] for row in branch_root["children"]}, {"Source main", "Source side"})
+            self.assertNotEqual(source_main["id"], source_side["id"])
 
             added = client.post(
                 f"/api/projects/{project['id']}/nodes",
@@ -189,11 +378,11 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(added.json()["branch_id"], branch["id"])
 
             refreshed = client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
-            self.assertEqual(refreshed["children"][0]["title"], "Branch-only child")
+            self.assertIn("Branch-only child", {row["title"] for row in refreshed["children"]})
 
             comparison = client.get(f"/api/branches/{branch['id']}/compare")
             self.assertEqual(comparison.status_code, 200)
-            self.assertEqual(comparison.json()["diff"]["branch_node_count"], 2)
+            self.assertEqual(comparison.json()["diff"]["branch_node_count"], 4)
 
             invalid_target = client.post(
                 f"/api/branches/{branch['id']}/merge",

@@ -615,7 +615,21 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
             "node_type": n.node_type,
             "status": n.status,
             "maturity": n.maturity,
+            "priority": n.priority if n.priority is not None else 0,
+            "confidence": n.confidence if n.confidence is not None else 0.5,
+            "description": n.description or "",
+            "rules_text": n.rules_text or "",
+            "constraints_text": n.constraints_text or "",
+            "examples_text": n.examples_text or "",
+            "questions_text": n.questions_text or "",
+            "decision_notes": n.decision_notes or "",
+            "workflow_status": n.workflow_status or "draft",
             "tags": n.tags or [],
+            "file_paths": n.file_paths or [],
+            "created_by": n.created_by or "",
+            "last_edited_by": n.last_edited_by or "",
+            "position_x": n.position_x if n.position_x is not None else 0,
+            "position_y": n.position_y if n.position_y is not None else 0,
             "meta": edge_meta.get(nid, {}),
             "content_blocks": blocks_by_node_id.get(nid, []),
             "ancestor_path": current_ancestor_path,
@@ -629,7 +643,24 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
 
 # ─── Edges ───
 
-GRAPH_RELATION_TYPES = {"depends_on", "contradicts", "references", "supports", "blocks", "relates_to"}
+GRAPH_RELATION_TYPES = {
+    "depends_on", "contradicts", "references", "supports", "blocks", "relates_to",
+    "decomposes", "interfaces_with", "supersedes", "validates",
+}
+
+
+async def demote_mainline_siblings(db: AsyncSession, parent_id: str, *, except_edge_id: str | None = None):
+    """同一父節點只能有一條 child_of 主線；所有寫入路徑共用此操作。"""
+    query = update(Edge).where(
+        Edge.from_node_id == parent_id,
+        Edge.relation_type == "child_of",
+        Edge.is_mainline == True,
+    )
+    if except_edge_id:
+        query = query.where(Edge.id != except_edge_id)
+    await db.execute(query.values(is_mainline=False))
+    # 先把降級送到 DB，避免 partial unique index／trigger 在同交易的新主線寫入時誤判。
+    await db.flush()
 
 @router.get("/projects/{project_id}/edges", response_model=list[EdgeOut])
 async def list_project_edges(project_id: str, relation_type: str | None = None, db: AsyncSession = Depends(get_db)):
@@ -664,14 +695,7 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
 
     # If new edge is marked as mainline, demote siblings first
     if is_mainline and payload.get("relation_type", "child_of") == "child_of":
-        await db.execute(
-            update(Edge)
-            .where(
-                Edge.from_node_id == payload["from_node_id"],
-                Edge.relation_type == "child_of"
-            )
-            .values(is_mainline=False)
-        )
+        await demote_mainline_siblings(db, payload["from_node_id"])
 
     edge = Edge(
         project_id=from_node.project_id,
@@ -714,15 +738,7 @@ async def promote_mainline(edge_id: str, db: AsyncSession = Depends(get_db)):
     if edge.relation_type != "child_of":
         raise HTTPException(400, "Only child_of edges can be promoted")
 
-    await db.execute(
-        update(Edge)
-        .where(
-            Edge.from_node_id == edge.from_node_id,
-            Edge.relation_type == "child_of"
-        )
-        .values(is_mainline=False)
-    )
-
+    await demote_mainline_siblings(db, edge.from_node_id, except_edge_id=edge.id)
     edge.is_mainline = True
     await db.commit()
     await db.refresh(edge)
@@ -743,11 +759,7 @@ async def promote_child_mainline(parent_id: str, child_id: str, db: AsyncSession
     if not edge:
         raise HTTPException(404, "Edge not found")
 
-    await db.execute(
-        update(Edge)
-        .where(Edge.from_node_id == parent_id, Edge.relation_type == "child_of")
-        .values(is_mainline=False)
-    )
+    await demote_mainline_siblings(db, parent_id, except_edge_id=edge.id)
     edge.is_mainline = True
     await db.commit()
     return {"ok": True}
@@ -901,9 +913,10 @@ async def get_mainline_path(project_id: str, db: AsyncSession = Depends(get_db))
         mainline_edge_result = await db.execute(
             select(Edge).where(
                 Edge.from_node_id == current_id, Edge.relation_type == "child_of", Edge.is_mainline == True,
-            )
+            ).order_by(Edge.created_at, Edge.id).limit(1)
         )
-        mainline_edge = mainline_edge_result.scalar_one_or_none()
+        # 歷史資料若曾留下多條主線，先採最早一條穩定降級，避免整個 API 500。
+        mainline_edge = mainline_edge_result.scalars().first()
         current_id = mainline_edge.to_node_id if mainline_edge else None
 
     return {"path": path}
@@ -1339,8 +1352,21 @@ async def export_project_json(project_id: str, db: AsyncSession = Depends(get_db
                 "node_type": n.node_type,
                 "status": n.status,
                 "maturity": n.maturity,
-                "tags": n.tags,
-                "description": n.description,
+                "priority": n.priority,
+                "confidence": n.confidence,
+                "tags": n.tags or [],
+                "description": n.description or "",
+                "rules_text": n.rules_text or "",
+                "constraints_text": n.constraints_text or "",
+                "examples_text": n.examples_text or "",
+                "questions_text": n.questions_text or "",
+                "decision_notes": n.decision_notes or "",
+                "workflow_status": n.workflow_status or "draft",
+                "file_paths": n.file_paths or [],
+                "created_by": n.created_by or "human",
+                "last_edited_by": n.last_edited_by or "human",
+                "position_x": n.position_x if n.position_x is not None else 0,
+                "position_y": n.position_y if n.position_y is not None else 0,
                 "created_at": n.created_at.isoformat() if n.created_at else None,
                 "updated_at": n.updated_at.isoformat() if n.updated_at else None,
             }
@@ -1352,6 +1378,8 @@ async def export_project_json(project_id: str, db: AsyncSession = Depends(get_db
                 "from_node_id": str(e.from_node_id),
                 "to_node_id": str(e.to_node_id),
                 "relation_type": e.relation_type,
+                "weight": 1.0 if e.weight is None else e.weight,
+                "note": "" if e.note is None else e.note,
                 "is_mainline": e.is_mainline,
             }
             for e in edges
@@ -1411,9 +1439,21 @@ async def import_project_json(data: dict = Body(...), db: AsyncSession = Depends
             node_type=n.get("node_type", "idea"),
             status=n.get("status", "active"),
             maturity=n.get("maturity", "seed"),
-            tags=n.get("tags", []),
-            description=n.get("description"),
-            created_by="import",
+            priority=n.get("priority", 0),
+            confidence=n.get("confidence", 0.5),
+            tags=n.get("tags") or [],
+            description=n.get("description") or "",
+            rules_text=n.get("rules_text") or "",
+            constraints_text=n.get("constraints_text") or "",
+            examples_text=n.get("examples_text") or "",
+            questions_text=n.get("questions_text") or "",
+            decision_notes=n.get("decision_notes") or "",
+            workflow_status=n.get("workflow_status") or "draft",
+            file_paths=n.get("file_paths") or [],
+            created_by=n.get("created_by") or "import",
+            last_edited_by=n.get("last_edited_by") or "import",
+            position_x=n.get("position_x") if n.get("position_x") is not None else 0,
+            position_y=n.get("position_y") if n.get("position_y") is not None else 0,
         )
         db.add(new_node)
         await db.flush()
@@ -1423,17 +1463,27 @@ async def import_project_json(data: dict = Body(...), db: AsyncSession = Depends
     if old_root_id and old_root_id in id_map:
         new_project.root_node_id = id_map[old_root_id]
 
+    # 匯入時每個父節點只接受第一條宣告主線；重複旗標安全降級為非主線。
+    imported_mainline_parents: set[str] = set()
     for e in edges_data:
         from_id = id_map.get(e.get("from_node_id", ""))
         to_id = id_map.get(e.get("to_node_id", ""))
         if not from_id or not to_id:
             continue
+        relation_type = e.get("relation_type", "child_of")
+        is_mainline = bool(e.get("is_mainline", False)) and relation_type == "child_of"
+        if is_mainline and from_id in imported_mainline_parents:
+            is_mainline = False
+        elif is_mainline:
+            imported_mainline_parents.add(from_id)
         new_edge = Edge(
             project_id=new_project.id,
             from_node_id=from_id,
             to_node_id=to_id,
-            relation_type=e.get("relation_type", "child_of"),
-            is_mainline=e.get("is_mainline", False),
+            relation_type=relation_type,
+            weight=1.0 if e.get("weight") is None else e.get("weight"),
+            note="" if e.get("note") is None else e.get("note"),
+            is_mainline=is_mainline,
         )
         db.add(new_edge)
 
@@ -1578,8 +1628,11 @@ async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = 
     )
     all_edges = edges_result.scalars().all()
     child_map_all: dict[str, list[str]] = {}
+    child_mainline_all: dict[tuple[str, str], bool] = {}
     for e in all_edges:
-        child_map_all.setdefault(str(e.from_node_id), []).append(str(e.to_node_id))
+        from_id, to_id = str(e.from_node_id), str(e.to_node_id)
+        child_map_all.setdefault(from_id, []).append(to_id)
+        child_mainline_all[(from_id, to_id)] = bool(e.is_mainline)
 
     # Collect all nodes in subtree
     subtree_ids: list[str] = []
@@ -1629,7 +1682,12 @@ async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = 
             decision_notes=old_node.decision_notes,
             priority=old_node.priority,
             confidence=old_node.confidence,
+            workflow_status=old_node.workflow_status,
+            file_paths=old_node.file_paths or [],
             created_by="branch",
+            last_edited_by=old_node.last_edited_by or "branch",
+            position_x=old_node.position_x,
+            position_y=old_node.position_y,
             branch_id=branch.id,
         )
         db.add(copied)
@@ -1657,7 +1715,8 @@ async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = 
                 from_node_id=id_map[old_from],
                 to_node_id=id_map[old_to],
                 relation_type="child_of",
-                is_mainline=True,
+                # 分支需保留來源樹的主線語意，不能把每個複製子節點都升為主線。
+                is_mainline=child_mainline_all.get((old_from, old_to), False),
             ))
 
     db.add(ActionLog(
@@ -1742,7 +1801,21 @@ async def get_branch_subtree(branch_id: str, db: AsyncSession = Depends(get_db))
             "node_type": n.node_type,
             "status": n.status,
             "maturity": n.maturity,
+            "priority": n.priority if n.priority is not None else 0,
+            "confidence": n.confidence if n.confidence is not None else 0.5,
+            "description": n.description or "",
+            "rules_text": n.rules_text or "",
+            "constraints_text": n.constraints_text or "",
+            "examples_text": n.examples_text or "",
+            "questions_text": n.questions_text or "",
+            "decision_notes": n.decision_notes or "",
+            "workflow_status": n.workflow_status or "draft",
             "tags": n.tags or [],
+            "file_paths": n.file_paths or [],
+            "created_by": n.created_by or "",
+            "last_edited_by": n.last_edited_by or "",
+            "position_x": n.position_x if n.position_x is not None else 0,
+            "position_y": n.position_y if n.position_y is not None else 0,
             "meta": {},
             "content_blocks": [],
             "branch_id": n.branch_id,

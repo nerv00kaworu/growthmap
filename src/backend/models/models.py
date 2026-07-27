@@ -52,6 +52,8 @@ class Node(Base):
     questions_text = Column(Text, default="")
     decision_notes = Column(Text, default="")
     tags = Column(JSON, default=[])
+    workflow_status = Column(String(20), nullable=False, default="draft", server_default="draft")
+    file_paths = Column(JSON, default=[], server_default="[]")
     # 分支
     branch_id = Column(String(36), ForeignKey("branches.id", ondelete="SET NULL"), nullable=True)
     # 追蹤
@@ -80,8 +82,10 @@ class Edge(Base):
     from_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     to_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=False)
     relation_type = Column(String(30), nullable=False, default="child_of")
-    weight = Column(Float, default=1.0)
-    note = Column(Text, default="")
+    # Python 與 DB 雙層預設：API、匯入與直接 SQL 新增都得到可序列化值。
+    # 暫不把 nullable 改為 False，讓舊資料庫可平滑載入；讀取端另有歷史 NULL 容錯。
+    weight = Column(Float, default=1.0, server_default="1.0")
+    note = Column(Text, default="", server_default="")
     is_mainline = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
 

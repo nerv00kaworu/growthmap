@@ -1,6 +1,6 @@
 # GrowthMap Backend
 
-Current status: this backend is the **MVP implementation** of GrowthMap. It runs on SQLite by default and supports the tree-first workflow described below; the broader multi-relation graph and agent platform remain future work.
+Current status: this backend is the **authoring/editor implementation** of GrowthMap. It supports the tree-first workflow described below. Player Web/API runtime and gameplay execution were split to the independent `abyss-bureau` repository and are not part of this package.
 
 ## Setup
 
@@ -8,11 +8,12 @@ Current status: this backend is the **MVP implementation** of GrowthMap. It runs
 cd growthmap/src/backend
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8100
+pip install -r requirements.lock
+DATABASE_URL='sqlite+aiosqlite:////absolute/path/to/growthmap.db' \
+  uvicorn main:app --host 127.0.0.1 --port 8100
 ```
 
-For local LLM configuration, copy the repository `.env.example` and set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. Do not commit a real API key.
+Set an explicit `DATABASE_URL` for every release/production-like run; do not let a launcher silently choose a local DB path. On startup the service applies its documented lightweight schema compatibility steps to that explicit database, so take an operator-managed backup before upgrading an existing database. For local LLM configuration, copy the repository `.env.example` and set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. Do not commit a real API key.
 
 ## Stack
 
@@ -34,11 +35,14 @@ For local LLM configuration, copy the repository `.env.example` and set `LLM_BAS
 
 ## Current Boundaries
 
+- This package is authoring-only: it does not mount `/api/player`, import player gameplay packs, or run player-runtime migrations.
 - The frontend is **tree-first**. It exposes the proposal-branch workflow, but it does not provide a general visual editor for every edge relation type.
 - Provider profiles persist only provider metadata, endpoint, model, and the name of the environment variable holding its API key. Configure that secret in the local `.env`; it is never stored in SQLite or returned over the API.
 - `AgentSession` remains groundwork; task/session orchestration is not implemented yet.
 - AI calls are opt-in and depend on a configured provider; automated tests never use external model credentials.
 - SQLite is the tested local database. PostgreSQL deployment and migration coverage are not part of this MVP.
+
+`requirements.lock` is the reviewed release lock for Python 3.12; update it deliberately after changing `requirements.txt`.
 
 ## Quality Checks
 

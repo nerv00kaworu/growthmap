@@ -2,6 +2,10 @@
 
 AI-powered project growth system — build ideas as trees, let AI expand branches and deepen content, then accept or reject suggestions.
 
+## Product boundary (2026-07-18)
+
+GrowthMap is the canonical **authoring/editor** system. It manages editable project trees, authoring exports, and opt-in editor AI workflows. Its local canonical DB/snapshots are operator-managed data, not part of the release archive. Player Web/API runtime, gameplay release provenance, and replay tooling now live exclusively in the independent `abyss-bureau` repository; GrowthMap mounts no `/api/player` routes and runs no player runtime migrations.
+
 ## ✨ Features
 
 - **Tree-based project canvas** — visual mind-map with React Flow
@@ -25,31 +29,27 @@ AI-powered project growth system — build ideas as trees, let AI expand branche
 - Python 3.10+
 - Node.js 18+
 
-### One-click Start
+### Build and run (authoring editor)
 
 ```bash
-./start.sh
-```
-
-Open [http://localhost:3100](http://localhost:3100)
-
-### Manual Setup
-
-**Backend:**
-```bash
+# Backend dependencies
 cd src/backend
 python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8100
+venv/bin/pip install -r requirements.lock
+
+# Frontend production build
+cd ../frontend
+npm ci
+npm run build
+
+# Return to repository root and start already-built services
+cd ../..
+./scripts/start_growthmap.sh
 ```
 
-**Frontend:**
-```bash
-cd src/frontend
-npm install
-npx next dev -p 3100
-```
+Open <http://127.0.0.1:3100>. Before launching, set an explicit `DATABASE_URL` pointing to the intended authoring SQLite/DB location; the launcher refuses to choose or create a default data file. It binds only to loopback by default, never installs dependencies, never kills an existing listener, and never runs a content import command. Backend startup may apply its documented lightweight schema compatibility steps to that explicit database. Set explicit `GROWTHMAP_*` variables only when a different host or port is intended.
+
+`./start.sh` remains a compatibility wrapper for the same launcher. For local development, run the backend and `npm run dev` separately; development mode is not the release launch path.
 
 ## ⚙️ LLM Configuration
 
@@ -74,6 +74,12 @@ Settings are stored in `localStorage`.
 | `Ctrl+Z` | Undo |
 
 Click ⌨️ in the header to view shortcuts overlay.
+
+## 📦 Release boundary
+
+This repository packages **only the GrowthMap authoring/editor**: the project canvas, canonical authoring data, reviewable exports, and opt-in editor AI integrations. It does **not** package the Abyss Bureau player Web/API runtime, its player database, gameplay release/replay machinery, payment, PvP, runtime LLM calls, or runtime image generation. Those player-runtime concerns belong to the independent `abyss-bureau` repository.
+
+Historical player-runtime reports or candidate artwork may exist in local archives, but are excluded by `.gitignore` and are not release inputs for this authoring package.
 
 ## 🏗️ Architecture
 
@@ -103,9 +109,11 @@ Browser ──► Next.js (3100) ──► FastAPI (8100) ──► SQLite
 
 ## ✅ Quality Gates
 
-The repository runs these checks locally and in GitHub Actions:
+The repository runs these authoring-editor checks locally and in GitHub Actions:
 
 ```bash
+git diff --check
+
 cd src/frontend
 npm ci
 npm run lint
@@ -113,10 +121,11 @@ npm run typecheck
 npm run build
 
 cd ../backend
+python -m compileall -q -x 'venv|__pycache__' .
 DATABASE_URL='sqlite+aiosqlite:///:memory:' python -m unittest discover -s tests -v
 ```
 
-The backend smoke test uses an in-memory SQLite database and does not call an LLM provider.
+The backend smoke test uses an in-memory SQLite database and does not call an LLM provider. Use `requirements.lock` for release builds; `requirements.txt` remains the editable dependency policy. Release packaging additionally requires the checklist in `docs/RELEASE-CONVERGENCE-CHECKLIST-v1.md` to be fully satisfied.
 
 ## 📸 Screenshots
 

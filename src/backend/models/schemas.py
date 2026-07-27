@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from typing import Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # === Project ===
@@ -63,6 +63,8 @@ class NodeUpdate(BaseModel):
     questions_text: Optional[str] = None
     decision_notes: Optional[str] = None
     tags: Optional[list[str]] = None
+    workflow_status: Optional[str] = None
+    file_paths: Optional[list[str]] = None
     position_x: Optional[float] = None
     position_y: Optional[float] = None
 
@@ -82,8 +84,10 @@ class NodeOut(BaseModel):
     constraints_text: str
     examples_text: str
     questions_text: str
-    decision_notes: str
-    tags: list[str]
+    decision_notes: str = ""
+    tags: list[str] = []
+    workflow_status: str = "draft"
+    file_paths: list[str] = []
     created_by: str
     last_edited_by: str
     position_x: float
@@ -91,6 +95,35 @@ class NodeOut(BaseModel):
     branch_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator(
+        "summary", "description", "rules_text", "constraints_text", "examples_text",
+        "questions_text", "decision_notes", "created_by", "last_edited_by",
+        mode="before",
+    )
+    @classmethod
+    def default_legacy_null_text(cls, value):
+        return "" if value is None else value
+
+    @field_validator("tags", "file_paths", mode="before")
+    @classmethod
+    def default_legacy_null_lists(cls, value):
+        return [] if value is None else value
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def default_legacy_null_priority(cls, value):
+        return 0 if value is None else value
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def default_legacy_null_confidence(cls, value):
+        return 0.5 if value is None else value
+
+    @field_validator("position_x", "position_y", mode="before")
+    @classmethod
+    def default_legacy_null_position(cls, value):
+        return 0.0 if value is None else value
 
     model_config = {"from_attributes": True}
 
@@ -129,10 +162,22 @@ class EdgeOut(BaseModel):
     from_node_id: str
     to_node_id: str
     relation_type: str
-    weight: float
-    note: str
+    weight: float = 1.0
+    note: str = ""
     is_mainline: bool
     created_at: datetime
+
+    @field_validator("weight", mode="before")
+    @classmethod
+    def default_legacy_null_weight(cls, value):
+        """舊資料可能保存 NULL；API 一律以預設權重輸出。"""
+        return 1.0 if value is None else value
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def default_legacy_null_note(cls, value):
+        """舊資料可能保存 NULL；API 一律輸出空字串。"""
+        return "" if value is None else value
 
     model_config = {"from_attributes": True}
 

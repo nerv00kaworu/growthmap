@@ -7,7 +7,21 @@ export interface GNode {
   node_type: string;
   status: string;
   maturity: string;
+  priority: number;
+  confidence: number;
+  description: string;
+  rules_text: string;
+  constraints_text: string;
+  examples_text: string;
+  questions_text: string;
+  decision_notes: string;
+  workflow_status: string;
   tags: string[];
+  file_paths: string[];
+  created_by: string;
+  last_edited_by: string;
+  position_x: number;
+  position_y: number;
   meta: Record<string, unknown>;
   content_blocks: ContentBlock[];
   created_at: string;
@@ -17,6 +31,19 @@ export interface GNode {
   is_mainline?: boolean;
   branch_id?: string | null;
 }
+
+export type NodeFormalFieldKey =
+  | "description"
+  | "rules_text"
+  | "constraints_text"
+  | "examples_text"
+  | "questions_text"
+  | "decision_notes";
+
+export type NodeEditDraft = Pick<
+  GNode,
+  NodeFormalFieldKey | "status" | "workflow_status" | "priority" | "confidence" | "file_paths"
+>;
 
 export interface LineageNode {
   id: string;
