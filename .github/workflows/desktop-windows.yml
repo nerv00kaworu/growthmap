@@ -26,16 +26,11 @@ jobs:
         working-directory: desktop
       - run: npm test
         working-directory: desktop
-      - run: npm run preflight:win && npx electron-builder --dir --win --publish never
-        working-directory: desktop
-      - name: Verify unpacked resources and packaged sidecar
-        shell: pwsh
-        run: ./.github/workflows/scripts/verify-windows-package.ps1
-      - name: Remove verified unpacked tree before clean NSIS rebuild
-        shell: pwsh
-        run: Remove-Item desktop/dist/win-unpacked -Recurse -Force -ErrorAction Stop
       - run: npm run dist:win
         working-directory: desktop
+      - name: Verify NSIS build resources and packaged sidecar
+        shell: pwsh
+        run: ./.github/workflows/scripts/verify-windows-package.ps1
       - name: Assert NSIS artifact exists (never publish)
         shell: pwsh
         run: if (-not (Get-ChildItem desktop/dist/GrowthMap-Setup-*.exe)) { throw "NSIS artifact missing" }
