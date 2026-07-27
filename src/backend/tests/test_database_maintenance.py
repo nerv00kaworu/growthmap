@@ -19,6 +19,15 @@ def test_rejects_trigger_view_and_oversize(tmp_path,monkeypatch):
  p=tmp_path/'large.db';fixture(p);monkeypatch.setattr(dm,'MAX_BYTES',100)
  with pytest.raises(ValueError,match='size'):dm.validate(p)
 
+def test_accepts_canonical_edge_integrity_objects_only(tmp_path):
+ p=tmp_path/'canonical.db';fixture(p);c=sqlite3.connect(p)
+ c.execute("CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of'")
+ c.execute("CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges BEGIN UPDATE edges SET relation_type=relation_type WHERE id=NEW.id; END")
+ c.close();assert dm.validate(p)['valid'] is True
+ p2=tmp_path/'lookalike.db';fixture(p2);c=sqlite3.connect(p2)
+ c.execute("CREATE TRIGGER trg_edges_not_canonical AFTER INSERT ON edges BEGIN SELECT 1; END");c.close()
+ with pytest.raises(ValueError,match='unapproved'):dm.validate(p2)
+
 def test_validated_snapshot_rejects_hardlink_and_uses_combined_validation(tmp_path):
  p=tmp_path/'a.db';fixture(p);hard=tmp_path/'hard.db';os.link(p,hard)
  with pytest.raises(ValueError,match='single-link'):dm.validated_snapshot(hard,tmp_path/'out.db')

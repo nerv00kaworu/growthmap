@@ -6,7 +6,8 @@ CURRENT_USER_VERSION=0
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 ALLOWED_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions"}
-ALLOWED_INDEXES={"idx_nodes_project","idx_nodes_type","idx_nodes_status","idx_edges_project","idx_edges_from","idx_edges_to","idx_content_blocks_node","idx_suggestions_node","idx_suggestions_status","idx_action_logs_project","idx_action_logs_node","idx_branches_project","idx_agent_artifacts_session","idx_agent_artifacts_status"}
+ALLOWED_INDEXES={"idx_nodes_project","idx_nodes_type","idx_nodes_status","idx_edges_project","idx_edges_from","idx_edges_to","idx_content_blocks_node","idx_suggestions_node","idx_suggestions_status","idx_action_logs_project","idx_action_logs_node","idx_branches_project","idx_agent_artifacts_session","idx_agent_artifacts_status","ux_edges_one_mainline_per_parent"}
+ALLOWED_TRIGGERS={"trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"}
 REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
@@ -53,6 +54,7 @@ def _validate_connection(connection,source):
  for kind,name,table,sql in objects:
   if kind=="table" and name in ALLOWED_TABLES and sql and not sql.lstrip().upper().startswith("CREATE VIRTUAL"): continue
   if kind=="index" and name in ALLOWED_INDEXES and table in ALLOWED_TABLES: continue
+  if kind=="trigger" and name in ALLOWED_TRIGGERS and table=="edges": continue
   raise ValueError("database contains an unapproved schema object")
  temp=connection.execute("SELECT COUNT(*) FROM sqlite_temp_schema").fetchone()[0]
  if temp: raise ValueError("temporary schema objects are not allowed")
