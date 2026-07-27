@@ -351,6 +351,7 @@ export default function HomePage() {
           )}
         </div>
 
+        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title="設定">⚙️</button>
         <button
           type="button"
           onClick={() => setShowShortcuts(true)}

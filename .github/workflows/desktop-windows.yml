@@ -2,7 +2,7 @@ name: Desktop Windows foundation
 on:
   workflow_dispatch:
   pull_request:
-    paths: ["desktop/**", "src/backend/**", "src/frontend/**", ".github/workflows/desktop-windows.yml"]
+    paths: ["desktop/**", "src/backend/**", "src/frontend/**", ".github/workflows/desktop-windows.yml", ".github/workflows/scripts/**"]
 permissions: { contents: read }
 jobs:
   build-test-package:
@@ -28,18 +28,31 @@ jobs:
         working-directory: desktop
       - run: npm test
         working-directory: desktop
-      - run: npm run dist:win
+      - name: Build isolated non-shipped E2E package
+        run: npm run dist:win:e2e
         working-directory: desktop
-      - name: Verify NSIS build resources and packaged sidecar
-        shell: pwsh
-        run: ./.github/workflows/scripts/verify-windows-package.ps1
-      - name: Full packaged Electron renderer smoke
-        timeout-minutes: 3
+      - name: Full packaged database/lifecycle E2E
+        timeout-minutes: 5
         run: npm run renderer:e2e
         working-directory: desktop
         env:
           CI: 'true'
           GROWTHMAP_E2E_SCREENSHOT: ${{ github.workspace }}/desktop/artifacts/growthmap-renderer.png
+      - name: Delete entire isolated test dist
+        shell: pwsh
+        run: Remove-Item desktop/dist -Recurse -Force
+      - name: Build final production NSIS installer
+        run: npm run dist:win
+        working-directory: desktop
+      - name: Verify final production resources and normal sidecar smoke
+        shell: pwsh
+        run: ./.github/workflows/scripts/verify-windows-package.ps1
+      - name: Windows adversarial database boundaries and crash recovery
+        shell: pwsh
+        run: ./.github/workflows/scripts/test-windows-database-boundaries.ps1
+      - name: Verify final production ASAR excludes all E2E material
+        shell: pwsh
+        run: ./.github/workflows/scripts/verify-production-asar.ps1
       - name: Assert NSIS artifact exists and write SHA-256
         shell: pwsh
         run: |
@@ -59,7 +72,3 @@ jobs:
             desktop/artifacts/growthmap-renderer.png
           if-no-files-found: error
           retention-days: 14
-      - name: Installer GUI lifecycle status
-        shell: pwsh
-        run: |
-          Write-Host "[blocked: interactive Windows runner required for install/app lifecycle/uninstall and user-data-retention evidence]"

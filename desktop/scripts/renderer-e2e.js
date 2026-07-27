@@ -1,43 +1,9 @@
 'use strict';
-const fs=require('node:fs');
-const net=require('node:net');
-const path=require('node:path');
-const {spawn,spawnSync}=require('node:child_process');
-const {chromium}=require('playwright-core');
-if(process.platform!=='win32')throw new Error('Packaged renderer smoke must run on Windows');
-if(process.env.CI!=='true')throw new Error('Renderer E2E debug transport is restricted to CI');
-const root=path.resolve(__dirname,'..');
-const executable=process.env.GROWTHMAP_PACKAGED_EXE||path.join(root,'dist','win-unpacked','GrowthMap.exe');
-const screenshot=process.env.GROWTHMAP_E2E_SCREENSHOT||path.join(root,'artifacts','growthmap-renderer.png');
-function port(){return new Promise((resolve,reject)=>{const s=net.createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-(async()=>{
-  if(!fs.existsSync(executable))throw new Error(`Packaged executable missing: ${executable}`);
-  const debugPort=await port();
-  const child=spawn(executable,[],{env:{...process.env,CI:'true',GROWTHMAP_DESKTOP_E2E:'1',GROWTHMAP_E2E_DEBUG_PORT:String(debugPort)},stdio:['ignore','pipe','pipe'],windowsHide:true});
-  let output=''; child.stdout.on('data',x=>output+=x); child.stderr.on('data',x=>output+=x);
-  let browser;
-  try{
-    const deadline=Date.now()+120000;
-    while(Date.now()<deadline){
-      if(child.exitCode!==null)throw new Error(`Packaged Electron exited early (${child.exitCode}): ${output.slice(-2000)}`);
-      try{browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`,{timeout:2000});break;}catch{await sleep(250);}
-    }
-    if(!browser)throw new Error(`Timed out connecting to packaged Electron renderer: ${output.slice(-2000)}`);
-    let page;
-    while(Date.now()<deadline&&!page){page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(250);}
-    if(!page)throw new Error('Packaged Electron main window was not created');
-    await page.waitForFunction(()=>document.documentElement.dataset.growthmapRendererReady==='true'&&document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="new-project-button"]')&&document.querySelector('[data-testid="entitlement-status"]'),null,{timeout:90000});
-    const result=await page.evaluate(()=>({title:document.title,text:document.body.innerText.trim(),titleMarker:document.querySelector('[data-testid="growthmap-title"]')?.textContent||'',newProjectMarker:document.querySelector('[data-testid="new-project-button"]')?.textContent||'',entitlementMarker:document.querySelector('[data-testid="entitlement-status"]')?.textContent||'',body:{width:document.body.getBoundingClientRect().width,height:document.body.getBoundingClientRect().height,display:getComputedStyle(document.body).display,background:getComputedStyle(document.body).backgroundColor},styles:[...document.styleSheets].length}));
-    if(result.title!=='GrowthMap'||!result.text||!result.titleMarker.includes('GrowthMap')||!result.newProjectMarker.includes('新專案')||!result.entitlementMarker.includes('Free · 0/2')||result.body.width<800||result.body.height<500||result.body.display==='none'||result.styles<1)throw new Error(`Renderer visual contract failed: ${JSON.stringify(result)}`);
-    fs.mkdirSync(path.dirname(screenshot),{recursive:true}); await page.screenshot({path:screenshot,fullPage:true});
-    if(!output.includes('GROWTHMAP_RENDERER_READY'))throw new Error('Packaged app did not emit renderer-ready marker');
-    console.log(`Packaged Electron renderer smoke passed; screenshot=${screenshot}`);
-  } finally {
-    if(browser)await Promise.race([browser.close().catch(()=>{}),sleep(3000)]);
-    if(child.exitCode===null){
-      spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true,timeout:10000});
-      child.kill();
-    }
-  }
-})().then(()=>process.exit(0)).catch(e=>{console.error(e.stack||e);process.exit(1);});
+const fs=require('node:fs'),net=require('node:net'),os=require('node:os'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process'),{chromium}=require('playwright-core');
+if(process.platform!=='win32')throw new Error('Packaged renderer E2E must run on Windows');if(process.env.CI!=='true')throw new Error('Renderer E2E is CI-only');
+const root=path.resolve(__dirname,'..'),executable=process.env.GROWTHMAP_PACKAGED_EXE||path.join(root,'dist','win-unpacked','GrowthMap.exe'),screenshot=process.env.GROWTHMAP_E2E_SCREENSHOT||path.join(root,'artifacts','growthmap-renderer.png');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));function port(){return new Promise((ok,no)=>{const s=net.createServer();s.once('error',no);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>ok(p));});});}
+function descendants(rootPid){const q=`$root=${rootPid};$all=Get-CimInstance Win32_Process;$seen=@($root);do{$before=$seen.Count;$seen+=@($all|Where-Object{$seen -contains $_.ParentProcessId}|ForEach-Object ProcessId);$seen=@($seen|Sort-Object -Unique)}while($seen.Count -gt $before);$seen -join ','`;const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});return (r.stdout||'').trim().split(',').filter(Boolean).map(Number);}function treeGone(pids){const q=`$ids=@(${pids.join(',')});if(Get-CimInstance Win32_Process|Where-Object{$ids -contains $_.ProcessId}){exit 1}`;if(spawnSync('powershell',['-NoProfile','-Command',q],{windowsHide:true}).status!==0)throw Error('spawned process tree remained after close');}
+async function launch(userData,fixture){const debugPort=await port(),child=spawn(executable,[`--user-data-dir=${userData}`],{env:{...process.env,CI:'true',GROWTHMAP_DESKTOP_E2E:'1',GROWTHMAP_E2E_DEBUG_PORT:String(debugPort),GROWTHMAP_E2E_IMPORT_PATH:fixture},stdio:['ignore','pipe','pipe'],windowsHide:true});let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);let browser;const deadline=Date.now()+120000;while(Date.now()<deadline){if(child.exitCode!==null)throw Error(`app exited early: ${output.slice(-1000)}`);try{browser=await chromium.connectOverCDP(`http://127.0.0.1:${debugPort}`,{timeout:2000});break;}catch{await sleep(250);}}if(!browser)throw Error('CDP timeout');let page;while(Date.now()<deadline&&!page){page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(200);}await page.waitForFunction(()=>document.documentElement.dataset.growthmapRendererReady==='true',null,{timeout:90000});return{child,browser,page,tree:descendants(child.pid),output:()=>output};}
+async function close(run){await run.page.close();const deadline=Date.now()+20000;while(run.child.exitCode===null&&Date.now()<deadline)await sleep(100);if(run.child.exitCode===null)throw Error('GrowthMap.exe did not exit');await run.browser.close().catch(()=>{});treeGone(run.tree);}
+(async()=>{if(!fs.existsSync(executable))throw Error('packaged resources missing');const userData=fs.mkdtempSync(path.join(os.tmpdir(),'growthmap-e2e-')),fixture=path.join(userData,'fixture.sqlite');const helper=path.join(root,'scripts','create-e2e-fixture.py');let made=spawnSync('python',[helper,fixture],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);let run=await launch(userData,fixture);try{await run.page.getByTestId('desktop-settings-button').click();await run.page.getByTestId('database-management').waitFor();run.page.once('dialog',d=>d.accept());await run.page.getByTestId('database-import').click();await run.page.waitForFunction(()=>document.body.innerText.includes('Desktop Fixture'),null,{timeout:90000});await run.page.getByTestId('desktop-settings-button').click();await run.page.getByTestId('database-backup').click();await run.page.waitForFunction(()=>document.body.innerText.includes('備份完成'),null,{timeout:90000});fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});await close(run);made=spawnSync('python',['-c',`import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("update projects set name='Mutated Fixture'");c.commit();c.close()`,path.join(userData,'growthmap.db')],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);run=await launch(userData,fixture);await run.page.waitForFunction(()=>document.body.innerText.includes('Mutated Fixture'),null,{timeout:90000});await run.page.getByTestId('desktop-settings-button').click();run.page.once('dialog',d=>d.accept());await run.page.getByTestId('database-restore').first().click();await run.page.waitForFunction(()=>document.body.innerText.includes('Desktop Fixture')&&!document.body.innerText.includes('Mutated Fixture'),null,{timeout:90000});await close(run);console.log(`Packaged database roundtrip/lifecycle E2E passed; screenshot=${screenshot}`);}finally{if(run?.child.exitCode===null)spawnSync('taskkill',['/PID',String(run.child.pid),'/T','/F'],{windowsHide:true});}})().catch(e=>{console.error(e.stack||e);process.exit(1);});
