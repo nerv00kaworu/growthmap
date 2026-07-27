@@ -17,23 +17,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
 import { loadLLMConfig } from "./llm-provider";
 
-function getLLMPayload(): Record<string, unknown> | undefined {
-  const config = loadLLMConfig();
-  if (!config) return undefined;
-  // Map frontend provider types to backend-compatible base_url
-  const providerBaseUrls: Record<string, string> = {
-    openai: "https://api.openai.com/v1",
-    anthropic: "https://api.anthropic.com/v1", // backend uses OpenAI-compat, may not work for Anthropic native
-  };
-  return {
-    provider: config.provider,
-    provider_id: config.providerId,
-    // Legacy browser-only configuration remains supported for a transition,
-    // but newly saved profiles never place a key in this payload.
-    api_key: config.apiKey,
-    base_url: config.baseUrl || providerBaseUrls[config.provider] || undefined,
-    model: config.model || undefined,
-  };
+function getProviderId(): string | undefined {
+  return loadLLMConfig()?.providerId || undefined;
 }
 
 export const api = {
@@ -113,7 +98,7 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, llm_config: getLLMPayload() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: getProviderId() }),
     }),
 
   deepen: (nodeId: string, instruction?: string) =>
@@ -123,20 +108,20 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/deepen", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, llm_config: getLLMPayload() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: getProviderId() }),
     }),
 
   chat: (nodeId: string, message: string, history: { role: string; content: string }[]) =>
     request<{ reply: string; context_used: Record<string, unknown> }>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, message, history, llm_config: getLLMPayload() }),
+      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: getProviderId() }),
     }),
 
   // Test LLM connection
-  testConnection: (provider: string, apiKey?: string, baseUrl?: string, model?: string) =>
+  testConnection: (providerId: string) =>
     request<{ ok: boolean; provider: string; model?: string; message: string }>("/ai/test-connection", {
       method: "POST",
-      body: JSON.stringify({ provider, api_key: apiKey, base_url: baseUrl, model }),
+      body: JSON.stringify({ provider_id: providerId }),
     }),
 
   // Spec export (returns text)

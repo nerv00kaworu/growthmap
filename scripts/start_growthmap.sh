@@ -34,6 +34,18 @@ Environment:
 EOF
 }
 
+is_loopback_host() {
+  case "$1" in
+    localhost|127.0.0.1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if ! is_loopback_host "$BACK_HOST" || ! is_loopback_host "$FRONT_HOST"; then
+  echo "refusing to start: public/non-loopback binds are unsupported before authenticated desktop packaging" >&2
+  exit 1
+fi
+
 FOREGROUND=false
 case "${1:-}" in
   "") ;;

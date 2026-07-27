@@ -2,6 +2,22 @@
 
 All notable changes to the GrowthMap **authoring/editor** package are documented here.
 
+## [0.1.0-authoring.2] - 2026-07-27
+
+### Security
+- Updates Next.js to 15.5.21 and forces the production sharp tree to 0.35.3; updates the reviewed Python lock to Mako 1.3.12, click 8.4.2, idna 3.18, Starlette 1.3.1, and compatible FastAPI 0.140.0.
+- Removes browser API-key fields and direct provider calls. Browser persistence is metadata-only and all AI operations resolve a server-side provider profile by `provider_id`.
+- Rejects per-request AI `api_key`/`base_url` fields and changes connection testing to `provider_id`.
+- Requires `GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}` for every profile on create/patch/write and before test/AI resolution (including mock); unsafe existing rows fail closed with a rebind error; keeps writes localhost-only, atomic, mode `0600`, and response-empty.
+- Makes release launcher binds strictly `127.0.0.1`/`localhost` only (IPv6 forms rejected) and adds matching backend Trusted Host enforcement.
+
+### Verification
+- Frontend clean install, lint, typecheck, production build, and production npm audit pass (0 vulnerabilities).
+- Backend compile and 20 isolated tests pass (original 12 core tests plus 8 security regressions); pip-audit reports 0 known vulnerabilities.
+
+### Excluded
+- No desktop shell, payments, license seats, or Abyss runtime changes are included in this security remediation release.
+
 ## [0.1.0-authoring.1] - 2026-07-24
 
 ### Release boundary

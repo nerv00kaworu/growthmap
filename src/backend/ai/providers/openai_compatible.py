@@ -9,7 +9,7 @@ from .base import LLMProvider
 
 # Default values from environment
 DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL", "https://models.github.ai/inference")
-DEFAULT_API_KEY = os.getenv("LLM_API_KEY", os.getenv("GITHUB_TOKEN", ""))
+DEFAULT_API_KEY = os.getenv("GROWTHMAP_LLM_KEY_DEFAULT", "")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}

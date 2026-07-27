@@ -26,7 +26,10 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             health = client.get("/api/health/deep")
             self.assertEqual(health.status_code, 200)
             self.assertEqual(health.json(), {"status": "ok", "surface": "authoring"})
-            paths = client.get("/openapi.json").json()["paths"]
+            self.assertEqual(client.get("/api").json()["version"], "0.1.0-authoring.2")
+            openapi = client.get("/openapi.json").json()
+            self.assertEqual(openapi["info"]["version"], "0.1.0-authoring.2")
+            paths = openapi["paths"]
             self.assertTrue("/api/projects" in paths)
             self.assertFalse(any(path.startswith("/api/player") for path in paths))
 
@@ -116,14 +119,14 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 json={
                     "name": "Local provider",
                     "provider_type": "openai_compatible",
-                    "secret_env_key": "NEVER_SENT_TO_BROWSER",
+                    "secret_env_key": "GROWTHMAP_LLM_KEY_NEVER_SENT_TO_BROWSER",
                     "model_name": "demo",
                 },
             )
             self.assertEqual(created.status_code, 201)
             provider = created.json()
             self.assertEqual(provider["auth_type"], "env")
-            self.assertEqual(provider["secret_env_key"], "NEVER_SENT_TO_BROWSER")
+            self.assertEqual(provider["secret_env_key"], "GROWTHMAP_LLM_KEY_NEVER_SENT_TO_BROWSER")
             self.assertNotIn("api_key", provider)
 
             listed = client.get("/api/providers")
@@ -134,7 +137,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(secret.status_code, 204)
             env_path = os.environ["GROWTHMAP_ENV_FILE"]
             with open(env_path, encoding="utf-8") as handle:
-                self.assertIn('NEVER_SENT_TO_BROWSER="test-secret-value"', handle.read())
+                self.assertIn('GROWTHMAP_LLM_KEY_NEVER_SENT_TO_BROWSER="test-secret-value"', handle.read())
             self.assertEqual(os.stat(env_path).st_mode & 0o777, 0o600)
 
     def test_manual_agent_session_lifecycle_never_dispatches_ai(self):

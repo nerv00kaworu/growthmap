@@ -26,6 +26,7 @@ from models.schemas import (
     ProviderConfigCreate, ProviderConfigUpdate, ProviderConfigOut,
     AgentSessionCreate, AgentSessionUpdate, AgentSessionOut,
     AgentArtifactCreate, AgentArtifactReview, AgentArtifactOut,
+    validate_app_secret_env_key,
 )
 
 router = APIRouter()
@@ -48,7 +49,8 @@ def touch_project(project: Project | None):
 # ─── Provider configurations ───
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ENV_FILE = Path(os.getenv("GROWTHMAP_ENV_FILE", str(PROJECT_ROOT / ".env")))
+def _env_file() -> Path:
+    return Path(os.getenv("GROWTHMAP_ENV_FILE", str(PROJECT_ROOT / ".env")))
 SAFE_ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 
 
@@ -58,11 +60,14 @@ class ProviderSecretWrite(BaseModel):
 
 def _write_env_value(env_key: str, secret: str) -> None:
     """Atomically update one local .env value while preserving other entries."""
-    if not SAFE_ENV_KEY.fullmatch(env_key):
-        raise HTTPException(400, "Invalid environment variable name")
+    try:
+        validate_app_secret_env_key(env_key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not secret or "\x00" in secret:
         raise HTTPException(400, "API key is required")
-    lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
+    env_file = _env_file()
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
     assignment = f"{env_key}={json.dumps(secret)}"
     updated: list[str] = []
     found = False
@@ -74,12 +79,12 @@ def _write_env_value(env_key: str, secret: str) -> None:
             updated.append(line)
     if not found:
         updated.append(assignment)
-    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=ENV_FILE.parent, delete=False) as handle:
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=env_file.parent, delete=False) as handle:
         handle.write("\n".join(updated).rstrip() + "\n")
         temp_path = Path(handle.name)
     os.chmod(temp_path, 0o600)
-    temp_path.replace(ENV_FILE)
+    temp_path.replace(env_file)
     os.environ[env_key] = secret
 
 
@@ -98,14 +103,22 @@ async def create_provider(data: ProviderConfigCreate, db: AsyncSession = Depends
     return provider
 
 
+def _is_local_client(host: str) -> bool:
+    return host in {"127.0.0.1", "localhost", "testclient"}
+
+
 @router.put("/providers/{provider_id}/secret", status_code=204)
 async def write_provider_secret(provider_id: str, data: ProviderSecretWrite, request: Request, db: AsyncSession = Depends(get_db)):
     client_host = request.client.host if request.client else ""
-    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}: # testclient is FastAPI's in-process test transport
+    if not _is_local_client(client_host):  # testclient is FastAPI's in-process test transport
         raise HTTPException(403, "Provider secrets can only be configured from localhost")
     provider = await db.get(ProviderConfig, provider_id)
     if not provider:
         raise HTTPException(404, "Provider not found")
+    try:
+        validate_app_secret_env_key(provider.secret_env_key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if provider.provider_type == "mock":
         raise HTTPException(400, "Mock provider does not use an API key")
     _write_env_value(provider.secret_env_key, data.api_key)

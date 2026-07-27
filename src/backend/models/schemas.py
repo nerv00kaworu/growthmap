@@ -1,3 +1,4 @@
+import re
 """Pydantic schemas for API request/response"""
 import uuid
 from datetime import datetime
@@ -281,15 +282,33 @@ class DetectGapsRequest(BaseModel):
 
 # === Branch ===
 
+APP_SECRET_ENV_PREFIX = "GROWTHMAP_LLM_KEY_"
+APP_SECRET_ENV_PATTERN = re.compile(r"^GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}$")
+
+
+def validate_app_secret_env_key(value: str) -> str:
+    if not APP_SECRET_ENV_PATTERN.fullmatch(value):
+        raise ValueError(
+            "secret_env_key is outside the GrowthMap namespace; rebind the profile to "
+            f"{APP_SECRET_ENV_PREFIX}[A-Z0-9_]{{1,96}}"
+        )
+    return value
+
+
 class ProviderConfigCreate(BaseModel):
     name: str
     provider_type: str = "openai_compatible"
     endpoint: str = ""
-    secret_env_key: str = "LLM_API_KEY"
+    secret_env_key: str = "GROWTHMAP_LLM_KEY_DEFAULT"
     model_name: str = ""
     capabilities: list[str] = []
     cost_level: str = "low"
     enabled: bool = True
+
+    @field_validator("secret_env_key")
+    @classmethod
+    def secret_key_is_app_owned(cls, value: str) -> str:
+        return validate_app_secret_env_key(value)
 
 
 class ProviderConfigUpdate(BaseModel):
@@ -301,6 +320,11 @@ class ProviderConfigUpdate(BaseModel):
     capabilities: Optional[list[str]] = None
     cost_level: Optional[str] = None
     enabled: Optional[bool] = None
+
+    @field_validator("secret_env_key")
+    @classmethod
+    def secret_key_is_app_owned(cls, value: Optional[str]) -> Optional[str]:
+        return validate_app_secret_env_key(value) if value is not None else None
 
 
 class ProviderConfigOut(BaseModel):

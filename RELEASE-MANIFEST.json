@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "package": {
     "name": "growthmap-authoring",
-    "version": "0.1.0-authoring.1",
+    "version": "0.1.0-authoring.2",
     "releaseStatus": "release"
   },
   "boundary": {
@@ -18,10 +18,10 @@
     ]
   },
   "source": {
-    "baseCommit": "af6947668e973e54b77a332638860bcc71c38de4",
-    "baseCommitTimestamp": "2026-07-13T16:32:18+08:00",
-    "releaseTag": "growthmap-authoring-v0.1.0-authoring.1",
-    "releaseCommit": "Resolved by immutable annotated tag growthmap-authoring-v0.1.0-authoring.1."
+    "baseCommit": "2c2de88deb31fd08c93ff73bbe06b88993165651",
+    "baseCommitTimestamp": "2026-07-27T12:09:27+08:00",
+    "releaseTag": "growthmap-authoring-v0.1.0-authoring.2",
+    "releaseCommit": "Resolved by immutable annotated tag growthmap-authoring-v0.1.0-authoring.2."
   },
   "build": {
     "node": "22.x",
@@ -38,16 +38,18 @@
       "DATABASE_URL='sqlite+aiosqlite:///:memory:' python -m unittest discover -s tests -v"
     ],
     "launcher": "./scripts/start_growthmap.sh",
-    "launcherDatabasePolicy": "DATABASE_URL is required explicitly; launcher defaults to loopback and does not install dependencies or kill listeners."
+    "launcherDatabasePolicy": "DATABASE_URL is required; frontend/backend hosts are restricted to 127.0.0.1 or localhost (IPv6 forms rejected), with matching backend Host validation."
   },
   "integrity": {
-    "src/frontend/package-lock.json": "a6c9500f2663935fb4d03904e65922b456dab9f40af4b2ad4ca6692be0a6792c",
-    "src/backend/requirements.txt": "c7cbf926404d4bddc810076b63c1fcd298b8bdb2d70c62f1ee8e3ee28eec8c30",
-    "src/backend/requirements.lock": "ba60c1bdefd974682cd055a04d49ade04a6191bfa0906fd92dc5957e3347fa89",
+    "src/frontend/package-lock.json": "cc2da96e51a81761de1ae68b5911fae02296a518ff344468e982ebf81ac0638a",
+    "src/backend/requirements.txt": "e12e4080a187ce0d14b1901213362bf1ab8b072ed3ee79f86050ad0c0cdcb2c5",
+    "src/backend/requirements.lock": "058ca48d59c3b7c36d50f19e032fb9ef7e89f0b896bbf78f9116ce1cf978f124",
     ".gitignore": "5e7d233a8e008305ace277c678d5fed9831322a68006e8a2d06341475a3dde2d",
-    "README.md": "b819eaa5eeb8f29850a901e84e07a1a6d00541e94e06d2b27adec52908842483",
-    "CHANGELOG.md": "48118c657ed83b7bff210a014575900efb63037c34d6d74961bc16822c4cfa1d",
-    "docs/RELEASE-CONVERGENCE-CHECKLIST-v1.md": "2ab318a513a85e4529899708563a02675bb67e346281c6154f42c3edde18ba41"
+    "README.md": "013cf5863259eafe1ec91ccf2f185147b9ec774fcd7d0a349a0d7c1d68544c8b",
+    "CHANGELOG.md": "08a0673ca3ab9380901801e6fd10bd1d25932921635d2945fd41fac0fef1dd8a",
+    "docs/RELEASE-CONVERGENCE-CHECKLIST-v1.md": "f24e301dc7d2912224470cf137a8e4b282da35e0a073f6266e9624046857af7c",
+    "src/frontend/package.json": "e28945bc58e58003d0ddd7299364608b7b482bcedab803877d608d7bedbbe532",
+    "docs/SECURITY-REMEDIATION-0.1.0-authoring.2.md": "9697e2afe34c9a80dc932baf61c1ed982fea5e9942e5f64fc44bb71725bea825"
   },
   "releaseGates": {
     "required": [
@@ -56,7 +58,10 @@
       "frontend lint/typecheck/build pass from a clean checkout",
       "backend compile/tests pass against isolated in-memory SQLite",
       "launcher smoke passes with an explicit temporary DATABASE_URL",
-      "archive file list and SHA-256 are recorded before distribution"
+      "archive file list and SHA-256 are recorded before distribution",
+      "npm audit --omit=dev reports zero vulnerabilities",
+      "pip-audit reports zero known vulnerabilities",
+      "BYOK and loopback-boundary security regressions pass"
     ],
     "notYetSatisfied": []
   }

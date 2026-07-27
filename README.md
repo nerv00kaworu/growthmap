@@ -6,6 +6,12 @@ AI-powered project growth system — build ideas as trees, let AI expand branche
 
 GrowthMap is the canonical **authoring/editor** system. It manages editable project trees, authoring exports, and opt-in editor AI workflows. Its local canonical DB/snapshots are operator-managed data, not part of the release archive. Player Web/API runtime, gameplay release provenance, and replay tooling now live exclusively in the independent `abyss-bureau` repository; GrowthMap mounts no `/api/player` routes and runs no player runtime migrations.
 
+## Security remediation release (`v0.1.0-authoring.2`)
+
+This release is the security-only successor to immutable tag `growthmap-authoring-v0.1.0-authoring.1`; the old tag is never moved or overwritten. Browser code stores only provider profile ID/type/model metadata. API keys are accepted only by the localhost backend secret endpoint, written atomically to the configured env file with mode `0600`, and never returned. Provider secret names must match `GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}`. AI expand/deepen/chat/test requests carry `provider_id` only; endpoint and credentials are resolved server-side.
+
+The release launcher and backend are localhost-only: non-loopback frontend/backend binds other than `127.0.0.1` or `localhost` fail closed, and Trusted Host validation rejects non-local Host headers. Public deployment is unsupported until an authenticated desktop-ready boundary exists.
+
 ## ✨ Features
 
 - **Tree-based project canvas** — visual mind-map with React Flow

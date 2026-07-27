@@ -10,7 +10,7 @@ load_dotenv()
 
 # Default to local proxy; override via env
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://models.github.ai/inference")
-LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("GITHUB_TOKEN", ""))
+GROWTHMAP_LLM_KEY_DEFAULT = os.getenv("GROWTHMAP_LLM_KEY_DEFAULT", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
@@ -18,13 +18,13 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 def get_provider_config() -> tuple[str, str, str]:
     base_url = LLM_BASE_URL.strip()
-    api_key = LLM_API_KEY.strip()
+    api_key = GROWTHMAP_LLM_KEY_DEFAULT.strip()
     model = LLM_MODEL.strip()
 
     if not base_url:
         raise ValueError("LLM_BASE_URL is required before calling the AI provider")
     if not api_key:
-        raise ValueError("LLM_API_KEY or GITHUB_TOKEN is required before calling the AI provider")
+        raise ValueError("GROWTHMAP_LLM_KEY_DEFAULT is required before calling the AI provider")
     if not model:
         raise ValueError("LLM_MODEL is required before calling the AI provider")
 
@@ -37,15 +37,9 @@ async def llm_complete(
     model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    base_url_override: Optional[str] = None,
-    api_key_override: Optional[str] = None,
 ) -> str:
     """Send a chat completion request to any OpenAI-compatible API (with retry)."""
     base_url, api_key, default_model = get_provider_config()
-    if base_url_override:
-        base_url = base_url_override
-    if api_key_override:
-        api_key = api_key_override
     model = (model or default_model).strip()
     if not model:
         raise ValueError("LLM model cannot be blank")

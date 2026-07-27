@@ -25,7 +25,7 @@ export function Settings({ onClose }: SettingsProps) {
   const [name, setName] = useState("");
   const [provider, setProvider] = useState<LLMProviderType>("openai_compatible");
   const [endpoint, setEndpoint] = useState("");
-  const [envKey, setEnvKey] = useState("LLM_API_KEY");
+  const [envKey, setEnvKey] = useState("GROWTHMAP_LLM_KEY_DEFAULT");
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -51,7 +51,7 @@ export function Settings({ onClose }: SettingsProps) {
     setName(profile.name);
     setProvider(profile.provider_type as LLMProviderType);
     setEndpoint(profile.endpoint || "");
-    setEnvKey(profile.secret_env_key || "LLM_API_KEY");
+    setEnvKey(profile.secret_env_key || "GROWTHMAP_LLM_KEY_DEFAULT");
     setModel(profile.model_name || "");
   };
 
@@ -64,7 +64,7 @@ export function Settings({ onClose }: SettingsProps) {
         name: name.trim(),
         provider_type: provider,
         endpoint: endpoint.trim(),
-        secret_env_key: envKey.trim() || "LLM_API_KEY",
+        secret_env_key: envKey.trim() || "GROWTHMAP_LLM_KEY_DEFAULT",
         model_name: model.trim() || DEFAULT_MODELS[provider],
         capabilities: ["expand", "deepen", "chat"],
         cost_level: provider === "mock" ? "none" : "variable",
@@ -96,7 +96,7 @@ export function Settings({ onClose }: SettingsProps) {
     setName("");
     setProvider("openai_compatible");
     setEndpoint("");
-    setEnvKey("LLM_API_KEY");
+    setEnvKey("GROWTHMAP_LLM_KEY_DEFAULT");
     setModel("");
     setApiKey("");
     setMessage("");
@@ -114,7 +114,7 @@ export function Settings({ onClose }: SettingsProps) {
         </div>
 
         <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">
-          API key 不會出現在這個畫面、瀏覽器 localStorage 或 SQLite。請在專案根目錄 `.env` 設定對應變數，例如 `LLM_API_KEY=...`。
+          API key 不會出現在這個畫面、瀏覽器 localStorage 或 SQLite。請在專案根目錄 `.env` 設定對應變數，例如 `GROWTHMAP_LLM_KEY_DEFAULT=...`。
         </div>
 
         {profiles.length > 0 && (
@@ -140,7 +140,7 @@ export function Settings({ onClose }: SettingsProps) {
             <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>
           <label className="block text-xs text-gray-400">API key 的環境變數名稱
-            <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="LLM_API_KEY" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100" />
+            <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="GROWTHMAP_LLM_KEY_DEFAULT" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100" />
           </label>
           {provider !== "mock" && <label className="block text-xs text-gray-400">API Key（僅寫入本機 `.env`）
             <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selectedId ? "留空則維持現有 key" : "sk-..."} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />

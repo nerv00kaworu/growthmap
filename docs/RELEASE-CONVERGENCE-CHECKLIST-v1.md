@@ -1,6 +1,6 @@
 # GrowthMap Release 收斂清單 v1
 
-- 狀態：**收斂完成；release candidate 尚待 commit、tag 與最終 archive**
+- 狀態：**authoring.2 security remediation 已完成獨立驗證；release commit、tag 與 archive 由最終封版流程產生**
 - 日期：2026-07-24（Asia/Taipei）
 - 封裝目標：**GrowthMap 作者編輯器**（authoring/editor）
 - 明確不含：Abyss Bureau 玩家 Web/API runtime、玩家 runtime DB、付款／PvP、任何 runtime LLM／圖像生成能力。
@@ -9,7 +9,7 @@
 
 ## 0. 發布範圍鎖定（必過）
 
-- [x] Release 名稱、版本號、tag 格式已決定：`growthmap-authoring-v0.1.0-authoring.1`（tag 僅在 release commit 後建立）。
+- [x] Release 名稱、版本號、tag 格式：`growthmap-authoring-v0.1.0-authoring.2`（舊 `.1` tag immutable；`.2` tag 指向最終 release commit）。
 - [x] README 首段明確寫出：GrowthMap 是 canonical authoring/editor；玩家 runtime 位於獨立 `abyss-bureau` repo。
 - [x] `apps/player-web`、`player_api` 等歷史 contract 描述已改標為「已遷出／歷史工程契約」；不得讓封裝者誤以為這些是本 repo 的 runtime 依賴。
 - [x] Release 不含任何 secret、`.env`、本機 provider 設定、使用者資料或 SQLite runtime DB；僅保留無 secret 的 `.env.example`。
@@ -143,3 +143,13 @@ DATABASE_URL='sqlite+aiosqlite:///:memory:' python -m unittest discover -s tests
 3. **乾淨環境驗收**：以新 clone／temporary DB 跑完整 gate。
 4. **製作 archive**：只包 tracked source + 安裝／部署文件，另附 manifest。
 5. **簽 tag／發 release**：最後一步才建立 release tag；若任一 P0 失敗，回到對應項修補。
+
+## authoring.2 security remediation gates (2026-07-27)
+
+- [x] Next >=15.5.21 and sharp >=0.35; production `npm audit --omit=dev` = 0.
+- [x] Python security floors resolved with compatible FastAPI; `pip-audit -r requirements.lock` = 0.
+- [x] Browser stores only provider ID/type/model; no browser provider helper or request secret overrides.
+- [x] Secret names require the app-owned `GROWTHMAP_LLM_KEY_` namespace on create/patch/write; endpoint is localhost-only, atomic mode 0600, response-empty.
+- [x] Launcher supports only `127.0.0.1`/`localhost` (explicitly rejects IPv6 forms) and backend enforces the same trusted Host policy.
+- [x] Original 12 core tests plus 8 security regressions pass.
+- [ ] No release commit/tag/archive in this remediation work; perform those only after review.

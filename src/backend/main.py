@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
@@ -114,8 +115,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="GrowthMap",
     description="可視化專案生長系統 API",
-    version="0.1.0",
+    version="0.1.0-authoring.2",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=["localhost", "127.0.0.1", "testserver"],
 )
 
 app.add_middleware(
@@ -132,7 +138,7 @@ app.include_router(ai_router, prefix="/api")
 
 @app.get("/api")
 async def api_root():
-    return {"name": "GrowthMap", "version": "0.1.0", "status": "running"}
+    return {"name": "GrowthMap", "version": "0.1.0-authoring.2", "status": "running"}
 
 
 @app.get("/api/health/deep")
@@ -171,4 +177,4 @@ if STATIC_DIR.exists():
 else:
     @app.get("/")
     async def root():
-        return {"name": "GrowthMap", "version": "0.1.0", "status": "running", "note": "Run 'npm run build' in frontend/ to serve UI"}
+        return {"name": "GrowthMap", "version": "0.1.0-authoring.2", "status": "running", "note": "Run 'npm run build' in frontend/ to serve UI"}
