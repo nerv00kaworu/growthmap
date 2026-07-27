@@ -31,10 +31,25 @@ jobs:
       - name: Verify NSIS build resources and packaged sidecar
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
-      - name: Assert NSIS artifact exists (never publish)
+      - name: Assert NSIS artifact exists and write SHA-256
         shell: pwsh
-        run: if (-not (Get-ChildItem desktop/dist/GrowthMap-Setup-*.exe)) { throw "NSIS artifact missing" }
+        run: |
+          $installer = Get-ChildItem desktop/dist -Filter 'GrowthMap-Setup-*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer artifact missing' }
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content "$($installer.FullName).sha256" -Encoding ascii
+          Write-Host "Built noncommercial unsigned test installer: $($installer.FullName)"
+          Write-Host "SHA-256: $hash"
+      - name: Upload noncommercial unsigned Windows test installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthmap-windows-noncommercial-unsigned-${{ github.sha }}
+          path: |
+            desktop/dist/GrowthMap-Setup-*.exe
+            desktop/dist/GrowthMap-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
       - name: Installer GUI lifecycle status
         shell: pwsh
         run: |
-          Write-Host "[blocked: interactive Windows runner required for silent install/app lifecycle/uninstall evidence]"
+          Write-Host "[blocked: interactive Windows runner required for install/app lifecycle/uninstall and user-data-retention evidence]"
