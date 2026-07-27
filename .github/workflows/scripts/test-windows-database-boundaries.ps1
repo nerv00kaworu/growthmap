@@ -30,6 +30,8 @@ $hardlink = Join-Path $root 'fixture-hardlink.db'
 New-Item -ItemType HardLink -Path $hardlink -Target $fixture | Out-Null
 if ((Get-Item $hardlink).LinkType -ne 'HardLink') { throw 'Hardlink evidence was not actually created' }
 Invoke-ExpectedMaintenanceRejection -Source $hardlink -Label 'hardlink'
+Remove-Item -LiteralPath $hardlink -Force
+if ((Get-Item $fixture).LinkType -eq 'HardLink') { throw 'Hardlink cleanup did not restore the fixture to one link' }
 
 # Exercise traversal through a genuine FILE_ATTRIBUTE_REPARSE_POINT. No capability skip is allowed.
 $junctionTarget = Join-Path $root 'junction-target'
