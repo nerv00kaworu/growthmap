@@ -1,10 +1,14 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
+const {verify}=require('./csp-manifest');
 const root=path.resolve(process.env.GROWTHMAP_PREFLIGHT_ROOT||path.resolve(__dirname,'..','..')); const platform=process.argv[2]||process.platform;
 const binary=path.join(root,'src','backend','dist',platform==='win32'?'growthmap-sidecar.exe':'growthmap-sidecar');
 const required=[binary,path.join(root,'src','frontend','out','index.html'),...['LICENSE','EULA.md','PRIVACY.md','THIRD_PARTY_NOTICES.md'].map(x=>path.join(root,x))];
 const missing=required.filter(x=>!fs.statSync?.(x,{throwIfNoEntry:false})?.isFile());
 if(missing.length){console.error('Desktop packaging preflight failed; missing required files:\n'+missing.map(x=>`- ${x}`).join('\n'));process.exit(1);}
+const manifestFile=path.join(root,'desktop','generated','csp-script-hashes.json');
+if(!fs.statSync(manifestFile,{throwIfNoEntry:false})?.isFile()){console.error(`Desktop packaging preflight failed; CSP manifest missing: ${manifestFile}`);process.exit(1);}
+try{verify(JSON.parse(fs.readFileSync(manifestFile,'utf8')),path.join(root,'src','frontend','out'));}catch(e){console.error(`Desktop packaging preflight failed: ${e.message}`);process.exit(1);}
 if(platform!=='win32'){try{fs.accessSync(binary,fs.constants.X_OK);}catch{console.error(`Desktop packaging preflight failed; sidecar is not executable: ${binary}`);process.exit(1);}}
 if(process.env.GROWTHMAP_COMMERCIAL_RELEASE==='1'){
  const drafts=['LICENSE','EULA.md','PRIVACY.md','THIRD_PARTY_NOTICES.md'].filter(x=>fs.readFileSync(path.join(root,x),'utf8').includes('REQUIRES LEGAL REVIEW'));

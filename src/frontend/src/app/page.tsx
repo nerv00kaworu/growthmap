@@ -251,7 +251,7 @@ export default function HomePage() {
       {/* Top bar */}
       <header className="h-14 border-b border-[var(--border)] bg-[var(--bg-panel)]/95 backdrop-blur flex items-center px-3 gap-2 shrink-0 flex-nowrap overflow-x-auto overflow-y-visible relative z-40">
         <div className="shrink-0 flex items-center h-full">
-          <h1 className="text-sm font-semibold text-[var(--text-primary)] tracking-wide">🌳 GrowthMap</h1>
+          <h1 data-testid="growthmap-title" className="text-sm font-semibold text-[var(--text-primary)] tracking-wide">🌳 GrowthMap</h1>
         </div>
         <div className="h-6 w-px bg-[var(--border)] shrink-0" />
 
@@ -295,10 +295,11 @@ export default function HomePage() {
           </>
         )}
 
-        <span className="shrink-0 text-[10px] text-gray-400">
+        <span data-testid="entitlement-status" className="shrink-0 text-[10px] text-gray-400">
           {entitlement?.valid && entitlement.max_active_projects === null ? "Licensed · unlimited" : `Free · ${projects.filter(p => p.status === "active").length}/2`}
         </span>
         <button
+          data-testid="new-project-button"
           type="button"
           onClick={() => setShowNewProject(!showNewProject)}
           className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200 shrink-0"

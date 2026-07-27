@@ -1,0 +1,11 @@
+'use strict';
+const fs=require('node:fs');
+const path=require('node:path');
+const {scan,stable}=require('./csp-manifest');
+const root=path.resolve(process.env.GROWTHMAP_PREFLIGHT_ROOT||path.resolve(__dirname,'..','..'));
+const out=path.join(root,'src','frontend','out');
+const destination=path.join(root,'desktop','generated','csp-script-hashes.json');
+if(!fs.statSync(out,{throwIfNoEntry:false})?.isDirectory())throw new Error(`Frontend static export is missing: ${out}`);
+fs.mkdirSync(path.dirname(destination),{recursive:true});
+fs.writeFileSync(destination,stable(scan(out)),'utf8');
+console.log(`Wrote deterministic CSP manifest: ${destination}`);

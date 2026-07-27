@@ -20,6 +20,8 @@ jobs:
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
+      - run: node scripts/generate-csp-manifest.js
+        working-directory: desktop
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
       - run: npm ci
@@ -31,6 +33,12 @@ jobs:
       - name: Verify NSIS build resources and packaged sidecar
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
+      - name: Full packaged Electron renderer smoke
+        run: npm run renderer:e2e
+        working-directory: desktop
+        env:
+          CI: 'true'
+          GROWTHMAP_E2E_SCREENSHOT: ${{ github.workspace }}/desktop/artifacts/growthmap-renderer.png
       - name: Assert NSIS artifact exists and write SHA-256
         shell: pwsh
         run: |
@@ -47,6 +55,7 @@ jobs:
           path: |
             desktop/dist/GrowthMap-Setup-*.exe
             desktop/dist/GrowthMap-Setup-*.exe.sha256
+            desktop/artifacts/growthmap-renderer.png
           if-no-files-found: error
           retention-days: 14
       - name: Installer GUI lifecycle status

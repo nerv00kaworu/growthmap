@@ -1,6 +1,6 @@
 {
   "name": "growthmap-desktop",
-  "version": "0.1.0-desktop.0",
+  "version": "0.1.0-desktop.1",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -9,11 +9,14 @@
     "pack:dir": "npm run preflight && electron-builder --dir",
     "dist:win": "npm run preflight:win && electron-builder --win nsis --publish never",
     "preflight": "node scripts/preflight.js",
-    "preflight:win": "node scripts/preflight.js win32"
+    "preflight:win": "node scripts/preflight.js win32",
+    "csp:generate": "node scripts/generate-csp-manifest.js",
+    "renderer:e2e": "node scripts/renderer-e2e.js"
   },
   "devDependencies": {
     "electron": "^37.2.0",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.62.0"
   },
   "build": {
     "appId": "com.growthmap.desktop",
@@ -26,7 +29,9 @@
       "main.js",
       "preload.js",
       "secret-store.js",
-      "package.json"
+      "package.json",
+      "csp.js",
+      "generated/csp-script-hashes.json"
     ],
     "extraResources": [
       {
