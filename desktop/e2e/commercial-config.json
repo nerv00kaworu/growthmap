@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "productMajor": 1,
   "licensePublicKeyResource": "commercial/e2e-license-public-key.pem",
-  "licensePublicKeySha256": "31ea93919322e656df43cb9ff8e10681d82a340c87085b025f81fcd31a6be810",
+  "licensePublicKeySha256": "GENERATED_FROM_PACKAGED_KEY_BYTES",
   "checkoutOrigin": "",
   "checkoutUrl": "",
   "updateUrl": "",
