@@ -1,21 +1,134 @@
 {
   "job_id": "growthmap-payments-v1-20260728",
-  "status": "candidate_implemented_local_review_required",
+  "status": "no_go_pending_fresh_independent_review_and_windows_ci",
   "baseline_documented": "3023e16",
   "implemented_on_head": "5941384",
   "live_db_accessed": false,
   "real_money_or_provider_writes": false,
   "commit_or_push": false,
   "checkpoints": [
-    {"name":"separate_ledger_schema","status":"complete","evidence":"services/payments/migrations/001_payments_v1.sql"},
-    {"name":"atomic_allocation_issuer_audit","status":"complete","evidence":"4 payment tests pass including 60-way mixed-rail concurrency and audit tamper"},
-    {"name":"x402_candidate_boundary","status":"mock_only","evidence":"v2 exact Base USDC challenge and deterministic verify/settle tests; real SDK blocked"},
-    {"name":"paypal_manual_boundary","status":"candidate","evidence":"transaction claim and authenticated exact attestation confirmation; no PayPal API"},
-    {"name":"desktop_purchase_panel_config","status":"complete_local","evidence":"frontend lint/typecheck/build; CSP generated; 79 desktop tests"},
-    {"name":"existing_backend","status":"complete","evidence":"53 tests pass from src/backend cwd"},
-    {"name":"windows_package","status":"pending_parent_fresh_review","evidence":"not run on Linux/WSL"}
+    {
+      "name": "separate_ledger_schema",
+      "status": "complete",
+      "evidence": "services/payments/migrations/001_payments_v1.sql"
+    },
+    {
+      "name": "atomic_allocation_issuer_audit",
+      "status": "complete",
+      "evidence": "4 payment tests pass including 60-way mixed-rail concurrency and audit tamper"
+    },
+    {
+      "name": "x402_candidate_boundary",
+      "status": "mock_only",
+      "evidence": "v2 exact Base USDC challenge and deterministic verify/settle tests; real SDK blocked"
+    },
+    {
+      "name": "paypal_manual_boundary",
+      "status": "candidate",
+      "evidence": "transaction claim and authenticated exact attestation confirmation; no PayPal API"
+    },
+    {
+      "name": "desktop_purchase_panel_config",
+      "status": "complete_local",
+      "evidence": "frontend lint/typecheck/build; CSP generated; 80 desktop tests"
+    },
+    {
+      "name": "existing_backend",
+      "status": "complete",
+      "evidence": "53 tests pass from src/backend cwd"
+    },
+    {
+      "name": "windows_package",
+      "status": "pending_parent_fresh_review",
+      "evidence": "not run on Linux/WSL"
+    },
+    {
+      "name": "no_go_remediation",
+      "status": "implemented_local_payment_suite_verified",
+      "evidence": "DB-authoritative quote/intents, Decimal PayPal, transitions, append-only audit, rate limits and ASAR verifier; exact local payment suite 26 passed"
+    },
+    {
+      "name": "evidence_reconciliation_and_migration_v2",
+      "status": "implemented_pending_fresh_review",
+      "evidence": "preserved 001 + checksum-pinned 002; paid/unpaid mock evidence tests; no production adapter"
+    },
+    {
+      "name": "parent_fk_and_content_reproducer",
+      "status": "fixed_pending_fresh_review",
+      "evidence": "v1 populated FK child migration test and generic-extension content scanner fixtures"
+    }
   ],
-  "counts": {"payment_tests":4,"backend_tests":53,"desktop_tests":79,"desktop_audit_vulnerabilities":0},
-  "blockers": ["official x402/CDP facilitator SDK integration and multi-instance transaction review","production Base recipient and secure Ed25519 key provider","real HTTPS payment API and wallet portal","PayPal merchant URL and reviewed manual operations","production admin session/Argon2id/CSRF/rate limiting/recovery delivery","revocation check-in","legal/key/config/Windows signing and Windows E2E"],
-  "report":"reports/growthmap-payments-v1-20260728.md"
+  "counts": {
+    "payment_tests": 26,
+    "backend_tests": 53,
+    "desktop_tests": 80,
+    "desktop_audit_vulnerabilities": 0,
+    "frontend_audit_high": 9
+  },
+  "blockers": [
+    "official x402/CDP facilitator SDK integration and multi-instance transaction review",
+    "production Base recipient and secure Ed25519 key provider",
+    "real HTTPS payment API and wallet portal",
+    "PayPal merchant URL and reviewed manual operations",
+    "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
+    "revocation check-in",
+    "legal/key/config/Windows signing and Windows E2E",
+    "fresh independent security/QA review of schema v6 authenticated issuance closure and migration quarantine",
+    "Windows execution of lock-derived production package inventory verifier"
+  ],
+  "report": "reports/growthmap-payments-v1-20260728.md",
+  "schema_version": 6,
+  "r5": {
+    "status": "candidate-remediated-local",
+    "production": "NO-GO",
+    "controls": [
+      "complete terminal HMAC",
+      "external authenticated checkpoint",
+      "legacy quarantine",
+      "separate admin auth/action limiting",
+      "frozen npm-ci provenance"
+    ],
+    "blockers": [
+      "historical paired DB+checkpoint rollback needs OS/HSM monotonic anchor",
+      "production facilitator/reconciler/auth/key/session/deployment",
+      "actual Windows workflow run"
+    ]
+  },
+  "r6": {
+    "status": "candidate-remediated-local",
+    "production": "NO-GO",
+    "controls": [
+      "checkpoint v2 canonical issuance closure",
+      "authenticated security schema manifest",
+      "v4/v5 legacy terminal quarantine E2E",
+      "protected x402/PayPal/recovery/admin/allocation operations",
+      "Windows provenance via explicit step outputs"
+    ],
+    "evidence": "24 payment tests; 53 backend tests; frontend lint/typecheck/build; desktop gate; standalone recovery-hash and trigger-drop rejection",
+    "blockers": [
+      "paired historical DB+valid checkpoint rollback needs external monotonic/HSM anchor",
+      "fresh independent review",
+      "actual Windows workflow run",
+      "production facilitator/reconciler/auth/key/session/deployment",
+      "frontend audit has 9 high dev-toolchain findings; breaking ESLint 10 fix not applied"
+    ]
+  },
+  "r7": {
+    "status": "candidate-remediated-local",
+    "production": "NO-GO",
+    "controls": [
+      "same BEGIN IMMEDIATE connection for trust verification and protected decision/mutation/read",
+      "checkpoint serialization and publication while SQLite writer lock held",
+      "atomic recovery/admin read helpers",
+      "deterministic x402 finalization and recovery TOCTOU regressions",
+      "60-way mixed-rail eight-service concurrency evidence"
+    ],
+    "evidence": "26 payment tests: 50 unique licenses/ordinals/proofs/transactions plus 10 manual-review outcomes; 53 backend; frontend clean build; desktop 80/audit 0; frontend audit 9 high",
+    "blockers": [
+      "fresh security/QA re-review",
+      "actual Windows/pwsh workflow run",
+      "paired historical rollback external monotonic/HSM",
+      "production provider/auth/session/key/deployment"
+    ]
+  }
 }

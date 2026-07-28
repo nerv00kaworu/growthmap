@@ -26,6 +26,17 @@ jobs:
         working-directory: src/backend
       - run: npm ci
         working-directory: desktop
+      - name: Freeze clean desktop dependency provenance before scripts/build
+        id: dependency-provenance
+        shell: pwsh
+        run: |
+          $path = Join-Path $env:RUNNER_TEMP ("growthmap-node-provenance-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT.json")
+          $digest = ./.github/workflows/scripts/new-node-provenance.ps1 -NodeModules desktop/node_modules -LockPath desktop/package-lock.json -PackagePath desktop/package.json -OutputPath $path
+          "path=$path" >> $env:GITHUB_OUTPUT
+          "sha256=$digest" >> $env:GITHUB_OUTPUT
+          # ACL blocks later non-admin processes from replacing this job-external file;
+          # the separately captured digest detects modification by same-user build steps.
+          icacls $path /inheritance:r /grant:r "$env:USERNAME`:(R)" /grant:r "SYSTEM`:(F)" | Out-Null
       - run: npm test
         working-directory: desktop
       - name: Commercial preflight must fail closed without production trust inputs
@@ -67,7 +78,7 @@ jobs:
         run: ./.github/workflows/scripts/test-windows-database-boundaries.ps1
       - name: Verify final production ASAR excludes all E2E material
         shell: pwsh
-        run: ./.github/workflows/scripts/verify-production-asar.ps1
+        run: ./.github/workflows/scripts/verify-production-asar.ps1 -ProvenancePath ${{ steps.dependency-provenance.outputs.path }} -ProvenanceSha256 ${{ steps.dependency-provenance.outputs.sha256 }}
       - name: Commercial Authenticode and updater metadata verification (publication gate)
         if: ${{ env.GROWTHMAP_COMMERCIAL_RELEASE == '1' }}
         shell: pwsh

@@ -39,6 +39,14 @@ test('production package verifier uses a CRLF fixture and checks actual ASAR/res
  assert.match(script,/Assert-NoProductionTestEntries \$ResourceEntries 'resources'/);
  assert.match(script,/commercial-config\.json is intentionally an extraResource/);
  assert.match(script,/Get-FileHash \$commercialPath/);
+ for(const field of ['paymentApiOrigin','purchasePortalOrigin','purchasePortalUrl','baseNetwork','baseUsdc','basePayee','earlyLimit','earlyPriceMicros','regularPriceMicros','paypalUrl'])assert.match(script,new RegExp(`'${field}'`));
+ for(const serverOnly of ['growthmap_payments','services/payments','admin_secret','signing_key'])assert.match(script,new RegExp(`'${serverOnly.replace('/','\\/')}'`));
+ for(const forbiddenExtension of ['py','pem','sqlite3'])assert.match(script,new RegExp(forbiddenExtension));
+ assert.match(script,/migrations\?/);
+ for(const contentMarker of ['BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY','SQLite format 3','Ed25519PrivateKey','CREATE TABLE settlement_intents'])assert.ok(script.includes(contentMarker));
+ assert.match(script,/Assert-NoForbiddenContent \(Join-Path \$tmp 'all'\) 'ASAR'/);
+ assert.match(script,/Assert-NoForbiddenContent \$resources 'resources'/);
+ assert.match(script,/@\{ Name='blob\.dat'/);assert.match(script,/@\{ Name='cache\.bin'/);assert.match(script,/@\{ Name='worker\.dat'/);
  assert.doesNotMatch(script,/extract-file \$asar commercial-config\.json/);
 });
 test('Windows database boundary fixtures are isolated under canonical system temp',()=>{
@@ -52,3 +60,16 @@ test('Windows database boundary fixtures are isolated under canonical system tem
 });
 test('pending-update lock precedes recovery, schema, migration backup and writable policy',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8'),body=source.slice(source.indexOf('async function prepareAndStart'),source.indexOf('async function launch'));const pending=body.indexOf('if(pending)'),verify=body.indexOf('verifyPending'),recover=body.indexOf('recoverStartup'),schema=body.indexOf('schemaStatus'),backup=body.indexOf('migrationBackup');assert(pending>=0&&verify>pending&&recover>verify&&schema>recover&&backup>schema);assert.match(body,/await lifecycle\.cleanup\(\)/);});
 test('packaged launch scrubs attacker trust env and injects bundled key mode',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8');for(const key of ['GROWTHMAP_CHECKOUT_ORIGIN','GROWTHMAP_CHECKOUT_URL','GROWTHMAP_UPDATE_URL','GROWTHMAP_LICENSE_PUBLIC_KEY'])assert.match(source,new RegExp(key));assert.match(source,/GROWTHMAP_BUNDLED_LICENSE_PUBLIC_KEY/);assert.match(source,/GROWTHMAP_PACKAGED_MODE/);});
+
+test('Windows dependency provenance is passed by immutable step outputs, never GITHUB_ENV', () => {
+  const workflow = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/desktop-windows.yml'), 'utf8')
+  const verifier = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/scripts/verify-production-asar.ps1'), 'utf8')
+  const provenance = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/scripts/new-node-provenance.ps1'), 'utf8')
+  assert.match(workflow, /path=\$path.*GITHUB_OUTPUT/s)
+  assert.match(workflow, /sha256=\$digest.*GITHUB_OUTPUT/s)
+  assert.match(workflow, /^\s*run: \.\/\.github\/workflows\/scripts\/verify-production-asar\.ps1 -ProvenancePath \$\{\{ steps\.dependency-provenance\.outputs\.path \}\} -ProvenanceSha256 \$\{\{ steps\.dependency-provenance\.outputs\.sha256 \}\}\s*$/m)
+  assert.doesNotMatch(workflow, /\$env:GITHUB_ENV/)
+  assert.match(verifier, /param\(\[switch\]\$SelfTestOnly,\[string\]\$ProvenancePath,\[string\]\$ProvenanceSha256\)/)
+  assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
+  assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
+})

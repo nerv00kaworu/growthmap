@@ -14,13 +14,45 @@ Documented baseline `3023e16`; implemented without rewriting later clean commits
 
 ## Verification
 
-- Payment: **4 passed** (mixed x402/PayPal 60-way confirms => exactly ordinals 1–50 issued, ten stale quotes reviewed; exact challenge/errors/replay; PayPal auth/attestation; desktop signature; audit tamper).
+- Payment: **24 passed** in the exact local suite (`PYTHONPATH=services/payments:src/backend src/backend/venv/bin/pytest -q services/payments/tests/test_payments.py`), with one Starlette/httpx deprecation warning.
 - Backend (correct `src/backend` cwd): **53 passed**, one upstream deprecation warning.
 - Frontend lint/typecheck/build: **PASS**.
-- CSP generate then desktop: **79 passed**; npm audit: **0 vulnerabilities**.
-- `git diff --check`: recorded separately at final check.
+- CSP generate then desktop: **80 passed**; npm audit: **0 vulnerabilities**.
+- `git diff --check`: **PASS** after the local payment repair.
 - Windows package/ASAR/resources/AuthentiCode/E2E: **pending parent/fresh Windows review**.
 
 ## Honest gaps
 
-Candidate HTTP surface does not yet include complete list/reject/refund/revoke/reissue/recovery handlers or production rate limiter/session implementation; core states/schema and documented seams exist. Real x402 facilitator and PayPal API are intentionally absent. Single-process lock must not be represented as multi-instance safe. Signed revocation assertion/check-in remains blocked. See docs for all production blockers.
+Candidate HTTP surface includes list/reject/refund/revoke/recovery, strict transitions and an enforced in-process limiter, but intentionally has no reissue endpoint, signed revocation assertion/check-in, production session provider, real x402 facilitator or PayPal API. SQLite transactions—not process locks—are authoritative across candidate service instances. See docs for production blockers.
+
+## NO-GO remediation
+
+Status remains **remediation_required pending fresh parent review**. SQLite is now authoritative across service instances for quote creation and durable x402 settlement intents/ordinal reservations. External settlement follows a committed intent; ambiguity is durable manual review and is never blindly retried. PayPal uses USD cents parsed from exact Decimal strings, claim binding, strict transitions, append-only audit triggers, enforced in-process rate-limit seam/no-store recovery, and configurable test admin origin/CSRF. Production HTTP startup remains explicitly blocked until reviewed Argon2id session infrastructure and official facilitator integration exist. Reissue and signed revocation assertions are not implemented or claimed.
+
+## Second security NO-GO remediation
+
+Status remains **NO-GO / remediation required pending fresh parent review**. Added evidence-backed ambiguous intent reconciliation, separate durable settlement-result recording before idempotent issuance, preserved migration 001 plus checksum-pinned 002 upgrade, explicit mock opt-in, configurable HTTPS resource base, and extension/path-based ASAR/resources exclusions. No production reconciler or official x402 compatibility is claimed.
+
+## Parent reproducer remediation
+
+Kept status **NO-GO pending parent fresh review**. Migration 002 now table-copies FK child tables before replacing orders, preserving populated payment proof/external event/audit rows. Added realistic v1 child-row fixture plus idempotence/FK/integrity assertions. Windows verifier now extracts ASAR and scans complete app-owned ASAR/resource files; generic `.dat`/`.bin` adversarial private-key, SQLite, Python issuer and migration payload fixtures must fail independent of names.
+
+Historical R4 payment remediation suite was **17 passed**; current R6 suite is **24 passed**. Fresh adjudication remediation adds idempotent startup finalization of durable settled evidence without provider calls; generic non-leaking no-store 500 handling and 200/402/404/409/422/500 coverage; atomic migration SQL/version/ledger writes with fail-closed v2+ ledgers; checksum-pinned evidence migrations through v4, external settlement-MAC fail-closed validation, and complete app-owned package scanning plus lock-installed third-party byte inventory checks (including >2 MiB suffix, native-looking, and `node_modules` adversarial fixtures).
+
+Current verdict remains **NO-GO pending fresh independent security/QA adjudication and the Windows CI/package gate**. Local non-Windows checks do not constitute that independent verdict.
+
+## R5 remediation status
+Implemented candidate controls for complete terminal-row MAC binding, external authenticated terminal-set checkpointing, v5 legacy quarantine, separated failed-auth/admin-action limiting, and frozen clean-install desktop dependency provenance. Current-DB mutation/deletion and checkpoint/key mismatch fail closed. Historical paired DB+checkpoint rollback remains unsolved without an external monotonic/HSM anchor. Production facilitator/reconciler/auth/key/session/deployment and an actual Windows workflow run remain blockers; Windows is NO-GO.
+
+## R6 authenticated issuance-closure remediation (current)
+
+R5 sections above are retained as historical chronology; this section supersedes their counts and terminal-only trust description. Schema **v6** checkpoint v2 authenticates the normalized security-relevant SQLite schema plus orders, payment proofs, provider events, settlement intents, issued license/order state, audit chain, migration ledger and checkpoint anchor. Verification occurs before startup recovery, issuance/recovery exposure, PayPal/admin mutation/read and ordinal allocation. Current row/schema tamper fails closed; trusted DB commit followed by checkpoint-write failure leaves an intentional fail-closed mismatch.
+
+Fresh payment suite: **24 passed**, including true populated checksum-ledger schema-v4 terminal evidence → v6 quarantine and authenticated populated v5 checkpoint → v6 quarantine, with `ambiguous`/`manual_review`, no auto-license, ledger 1–6, integrity/FK, reopen/idempotence. Backend remains **53 passed**. Frontend lint/typecheck/build passed. Desktop CSP generation and tests are rerun below. Desktop audit is clean; **frontend npm audit is not clean: 9 high-severity development-toolchain findings in ESLint/minimatch/brace-expansion; the complete suggested fix requires breaking ESLint 10 and was not applied.**
+
+Status remains **NO-GO** pending fresh independent review, actual Windows execution, provider/auth/session/key/deployment integration, and an external monotonic/HSM control for paired historical DB+valid-checkpoint rollback.
+
+## R7 same-transaction trust remediation (current)
+R6 text above is historical. Every protected operation now acquires the shared checkpoint serializer, opens its operation connection, executes `BEGIN IMMEDIATE`, and verifies checkpoint-v2/schema/closure and terminal evidence on that same locked connection before reading or mutating. It holds the transaction through decision, issuance and checkpoint publication/DB commit; recovery/admin reads use service helpers with the same boundary. Deterministic attacker races prove x402 finalization and recovery cannot be changed between verification and result, and subsequent post-commit tamper returns exactly `external issuance checkpoint/database mismatch`.
+
+Fresh payment suite: **26 passed**, including a 60-way, 8-service mixed x402/PayPal concurrency test: exactly 50 licenses/unique ordinals 1–50/proofs/transactions and 10 stale-price manual-review outcomes, with FK/integrity/audit/checkpoint reopen verification. Backend **53 passed**; clean frontend lint/typecheck/build passed; desktop CSP + **80 tests** + audit 0 passed. Frontend audit remains **9 high** in ESLint/minimatch/brace-expansion development tooling; breaking ESLint 10 remediation was not applied. Overall remains **NO-GO** pending fresh re-review, Windows execution and external deployment/provider/auth/key/session/monotonic controls.
