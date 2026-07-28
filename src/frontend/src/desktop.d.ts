@@ -6,7 +6,8 @@ declare global {
     growthmapDesktop?: {
       readonly isDesktop: true;
       readonly secrets: { has(id:string):Promise<boolean>; set(id:string,value:string):Promise<boolean>; delete(id:string):Promise<boolean> };
-      readonly license: { import():Promise<unknown> };
+      readonly license: { import():Promise<unknown>; checkout():Promise<boolean> };
+      readonly updates: { check():Promise<unknown> };
       readonly database: {
         status():Promise<DesktopDatabaseStatus>;
         import():Promise<{ok:true}|null>;

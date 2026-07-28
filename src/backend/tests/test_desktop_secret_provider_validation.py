@@ -7,6 +7,7 @@ from main import app
 from desktop.secrets import get
 h={'Authorization':'Bearer '+'test-session-token'}
 with TestClient(app) as c:
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
  missing='deleted-provider-id'
  assert c.put(f'/api/desktop/secrets/{missing}',headers=h,json={'api_key':'***'}).status_code==404
  assert get(missing) is None
@@ -21,6 +22,6 @@ with TestClient(app) as c:
  assert c.put(f"/api/desktop/secrets/{mock['id']}",headers=h,json={'api_key':'***'}).status_code==400
  assert get(mock['id']) is None
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'provider.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'provider.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',script],env=env,text=True,capture_output=True)
     assert result.returncode==0,result.stdout+result.stderr

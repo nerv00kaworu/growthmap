@@ -9,11 +9,16 @@ $required = @(
   (Join-Path $resources 'legal/LICENSE'),
   (Join-Path $resources 'legal/EULA.md'),
   (Join-Path $resources 'legal/PRIVACY.md'),
-  (Join-Path $resources 'legal/THIRD_PARTY_NOTICES.md')
+  (Join-Path $resources 'legal/THIRD_PARTY_NOTICES.md'),
+  (Join-Path $resources 'commercial-config.json'),
+  (Join-Path $resources 'commercial/license_public_key.pem')
 )
 foreach ($item in $required) {
   if (-not (Test-Path $item -PathType Leaf)) { throw "Missing packaged resource: $item" }
 }
+$config = Get-Content (Join-Path $resources 'commercial-config.json') -Raw | ConvertFrom-Json
+$keyHash = (Get-FileHash (Join-Path $resources 'commercial/license_public_key.pem') -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1' -and ($config.licensePublicKeySha256 -ne $keyHash -or $config.publisherStatus -ne 'APPROVED')) { throw 'Packaged commercial trust config/key mismatch' }
 
 $port = Get-Random -Minimum 20000 -Maximum 50000
 $token = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))

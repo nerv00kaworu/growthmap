@@ -41,6 +41,15 @@
       "lifecycle.js",
       "database-manager.js",
       "request-policy.js",
+      "update-policy.js",
+      "updater.js",
+      "update-recovery.js",
+      "managed-backup.js",
+      "trial-store.js",
+      "startup-policy.js",
+      "commercial-config.js",
+      "product-identity.json",
+      "commercial-config.json",
       "!e2e-main.js",
       "package.json",
       "csp.js",
@@ -50,6 +59,14 @@
       {
         "from": "../src/frontend/out",
         "to": "frontend"
+      },
+      {
+        "from": "commercial-config.json",
+        "to": "commercial-config.json"
+      },
+      {
+        "from": "../src/backend/desktop/license_public_key.pem",
+        "to": "commercial/license_public_key.pem"
       },
       {
         "from": "../LICENSE",
@@ -69,6 +86,8 @@
       }
     ],
     "win": {
+      "publisherName": "GrowthMap Software Ltd.",
+      "verifyUpdateCodeSignature": true,
       "target": [
         {
           "target": "nsis",
@@ -117,5 +136,8 @@
     }
   },
   "description": "Windows-first local GrowthMap authoring desktop application",
-  "author": "GrowthMap Project Contributors"
+  "author": "GrowthMap Project Contributors",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
 }

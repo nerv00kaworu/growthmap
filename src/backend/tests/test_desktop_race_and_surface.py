@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from main import app
 h={'Authorization':'Bearer test-session-token'}
 with TestClient(app) as c:
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
  def create(n):return c.post('/api/projects',headers=h,json={'name':n}).status_code
  with ThreadPoolExecutor(max_workers=8) as x: codes=list(x.map(create,[str(i) for i in range(8)]))
  rows=c.get('/api/projects',headers=h).json();assert sum(p['status']=='active' for p in rows)<=2,codes
@@ -26,4 +27,4 @@ with TestClient(app) as c:
  with ThreadPoolExecutor(max_workers=6) as x:codes=list(x.map(restore,archived))
  rows=c.get('/api/projects',headers=h).json();assert sum(p['status']=='active' for p in rows)<=2,codes
 '''
- env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'r.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json')};run(script,env)
+ env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'r.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')};run(script,env)

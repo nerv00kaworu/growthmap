@@ -46,7 +46,8 @@ export default function HomePage() {
   const [showBranchHistory, setShowBranchHistory] = useState(false);
   const [branchHistory, setBranchHistory] = useState<{ id: string; action_type: string; created_at: string }[]>([]);
   const [branchHistoryLoading, setBranchHistoryLoading] = useState(false);
-  const [entitlement, setEntitlement] = useState<{ edition: string; valid: boolean; max_active_projects: number | null } | null>(null);
+  const [entitlement, setEntitlement] = useState<{ state:string; edition:string; valid:boolean; mutations_allowed:boolean; reason:string; major_version:number|null; max_active_projects:number|null; trial_days_remaining:number; trial_expires_at:string|null } | null>(null);
+  const readOnly = entitlement?.state === "extraction";
   const importRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +67,7 @@ export default function HomePage() {
 
   useEffect(() => {
     loadProjects();
-    api.getEntitlement().then(setEntitlement).catch(() => setEntitlement({ edition: "free", valid: false, max_active_projects: 2 }));
+    api.getEntitlement().then(setEntitlement).catch(() => setEntitlement({ state:"extraction", edition:"unpaid", valid:false, mutations_allowed:false, reason:"unavailable", major_version:null, max_active_projects:0, trial_days_remaining:0, trial_expires_at:null }));
   }, [loadProjects]);
 
   useEffect(() => {
@@ -163,6 +164,18 @@ export default function HomePage() {
     const desktop = (window as typeof window & { growthmapDesktop?: { license: { import(): Promise<unknown> } } }).growthmapDesktop;
     if (!desktop) { setToast("License 匯入僅在桌面版提供"); return; }
     try { await desktop.license.import(); setEntitlement(await api.getEntitlement()); setToast("✅ License 已驗證並匯入"); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  };
+
+  const openCheckout = async () => {
+    if (!window.growthmapDesktop) { setToast("購買僅在桌面版提供"); return; }
+    try { await window.growthmapDesktop.license.checkout(); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  };
+
+  const checkUpdates = async () => {
+    if (!window.growthmapDesktop) return;
+    try { await window.growthmapDesktop.updates.check(); }
     catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
@@ -296,13 +309,14 @@ export default function HomePage() {
         )}
 
         <span data-testid="entitlement-status" className="shrink-0 text-[10px] text-gray-400">
-          {entitlement?.valid && entitlement.max_active_projects === null ? "Licensed · unlimited" : `Free · ${projects.filter(p => p.status === "active").length}/2`}
+          {entitlement?.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement?.state === "trial" ? `Trial · ${entitlement.trial_days_remaining} day(s) · ${projects.filter(p => p.status === "active").length}/2` : "Read-only extraction · exports available"}
         </span>
         <button
           data-testid="new-project-button"
           type="button"
           onClick={() => setShowNewProject(!showNewProject)}
-          className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200 shrink-0"
+          disabled={readOnly}
+          className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           + 新專案
         </button>
@@ -380,7 +394,7 @@ export default function HomePage() {
               <button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">📋 匯出規格</button>
               <button type="button" onClick={() => { handleExport(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📄 匯出 Markdown</button>
               <button type="button" onClick={() => { handleExportJSON(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📤 匯出 JSON</button>
-              <label className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 cursor-pointer">
+              <label className={`rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 ${readOnly ? "opacity-40 pointer-events-none" : "hover:bg-gray-800 cursor-pointer"}`}>
                 📥 匯入 JSON
                 <input
                   ref={importRef}
@@ -398,9 +412,11 @@ export default function HomePage() {
               >
                 ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
               </button>
-              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⚙️ LLM 設定</button>
+              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">⚙️ LLM 設定</button>
               <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
-              <button type="button" onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
+              {entitlement?.state !== "paid" && <button type="button" onClick={() => { openCheckout(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-700/50 bg-amber-900/20 px-3 py-2.5 text-left text-xs text-amber-100">🛒 購買 v1 永久授權</button>}
+              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
+              <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
               <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
               <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">🗂️ 方案線歷史</button>

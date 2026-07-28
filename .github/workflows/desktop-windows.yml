@@ -28,6 +28,14 @@ jobs:
         working-directory: desktop
       - run: npm test
         working-directory: desktop
+      - name: Commercial preflight must fail closed without production trust inputs
+        shell: pwsh
+        run: |
+          $env:GROWTHMAP_COMMERCIAL_RELEASE='1'
+          npm run preflight:win
+          if ($LASTEXITCODE -eq 0) { throw 'Commercial preflight unexpectedly passed without legal/key/endpoints/code signing' }
+          exit 0
+        working-directory: desktop
       - name: Build isolated non-shipped E2E package
         run: npm run dist:win:e2e
         working-directory: desktop
@@ -41,7 +49,12 @@ jobs:
       - name: Delete entire isolated test dist
         shell: pwsh
         run: Remove-Item desktop/dist -Recurse -Force
-      - name: Build final production NSIS installer
+      - name: Assert E2E bypass names are absent from commercial source set
+        shell: pwsh
+        run: |
+          $pkg = Get-Content desktop/package.json -Raw | ConvertFrom-Json
+          if (-not ($pkg.build.files -contains '!e2e-main.js')) { throw 'E2E main exclusion missing' }
+      - name: Build final noncommercial unsigned NSIS test installer
         run: npm run dist:win
         working-directory: desktop
       - name: Verify final production resources and normal sidecar smoke
@@ -53,6 +66,17 @@ jobs:
       - name: Verify final production ASAR excludes all E2E material
         shell: pwsh
         run: ./.github/workflows/scripts/verify-production-asar.ps1
+      - name: Commercial Authenticode and updater metadata verification (publication gate)
+        if: ${{ env.GROWTHMAP_COMMERCIAL_RELEASE == '1' }}
+        shell: pwsh
+        run: |
+          $identity = Get-Content desktop/product-identity.json -Raw | ConvertFrom-Json
+          $installer = Get-ChildItem desktop/dist/*.exe | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $installer.FullName
+          if ($identity.status -ne 'APPROVED' -or $sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -ne $identity.windowsPublisher) { throw 'Authenticode signer/status mismatch' }
+          if (-not $sig.TimeStamperCertificate -or -not $sig.SignerCertificate.Verify()) { throw 'Authenticode timestamp/chain verification failed' }
+          $metadata = Get-ChildItem desktop/dist/latest*.yml | Select-Object -First 1
+          if (-not $metadata -or -not (Select-String -Path $metadata.FullName -Pattern '^sha512:' -Quiet)) { throw 'Updater metadata/hash missing' }
       - name: Assert NSIS artifact exists and write SHA-256
         shell: pwsh
         run: |

@@ -17,7 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
-from desktop.entitlements import current_entitlement
+from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -36,6 +36,13 @@ router = APIRouter()
 # One desktop sidecar process serializes count+commit seat mutations. Reads,
 # exports and archive operations do not acquire this lock.
 _project_seat_lock = asyncio.Lock()
+
+async def _require_active_project_seat(db: AsyncSession, *, conflict_status: int=402) -> None:
+    entitlement=peek_current_entitlement()
+    if desktop_mode() and entitlement.max_active_projects is not None:
+        active=await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
+        if active >= entitlement.max_active_projects:
+            raise HTTPException(conflict_status, f"Active project limit reached ({active}/{entitlement.max_active_projects}); archive a project or import a matching-major license")
 
 
 def backup_db():
@@ -369,11 +376,7 @@ async def list_projects(db: AsyncSession = Depends(get_db)):
 @router.post("/projects", response_model=ProjectOut, status_code=201)
 async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db)):
     async with _project_seat_lock:
-        entitlement = current_entitlement()
-        if desktop_mode() and entitlement.max_active_projects is not None:
-            active = await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
-            if active >= entitlement.max_active_projects:
-                raise HTTPException(402, f"Active project limit reached ({active}/{entitlement.max_active_projects}); archive a project or import a license")
+        await _require_active_project_seat(db)
         return await _create_project_committed(data, db)
 
 
@@ -422,11 +425,7 @@ async def update_project(project_id: str, data: ProjectUpdate, db: AsyncSession 
     changes = data.model_dump(exclude_unset=True)
     if changes.get("status") == "active" and project.status != "active":
         async with _project_seat_lock:
-            entitlement = current_entitlement()
-            if desktop_mode() and entitlement.max_active_projects is not None:
-                active = await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
-                if active >= entitlement.max_active_projects:
-                    raise HTTPException(409, f"Cannot restore project: active project limit reached ({active}/{entitlement.max_active_projects})")
+            await _require_active_project_seat(db, conflict_status=409)
             for k, v in changes.items(): setattr(project, k, v)
             await db.commit()
             await db.refresh(project)
@@ -1457,7 +1456,14 @@ async def export_project_json(project_id: str, db: AsyncSession = Depends(get_db
 
 @router.post("/projects/import-json", response_model=None, status_code=201)
 async def import_project_json(data: dict = Body(...), db: AsyncSession = Depends(get_db)):
-    """Import a project from JSON export. Creates new project with new IDs."""
+    """Import atomically with the same active-seat allocator as create/restore."""
+    status=data.get("project",{}).get("status","active")
+    if status != "active": return await _import_project_json_committed(data,db)
+    async with _project_seat_lock:
+        await _require_active_project_seat(db)
+        return await _import_project_json_committed(data,db)
+
+async def _import_project_json_committed(data: dict, db: AsyncSession):
     proj_data = data.get("project", {})
     nodes_data = data.get("nodes", [])
     edges_data = data.get("edges", [])

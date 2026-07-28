@@ -13,6 +13,9 @@ from api.routes import router
 from ai.routes import router as ai_router
 from desktop.routes import router as desktop_router
 from desktop.security import DesktopSessionMiddleware
+from desktop.mutation_gate import DesktopMutationGateMiddleware
+from desktop.startup_verdict import effective_entitlement
+from desktop.migration_auth import authorized as migration_authorized
 from desktop.secrets import desktop_mode
 
 STATIC_DIR = Path(os.getenv("GROWTHMAP_STATIC_DIR", Path(__file__).parent.parent / "frontend" / "out"))
@@ -33,6 +36,31 @@ def _cors_allowed_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    entitlement=effective_entitlement()
+    extraction_startup=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not entitlement.mutations_allowed
+    migration_required=desktop_mode() and os.getenv("GROWTHMAP_MIGRATION_REQUIRED") == "1"
+    schema_current=desktop_mode() and os.getenv("GROWTHMAP_SCHEMA_CURRENT") == "1"
+    if migration_required and not entitlement.mutations_allowed:
+        raise RuntimeError("Desktop migration requires a verified pre-migration backup marker")
+    database_absent=engine.url.get_backend_name()=="sqlite" and not Path(engine.url.database).exists()
+    if desktop_mode() and entitlement.mutations_allowed and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not database_absent and not (migration_required or schema_current):
+        raise RuntimeError("Desktop writable startup requires verified schema preflight")
+    if extraction_startup:
+        async with engine.connect() as conn:
+            await conn.execute(__import__("sqlalchemy").text("PRAGMA query_only=ON"))
+            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+            integrity=(await conn.execute(__import__("sqlalchemy").text("PRAGMA quick_check"))).scalar()
+            if integrity != "ok": raise RuntimeError("database integrity check failed")
+        yield
+        return
+    if schema_current:
+        async with engine.connect() as conn: await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        yield
+        return
+    # Authorize and consume immediately before opening the DDL transaction. The
+    # marker is one-launch evidence: a failed launch must obtain a fresh marker/MAC.
+    if migration_required and not migration_authorized():
+        raise RuntimeError("Desktop migration requires a verified pre-migration backup marker")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         # Lightweight SQLite migrations for databases created before these columns existed.
@@ -124,6 +152,7 @@ app = FastAPI(
 
 # Added before other middleware so every desktop route, including readiness and
 # static assets, requires the per-launch unguessable token.
+app.add_middleware(DesktopMutationGateMiddleware)
 app.add_middleware(DesktopSessionMiddleware)
 
 app.add_middleware(
@@ -159,6 +188,9 @@ async def deep_health():
     """Authoring-only readiness check; never mounts product runtime routes."""
     async with engine.connect() as conn:
         await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
+        if engine.url.get_backend_name() == "sqlite":
+            integrity=(await conn.execute(__import__("sqlalchemy").text("PRAGMA quick_check"))).scalar()
+            if integrity != "ok": raise HTTPException(503,"Database integrity check failed")
     return {"status": "ok", "surface": "authoring"}
 
 

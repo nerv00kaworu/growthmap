@@ -88,6 +88,22 @@ def _open_validated(source):
 def validate(path):
  connection,meta=_open_validated(path);connection.close();return meta
 
+def schema_status(path):
+ """Inspect only the migration-owned schema surface without opening SQLite writable."""
+ source=Path(path)
+ if not source.exists(): return {"exists":False,"migrationNeeded":True,"reasons":["database_missing"]}
+ connection,meta=_open_validated(source)
+ try:
+  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("nodes","provider_configs")}
+  objects={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('index','trigger')")}
+  reasons=[]
+  for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key")):
+   if column not in columns[table]: reasons.append(f"column:{table}.{column}")
+  for name in ("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"):
+   if name not in objects: reasons.append(f"object:{name}")
+  return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
+ finally: connection.close()
+
 def _durability(file,parent):
  if os.name=="nt":
   # Python's os.fsync on a read-only Windows descriptor can fail with EBADF.
@@ -124,6 +140,12 @@ def validated_snapshot(source,destination):
 
 def main(argv):
  if os.getenv("GROWTHMAP_DESKTOP_MODE")!="1": raise SystemExit("desktop mode required")
- if len(argv)!=3 or argv[1] not in ("--validate-db","--validated-snapshot-db"): raise SystemExit("maintenance usage error")
- result=validate(argv[2]) if argv[1]=="--validate-db" else validated_snapshot(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])
+ if len(argv)!=3 or argv[1] not in ("--validate-db","--validated-snapshot-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
+ if argv[1]=="--entitlement-status":
+  # No database is opened. This is the same cryptographic verifier used by the API.
+  from desktop.entitlements import peek_current_entitlement
+  result=peek_current_entitlement().public()
+ elif argv[1]=="--validate-db": result=validate(argv[2])
+ elif argv[1]=="--schema-status": result=schema_status(argv[2])
+ else: result=validated_snapshot(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])
  print(json.dumps(result,separators=(",",":")))

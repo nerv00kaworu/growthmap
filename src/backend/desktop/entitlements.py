@@ -1,40 +1,139 @@
-"""Strict offline, fail-closed license verification. No private signing material belongs here."""
-import base64, json, os, re
-from dataclasses import dataclass
-from datetime import datetime, timezone
+"""Desktop trial and signed entitlement policy.
+
+No private signing material belongs in the product. Invalid/corrupt state always degrades to
+extraction mode; it never affects access to existing data.
+"""
+from __future__ import annotations
+import base64, json, os, re, tempfile
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-FREE_LIMIT=2; EDITIONS={"personal","pro","studio"}; REQUIRED={"edition","license_id","max_active_projects","signature"}; ALLOWED=REQUIRED|{"expires_at"}
-PUBLIC_KEY_PATH=Path(os.getenv("GROWTHMAP_LICENSE_PUBLIC_KEY",Path(__file__).with_name("license_public_key.pem"))); LICENSE_PATH=Path(os.getenv("GROWTHMAP_LICENSE_FILE",Path.home()/".growthmap"/"license.json"))
+
+TRIAL_DAYS = 7
+TRIAL_ACTIVE_PROJECT_LIMIT = 2
+CURRENT_MAJOR_VERSION = 1  # compiled product line; packaging preflight checks desktop metadata agreement
+LICENSE_PATH = Path(os.getenv("GROWTHMAP_LICENSE_FILE", Path.home()/".growthmap"/"license.json"))
+TRIAL_PATH = Path(os.getenv("GROWTHMAP_TRIAL_STATE_FILE", LICENSE_PATH.with_name("trial-state.json")))
+def _public_key_path() -> Path:
+    bundled=Path(__file__).with_name("license_public_key.pem")
+    # Frozen/packaged builds receive a desktop-authenticated fixed path. The ordinary
+    # override is deliberately limited to explicit source/test mode.
+    if getattr(__import__('sys'), 'frozen', False) or os.getenv("GROWTHMAP_PACKAGED_MODE")=="1":
+        value=os.getenv("GROWTHMAP_BUNDLED_LICENSE_PUBLIC_KEY")
+        return Path(value) if value else bundled
+    return Path(os.getenv("GROWTHMAP_LICENSE_PUBLIC_KEY", bundled))
+PUBLIC_KEY_PATH = _public_key_path()
+EDITIONS = {"personal", "pro", "studio"}
+LICENSE_FIELDS = {"schema_version","edition","license_id","major_version","device_allowance","device_binding","issued_at","expires_at","revoked_at","max_active_projects","signature"}
+LICENSE_REQUIRED = {"schema_version","edition","license_id","major_version","device_allowance","issued_at","max_active_projects","signature"}
+ROLLBACK_TOLERANCE = timedelta(minutes=5)
+
 @dataclass(frozen=True)
 class Entitlement:
- edition:str="free";license_id:str|None=None;max_active_projects:int|None=FREE_LIMIT;valid:bool=False;reason:str="no_license"
-def canonical_payload(doc:dict[str,Any])->bytes:
- fields={k:doc[k] for k in ("edition","license_id","expires_at","max_active_projects") if k in doc}
- return json.dumps(fields,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
-def verify_document(doc:dict[str,Any],public_key_path:Path=PUBLIC_KEY_PATH)->Entitlement:
- try:
-  if not isinstance(doc,dict) or set(doc)-ALLOWED or not REQUIRED<=set(doc):return Entitlement(reason="invalid_document")
-  if doc["edition"] not in EDITIONS:return Entitlement(reason="invalid_edition")
-  if not isinstance(doc["license_id"],str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",doc["license_id"]):return Entitlement(reason="invalid_license_id")
-  expires=doc.get("expires_at")
-  if expires is not None:
-   if not isinstance(expires,str):return Entitlement(reason="invalid_expiry")
-   expiry=datetime.fromisoformat(expires.replace("Z","+00:00"))
-   if expiry.tzinfo is None:return Entitlement(reason="invalid_expiry")
-   if expiry<=datetime.now(timezone.utc):return Entitlement(reason="expired")
-  limit=doc["max_active_projects"]
-  if limit is not None and (isinstance(limit,bool) or not isinstance(limit,int) or limit<FREE_LIMIT):return Entitlement(reason="invalid_limit")
-  raw=public_key_path.read_bytes()
-  if b"REPLACE_WITH" in raw:return Entitlement(reason="placeholder_public_key")
-  key=serialization.load_pem_public_key(raw)
-  if not isinstance(key,Ed25519PublicKey):return Entitlement(reason="invalid_public_key")
-  key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
-  return Entitlement(doc["edition"],doc["license_id"],limit,True,"valid")
- except (OSError,ValueError,TypeError,InvalidSignature):return Entitlement(reason="invalid_signature")
-def current_entitlement()->Entitlement:
- try:return verify_document(json.loads(LICENSE_PATH.read_text("utf-8")))
- except (OSError,ValueError):return Entitlement()
+    state: str = "extraction"
+    edition: str = "unpaid"
+    license_id: str | None = None
+    major_version: int | None = None
+    device_allowance: int | None = None
+    max_active_projects: int | None = 0
+    valid: bool = False
+    mutations_allowed: bool = False
+    reason: str = "no_trial_state"
+    trial_started_at: str | None = None
+    trial_expires_at: str | None = None
+    trial_days_remaining: int = 0
+
+    def public(self) -> dict[str, Any]: return asdict(self)
+
+def _iso(value: Any) -> datetime:
+    if not isinstance(value, str): raise ValueError("timestamp")
+    result = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if result.tzinfo is None: raise ValueError("timezone")
+    return result.astimezone(timezone.utc)
+
+def canonical_payload(doc: dict[str, Any]) -> bytes:
+    return json.dumps({k:doc[k] for k in sorted(doc) if k != "signature"}, sort_keys=True, separators=(",",":"), ensure_ascii=False).encode()
+
+def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, *, now: datetime | None=None, current_major: int=CURRENT_MAJOR_VERSION) -> Entitlement:
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    try:
+        if not isinstance(doc, dict) or set(doc)-LICENSE_FIELDS or not LICENSE_REQUIRED <= set(doc): return Entitlement(reason="invalid_document")
+        if doc["schema_version"] != 1: return Entitlement(reason="unsupported_schema")
+        if doc["edition"] not in EDITIONS: return Entitlement(reason="invalid_edition")
+        if not isinstance(doc["license_id"],str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",doc["license_id"]): return Entitlement(reason="invalid_license_id")
+        if isinstance(doc["major_version"],bool) or not isinstance(doc["major_version"],int) or doc["major_version"] < 1: return Entitlement(reason="invalid_major_version")
+        if isinstance(doc["device_allowance"],bool) or not isinstance(doc["device_allowance"],int) or doc["device_allowance"] < 1: return Entitlement(reason="invalid_device_allowance")
+        binding=doc.get("device_binding")
+        if binding is not None: return Entitlement(reason="device_binding_unsupported")
+        _iso(doc["issued_at"])
+        expires=doc.get("expires_at")
+        if expires is not None:
+            try: expiry=_iso(expires)
+            except (ValueError,TypeError): return Entitlement(reason="invalid_expiry")
+            if expiry <= now: return Entitlement(reason="expired")
+        if doc.get("revoked_at") is not None:
+            try: revoked=_iso(doc["revoked_at"])
+            except (ValueError,TypeError): return Entitlement(reason="invalid_revocation")
+            if revoked <= now: return Entitlement(reason="revoked")
+        if doc["max_active_projects"] is not None: return Entitlement(reason="invalid_limit")
+        raw=public_key_path.read_bytes()
+        if b"REPLACE_WITH" in raw: return Entitlement(reason="placeholder_public_key")
+        key=serialization.load_pem_public_key(raw)
+        if not isinstance(key,Ed25519PublicKey): return Entitlement(reason="invalid_public_key")
+        key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
+        if doc["major_version"] != current_major: return Entitlement(reason="major_mismatch", major_version=doc["major_version"])
+        return Entitlement(state="paid",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=True,reason="valid")
+    except (OSError,ValueError,TypeError,InvalidSignature): return Entitlement(reason="invalid_signature")
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True,exist_ok=True)
+    fd,name=tempfile.mkstemp(prefix=path.name+".",suffix=".tmp",dir=path.parent)
+    try:
+        with os.fdopen(fd,"w",encoding="utf-8") as handle: json.dump(value,handle,separators=(",",":")); handle.flush(); os.fsync(handle.fileno())
+        os.chmod(name,0o600); os.replace(name,path)
+    except Exception:
+        try: os.unlink(name)
+        except OSError: pass
+        raise
+
+def initialize_trial(path: Path=TRIAL_PATH, *, now: datetime | None=None, started_at: str | None=None, installation_id: str="test-installation") -> None:
+    """Electron-authorized first-install initialization; never resets existing/corrupt state."""
+    if path.exists(): return
+    instant=_iso(started_at).isoformat() if started_at else (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,80}",installation_id): raise ValueError("installation_id")
+    try: _atomic_json(path,{"schema_version":1,"installation_id":installation_id,"started_at":instant,"last_seen_at":instant})
+    except FileExistsError: pass
+
+def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
+    now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    try:
+        doc=json.loads(path.read_text("utf-8"))
+        if set(doc)!={"schema_version","installation_id","started_at","last_seen_at"} or doc["schema_version"] != 1 or not re.fullmatch(r"[A-Za-z0-9-]{8,80}",doc["installation_id"]): return Entitlement(reason="corrupt_trial_state")
+        started,last=_iso(doc["started_at"]),_iso(doc["last_seen_at"])
+        if started > now + ROLLBACK_TOLERANCE or now + ROLLBACK_TOLERANCE < last: return Entitlement(reason="clock_rollback",trial_started_at=started.isoformat(),trial_expires_at=(started+timedelta(days=TRIAL_DAYS)).isoformat())
+        expires=started+timedelta(days=TRIAL_DAYS)
+        if now >= expires: return Entitlement(reason="trial_expired",trial_started_at=started.isoformat(),trial_expires_at=expires.isoformat())
+        if checkpoint and now > last: _atomic_json(path,{"schema_version":1,"installation_id":doc["installation_id"],"started_at":started.isoformat(),"last_seen_at":now.isoformat()})
+        remaining=max(1,(expires.date()-now.date()).days)
+        return Entitlement(state="trial",edition="trial",max_active_projects=TRIAL_ACTIVE_PROJECT_LIMIT,valid=True,mutations_allowed=True,reason="trial_active",trial_started_at=started.isoformat(),trial_expires_at=expires.isoformat(),trial_days_remaining=remaining)
+    except (OSError,ValueError,TypeError,KeyError,json.JSONDecodeError): return Entitlement(reason="corrupt_trial_state")
+
+def peek_current_entitlement(*, now: datetime | None=None) -> Entitlement:
+    """Cryptographic entitlement lookup with zero file writes."""
+    if LICENSE_PATH.exists():
+        try: return verify_document(json.loads(LICENSE_PATH.read_text("utf-8")),public_key_path=_public_key_path(),now=now)
+        except (OSError,ValueError): return Entitlement(reason="corrupt_license")
+    return trial_entitlement(now=now,checkpoint=False)
+
+def checkpoint_current_entitlement(*, now: datetime | None=None) -> Entitlement:
+    value=peek_current_entitlement(now=now)
+    if value.state != "trial" or not value.valid or not value.mutations_allowed:
+        return value
+    return trial_entitlement(now=now,checkpoint=True)
+
+def current_entitlement(*, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
+    return checkpoint_current_entitlement(now=now) if checkpoint else peek_current_entitlement(now=now)

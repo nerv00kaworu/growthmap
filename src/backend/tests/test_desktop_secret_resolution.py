@@ -21,6 +21,7 @@ import ai.providers.registry
 ai.providers.registry.get_provider=fake_provider
 h={'Authorization':'Bearer test-session-token'}
 with TestClient(app) as c:
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
  project=c.post('/api/projects',headers=h,json={'name':'secret-test'}).json()
  provider=c.post('/api/providers',headers=h,json={'name':'fixture','provider_type':'openai_compatible','endpoint':'http://fixture.invalid','secret_env_key':'GROWTHMAP_LLM_KEY_FIXTURE','model_name':'fixture','capabilities':[],'cost_level':'none','enabled':True}).json()
  pid=provider['id']
@@ -37,6 +38,6 @@ with TestClient(app) as c:
  removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid})
  assert removed.status_code==400 and 'desktop secure storage' in removed.text
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',script],env=env,text=True,capture_output=True)
     assert result.returncode==0,result.stdout+result.stderr

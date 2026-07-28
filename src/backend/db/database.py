@@ -21,6 +21,7 @@ engine = create_async_engine(DATABASE_URL, echo=False)
 def set_sqlite_pragma(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1": cursor.execute("PRAGMA query_only=ON")
     cursor.close()
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

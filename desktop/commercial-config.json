@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "productMajor": 1,
+  "licensePublicKeyResource": "commercial/REPLACE_WITH_PRODUCTION_PUBLIC_KEY.pem",
+  "licensePublicKeySha256": "REPLACE_WITH_PRODUCTION_PUBLIC_KEY_SHA256",
+  "checkoutOrigin": "https://REPLACE_WITH_CHECKOUT_ORIGIN.invalid",
+  "checkoutUrl": "https://REPLACE_WITH_CHECKOUT_URL.invalid/buy",
+  "updateUrl": "https://REPLACE_WITH_UPDATE_ORIGIN.invalid/updates",
+  "updateOrigin": "https://REPLACE_WITH_UPDATE_ORIGIN.invalid",
+  "publisher": "REPLACE_WITH_APPROVED_PUBLISHER",
+  "publisherStatus": "UNAPPROVED"
+}

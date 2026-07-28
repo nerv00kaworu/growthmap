@@ -1,0 +1,36 @@
+import os,subprocess,sys
+from pathlib import Path
+
+def test_import_seat_and_concurrent_create_import_restore(tmp_path):
+ code=r'''import concurrent.futures
+from fastapi.testclient import TestClient
+from main import app
+h={'Authorization':'Bearer t'}
+active={'project':{'name':'imported','status':'active'},'nodes':[],'edges':[],'content_blocks':[]}
+archived={'project':{'name':'archive','status':'archived'},'nodes':[],'edges':[],'content_blocks':[]}
+with TestClient(app) as c:
+ assert c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'}).status_code==200
+ assert c.post('/api/projects',headers=h,json={'name':'one'}).status_code==201
+ assert c.post('/api/projects/import-json',headers=h,json=active).status_code==201
+ assert c.post('/api/projects/import-json',headers=h,json=active).status_code==402
+ assert c.post('/api/projects/import-json',headers=h,json=archived).status_code==201
+ archived_id=[p['id'] for p in c.get('/api/projects',headers=h).json() if p['status']=='archived'][0]
+ assert c.patch('/api/projects/'+archived_id,headers=h,json={'status':'active'}).status_code==409
+# Fresh DB concurrency: mixed allocators can produce at most two successes.
+'''
+ env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'seat.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+ r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
+ code2=r'''import concurrent.futures
+from fastapi.testclient import TestClient
+from main import app
+h={'Authorization':'Bearer t'}; active={'project':{'name':'i','status':'active'},'nodes':[],'edges':[],'content_blocks':[]}
+with TestClient(app) as c:
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
+ def call(i):
+  return (c.post('/api/projects',headers=h,json={'name':str(i)}) if i%2==0 else c.post('/api/projects/import-json',headers=h,json=active)).status_code
+ with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool: codes=list(pool.map(call,range(6)))
+ assert codes.count(201)==2,codes
+ assert len([p for p in c.get('/api/projects',headers=h).json() if p['status']=='active'])==2
+'''
+ env['DATABASE_URL']=f"sqlite+aiosqlite:///{tmp_path/'concurrent.db'}";env['GROWTHMAP_TRIAL_STATE_FILE']=str(tmp_path/'trial2.json')
+ r=subprocess.run([sys.executable,'-c',code2],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr

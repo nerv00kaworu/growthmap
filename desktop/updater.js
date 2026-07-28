@@ -1,0 +1,14 @@
+'use strict';
+const {validateChannel,validateUpdateUrl}=require('./update-policy');
+const {writeMarker,promoteInstallReady,resetInterruptedDownload}=require('./update-recovery');
+const {verifyManagedBackup}=require('./managed-backup');
+function createUpdater({autoUpdater,dialog,backup,userData,currentVersion,feedUrl,channel='stable',isPackaged=false,onError=()=>{}}){
+ channel=validateChannel(channel);if(channel!=='stable')throw new Error('Beta updates require persisted user opt-in and are not enabled in this build');feedUrl=validateUpdateUrl(feedUrl,{production:isPackaged});autoUpdater.autoDownload=false;autoUpdater.autoInstallOnAppQuit=false;autoUpdater.channel='latest';autoUpdater.setFeedURL({provider:'generic',url:`${feedUrl}/stable`});
+ const surface=error=>{onError(error);dialog.showErrorBox?.('GrowthMap update failed','The update was not completed. Your current version and data remain available.');};
+ async function check(){const choice=await dialog.showMessageBox({type:'info',buttons:['Check for updates','Cancel'],defaultId:0,cancelId:1,title:'GrowthMap updates',message:'Check the signed stable channel now?'});if(choice.response!==0)return {cancelled:true};try{return await autoUpdater.checkForUpdates();}catch(error){surface(error);throw error;}}
+ autoUpdater.on('error',error=>{try{resetInterruptedDownload(userData,currentVersion);}catch(resetError){onError(resetError);}surface(error);});
+ autoUpdater.on('update-available',async info=>{const choice=await dialog.showMessageBox({type:'info',buttons:['Download','Later'],defaultId:0,cancelId:1,title:'GrowthMap update available',message:`Version ${info.version} is available. Download after creating a database backup?`});if(choice.response!==0)return;try{const saved=await backup();if(saved?.verifiedManaged!==true||typeof saved.backupId!=='string'||!Number.isSafeInteger(saved.size)||saved.size<100||typeof saved.sha256!=='string'||!/^[0-9a-f]{64}$/.test(saved.sha256))throw new Error('Update requires verified managed backup evidence');verifyManagedBackup(userData,saved.backupId,{expected:saved});writeMarker(userData,{kind:'update',phase:'download-started',createdAt:new Date().toISOString(),fromVersion:currentVersion,toVersion:String(info.version),backupId:saved.backupId,sha256:saved.sha256,size:saved.size});try{await autoUpdater.downloadUpdate();}catch(error){resetInterruptedDownload(userData,currentVersion);throw error;}}catch(error){surface(error);}});
+ autoUpdater.on('update-downloaded',async()=>{try{promoteInstallReady(userData);const choice=await dialog.showMessageBox({type:'info',buttons:['Restart and install','Later'],defaultId:0,cancelId:1,title:'Update ready',message:'The signed update is downloaded and the verified backup is retained. Restart to install now, or install later from this version.'});if(choice.response===0)autoUpdater.quitAndInstall(false,true);}catch(error){surface(error);}});
+ return {check,channel,feedUrl};
+}
+module.exports={createUpdater};

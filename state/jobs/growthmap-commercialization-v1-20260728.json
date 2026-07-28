@@ -1,0 +1,56 @@
+{
+  "job_id": "growthmap-commercialization-v1-20260728",
+  "status": "local_security_qa_go_pending_windows_ci",
+  "baseline": "5dfb5414ae9f92e2f170b655c4d69e8b7d7db3c9",
+  "live_db_accessed": false,
+  "scope": {
+    "trial": "7 calendar days, maximum 2 active projects",
+    "expired": "read-only extraction mode; all reads/search/export/backup/reveal/license import retained",
+    "paid": "signed perpetual current-major entitlement; unlimited projects; device allowance schema target 2",
+    "updates": "stable-only immutable packaged trust; strict durable marker and managed backup/version/deep-health recovery lock before schema work",
+    "payments": "provider-neutral contract plus configured HTTPS checkout openExternal seam; no provider writes",
+    "entitlement": "protected installation receipt + prior-use evidence; signed per-launch forced-extraction verdict; side-effect-free GET and explicit writable checkpoint"
+  },
+  "checkpoints": [
+    {
+      "name": "contract_freeze",
+      "status": "complete",
+      "evidence": "docs/COMMERCIALIZATION-CONTRACT-v1.md"
+    },
+    {
+      "name": "trial_and_readonly_gate",
+      "status": "implemented_verified",
+      "evidence": "protected receipt plus validated DB/managed backup/marker/recovery evidence; reset and junk-spoof tests pass"
+    },
+    {
+      "name": "license_activation_payment_contract",
+      "status": "implemented_verified",
+      "evidence": "packaged exact-schema config/hash pinning and environment scrubbing tests pass; commercial placeholders intentionally block release"
+    },
+    {
+      "name": "online_update_framework",
+      "status": "implemented_verified_local",
+      "evidence": "62 desktop tests pass; strict shared managed evidence and interruption phase machine covered"
+    },
+    {
+      "name": "verification",
+      "status": "local_security_qa_go",
+      "evidence": "parent-verified frontend lint/typecheck/build, CSP generation, 62 desktop tests, audit 0, 48 backend tests, diff check; independent security GO; lightweight QA found no source defect and its missing-pytest environment gap is superseded by parent venv 48/48 evidence"
+    },
+    {
+      "name": "windows_signing_and_commercial_package",
+      "status": "pending_external",
+      "evidence": "Windows-only CI/code signing not run locally; preflight blocks missing trust inputs"
+    }
+  ],
+  "blockers": [
+    "approved production legal documents",
+    "real Ed25519 license public key and offline issuer/private-key operations",
+    "real HTTPS checkout/webhook/license service",
+    "real HTTPS update feed and operational signing policy",
+    "Windows Authenticode certificate/credentials",
+    "Windows CI execution",
+    "expected Windows publisher legal/certificate approval"
+  ],
+  "report": "reports/growthmap-commercialization-v1-20260728.md"
+}

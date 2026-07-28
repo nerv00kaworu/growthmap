@@ -55,7 +55,7 @@ export const api = {
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
   updateProject: (projectId: string, data: Partial<Pick<Project, "status">>) =>
     request<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  getEntitlement: () => request<{ edition: string; valid: boolean; max_active_projects: number | null }>("/desktop/entitlement"),
+  getEntitlement: () => request<{ state:string; edition:string; valid:boolean; mutations_allowed:boolean; reason:string; major_version:number|null; max_active_projects:number|null; trial_days_remaining:number; trial_expires_at:string|null }>("/desktop/entitlement"),
 
   // Nodes
   getSubtree: (nodeId: string) => request<GNode>(`/nodes/${nodeId}/subtree`),
