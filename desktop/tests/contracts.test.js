@@ -26,5 +26,14 @@ test('license import and extraction-to-trial transitions revalidate authoritativ
  assert.match(hook,/onChanged\(\(\) =>/);assert.match(hook,/api\.getEntitlement\(\)/);
  assert.doesNotMatch(hook,/setInterval|setTimeout/);
 });
+test('Windows database boundary fixtures are isolated under canonical system temp',()=>{
+ const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/test-windows-database-boundaries.ps1'),'utf8');
+ assert.match(script,/\[System\.IO\.Path\]::GetTempPath\(\)/);
+ assert.match(script,/Assert-SystemTempChild \$root/);
+ assert.match(script,/Test-CanonicalChildPath -Path \$root -Parent \$repositoryRoot/);
+ assert.match(script,/create-e2e-fixture\.py' \$repoFixture/);
+ assert.match(script,/Fixture helper unexpectedly accepted a repository output path/);
+ assert.doesNotMatch(script,/Join-Path \$env:RUNNER_TEMP/);
+});
 test('pending-update lock precedes recovery, schema, migration backup and writable policy',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8'),body=source.slice(source.indexOf('async function prepareAndStart'),source.indexOf('async function launch'));const pending=body.indexOf('if(pending)'),verify=body.indexOf('verifyPending'),recover=body.indexOf('recoverStartup'),schema=body.indexOf('schemaStatus'),backup=body.indexOf('migrationBackup');assert(pending>=0&&verify>pending&&recover>verify&&schema>recover&&backup>schema);assert.match(body,/await lifecycle\.cleanup\(\)/);});
 test('packaged launch scrubs attacker trust env and injects bundled key mode',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8');for(const key of ['GROWTHMAP_CHECKOUT_ORIGIN','GROWTHMAP_CHECKOUT_URL','GROWTHMAP_UPDATE_URL','GROWTHMAP_LICENSE_PUBLIC_KEY'])assert.match(source,new RegExp(key));assert.match(source,/GROWTHMAP_BUNDLED_LICENSE_PUBLIC_KEY/);assert.match(source,/GROWTHMAP_PACKAGED_MODE/);});
