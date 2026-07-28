@@ -18,7 +18,7 @@ with TestClient(app) as c:
  assert c.patch('/api/projects/'+archived_id,headers=h,json={'status':'active'}).status_code==409
 # Fresh DB concurrency: mixed allocators can produce at most two successes.
 '''
- env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'seat.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+ env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'00ea2c7a12956fa4fff2f382fa32b3bafd333082d7f6765f1ad6edb5741b9218','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'seat.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
  r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
  code2=r'''import concurrent.futures
 from fastapi.testclient import TestClient

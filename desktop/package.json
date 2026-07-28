@@ -47,6 +47,7 @@
       "managed-backup.js",
       "trial-store.js",
       "startup-policy.js",
+      "startup-verdict.js",
       "commercial-config.js",
       "product-identity.json",
       "commercial-config.json",

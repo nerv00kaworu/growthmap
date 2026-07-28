@@ -38,6 +38,6 @@ with TestClient(app) as c:
  removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid})
  assert removed.status_code==400 and 'desktop secure storage' in removed.text
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'54e8b06bfded81a38763b02f2056c887ea2ed62225ab51a807a663ade5d79ab8','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',script],env=env,text=True,capture_output=True)
     assert result.returncode==0,result.stdout+result.stderr

@@ -6,7 +6,7 @@ from db.database import get_db
 from models.models import ProviderConfig
 from pydantic import BaseModel
 from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document
-from desktop.startup_verdict import effective_entitlement
+from desktop.startup_verdict import effective_entitlement, verdict_mode
 from desktop.secrets import put, delete
 router = APIRouter(prefix="/desktop")
 class SecretIn(BaseModel): api_key: str
@@ -37,7 +37,8 @@ def entitlement_checkpoint():
     return checkpoint_current_entitlement().public()
 @router.post("/trial/start")
 def start_trial(body: TrialStartIn, x_growthmap_fresh_install: str | None=Header(None)):
-    if x_growthmap_fresh_install != "1": raise HTTPException(403,"Fresh-install authorization required")
+    if x_growthmap_fresh_install != "1" or os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" or verdict_mode() != "fresh":
+        raise HTTPException(403,"Fresh-install authorization required")
     initialize_trial(started_at=body.started_at, installation_id=body.installation_id)
     return peek_current_entitlement().public()
 @router.post("/license/import")

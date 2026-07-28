@@ -34,7 +34,7 @@ with TestClient(app) as c:
  assert c.post('/api/desktop/trial/start',headers={'Authorization':'Bearer t','X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-01-01T00:00:00+00:00','installation_id':'test-installation'}).status_code==200
  assert p.exists()
 '''.replace('PATH',str(tmp_path/'explicit.json'))
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'explicit.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'explicit.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'00ea2c7a12956fa4fff2f382fa32b3bafd333082d7f6765f1ad6edb5741b9218','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'explicit.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'explicit.json')}
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
 
 def test_license_major_signature_and_device_schema(tmp_path):
@@ -57,7 +57,7 @@ with TestClient(app) as c:
  assert open(p).read()==before
 '''.replace('LICENSE',str(license_file)).replace('WRONG',str(tmp_path/'wrong.json'))
     (tmp_path/'wrong.json').write_text(json.dumps(signed(private,major_version=2)))
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'paid.db'}",'GROWTHMAP_LICENSE_FILE':str(license_file),'GROWTHMAP_LICENSE_PUBLIC_KEY':str(pub),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'00ea2c7a12956fa4fff2f382fa32b3bafd333082d7f6765f1ad6edb5741b9218','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'paid.db'}",'GROWTHMAP_LICENSE_FILE':str(license_file),'GROWTHMAP_LICENSE_PUBLIC_KEY':str(pub),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
 
 def test_expired_route_matrix_and_authoring_unaffected(tmp_path):
@@ -72,7 +72,7 @@ with TestClient(app) as c:
  assert c.get('/api/desktop/entitlement',headers=h).status_code==200
  assert c.post('/api/desktop/license/import',headers=h,json={'document':{}}).status_code==400
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'desktop.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'00ea2c7a12956fa4fff2f382fa32b3bafd333082d7f6765f1ad6edb5741b9218','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'desktop.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     (tmp_path/'trial.json').write_text('{bad')
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
     author=r'''from fastapi.testclient import TestClient
