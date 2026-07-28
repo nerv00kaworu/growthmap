@@ -31,7 +31,19 @@ test('CDP timeout diagnostic includes process state, tree, streams, probe, phase
 
 test('isolated builder config replaces production exclusion and production config remains closed',()=>{
  const pkg=require('../package.json'),e2e=require('../scripts/e2e-builder-config');
- assert.equal(e2e.extraMetadata.main,'e2e-main.js');assert(e2e.files.includes('e2e-main.js'));assert(!e2e.files.includes('!e2e-main.js'));
- assert(pkg.build.files.includes('!e2e-main.js'));assert(!pkg.build.files.includes('e2e-main.js'));
+ assert.equal(e2e.extraMetadata.main,'e2e-main.js');assert(e2e.files.includes('e2e-main.js'));assert(e2e.files.includes('e2e-commercial-config.js'));assert(!e2e.files.includes('!e2e-main.js'));
+ assert(e2e.extraResources.some(x=>x.from==='e2e/commercial-config.json'&&x.to==='commercial-config.json'));
+ assert(pkg.build.files.includes('!e2e-main.js'));assert(!pkg.build.files.includes('e2e-main.js'));assert(!pkg.build.files.includes('e2e-commercial-config.js'));
  assert.equal(pkg.main,'main.js');assert.match(pkg.scripts['dist:win:e2e'],/--config scripts\/e2e-builder-config\.js/);
+});
+
+test('DevTools websocket parser accepts only requested loopback port and browser target',()=>{
+ const {parseDevToolsWebSocket}=require('../scripts/renderer-e2e-support');
+ const valid='ws://127.0.0.1:43123/devtools/browser/f88db40d-e8a1-4639-ae7c-a2940918540b';
+ assert.equal(parseDevToolsWebSocket(`noise\nDevTools listening on ${valid}\n`,43123),valid);
+ for(const output of [
+  'DevTools listening on ws://127.0.0.1:43124/devtools/browser/f88db40d-e8a1-4639-ae7c-a2940918540b',
+  'DevTools listening on ws://evil.test:43123/devtools/browser/f88db40d-e8a1-4639-ae7c-a2940918540b',
+  'DevTools listening on ws://127.0.0.1:43123/devtools/page/f88db40d-e8a1-4639-ae7c-a2940918540b',
+ ])assert.equal(parseDevToolsWebSocket(output,43123),null);
 });

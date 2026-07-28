@@ -4,3 +4,7 @@ function fixture(changes={}){const root=fs.mkdtempSync(path.join(os.tmpdir(),'gm
 test('packaged configuration ignores attacker authority environment',()=>{const root=fixture(),config=loadCommercialConfig({isPackaged:true,resourcesPath:root,env:{GROWTHMAP_LICENSE_PUBLIC_KEY:'/attacker',GROWTHMAP_CHECKOUT_URL:'https://evil.test',GROWTHMAP_UPDATE_URL:'https://evil.test'}});assert.equal(config.checkoutUrl,'https://pay.growthmap.test/buy');assert.equal(config.updateUrl,'https://updates.growthmap.test');assert(config.licensePublicKeyPath.startsWith(root));});
 test('packaged placeholder, mismatch and wrong public key hash fail closed',()=>{for(const changes of [{publisher:'TBD'},{productMajor:2},{publisherStatus:'UNAPPROVED'},{licensePublicKeySha256:'0'.repeat(64)}])assert.throws(()=>loadCommercialConfig({isPackaged:true,resourcesPath:fixture(changes)}));});
 test('development authority overrides are explicitly labelled',()=>assert.equal(loadCommercialConfig({isPackaged:false,resourcesPath:'',env:{GROWTHMAP_UPDATE_URL:'https://dev.test'}}).developmentOverride,true));
+test('production cannot select E2E status through environment or CLI',()=>{
+ const root=fixture({publisherStatus:'E2E_ONLY',checkoutOrigin:'',checkoutUrl:'',updateUrl:'',updateOrigin:''}),savedArgv=process.argv;
+ try{process.argv=[...savedArgv,'--growthmap-e2e-commercial'];assert.throws(()=>loadCommercialConfig({isPackaged:true,resourcesPath:root,env:{CI:'true',GROWTHMAP_DESKTOP_E2E:'1',GROWTHMAP_E2E_COMMERCIAL_CONFIG:'1'}}),/invalid/);}finally{process.argv=savedArgv;}
+});

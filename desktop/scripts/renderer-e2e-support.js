@@ -7,6 +7,11 @@ function processTree(rootPid){
  if(r.status!==0)return {error:(r.stderr||`powershell exit ${r.status}`).trim()};
  try{const value=JSON.parse(r.stdout||'[]');return Array.isArray(value)?value:[value];}catch(error){return {error:`invalid process tree JSON: ${error.message}`,stdout:(r.stdout||'').trim()};}
 }
+function parseDevToolsWebSocket(output,expectedPort){
+ const matches=String(output).matchAll(/DevTools listening on (ws:\/\/[^\s]+)/g);let accepted=null;
+ for(const match of matches){try{const url=new URL(match[1]);if(url.protocol==='ws:'&&url.hostname==='127.0.0.1'&&Number(url.port)===Number(expectedPort)&&/^\/devtools\/browser\/[0-9a-f-]+$/i.test(url.pathname)&&!url.username&&!url.password&&!url.search&&!url.hash)accepted=url.href;}catch{}}
+ return accepted;
+}
 function probeVersion(debugPort,timeout=2000){return new Promise(resolve=>{
  const request=http.get({hostname:'127.0.0.1',port:debugPort,path:'/json/version',timeout},response=>{let body='';response.setEncoding('utf8');response.on('data',chunk=>body+=chunk);response.on('end',()=>resolve({statusCode:response.statusCode,body:body.slice(0,4000)}));});
  request.on('timeout',()=>request.destroy(new Error(`timeout after ${timeout}ms`)));
@@ -19,11 +24,16 @@ async function timeoutDiagnostic({child,debugPort,output,diagnosticPath,electron
   processTree:processTree(child.pid),probe:await probeVersion(debugPort),stdoutStderr:String(output).slice(-8000),
   phases:tail(diagnosticPath),electronLog:tail(electronLogPath),
  };}
-function assertE2EAsar(asarPath){
+function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const asar=require('@electron/asar'),entries=asar.listPackage(asarPath).map(value=>value.replace(/^[/\\]/,''));
- if(!entries.includes('e2e-main.js'))throw Error('E2E app.asar is missing e2e-main.js');
+ for(const entry of ['e2e-main.js','e2e-commercial-config.js'])if(!entries.includes(entry))throw Error(`E2E app.asar is missing ${entry}`);
  const metadata=JSON.parse(asar.extractFile(asarPath,'package.json').toString('utf8'));
  if(metadata.main!=='e2e-main.js')throw Error(`E2E app.asar main must be e2e-main.js, got ${JSON.stringify(metadata.main)}`);
- return metadata;
+ const configPath=path.join(resourcesPath,'commercial-config.json'),config=JSON.parse(fs.readFileSync(configPath,'utf8'));
+ if(config.publisherStatus!=='E2E_ONLY'||config.checkoutOrigin||config.checkoutUrl||config.updateUrl||config.updateOrigin)throw Error('E2E commercial config status/network settings are invalid');
+ const key=path.resolve(resourcesPath,config.licensePublicKeyResource),root=`${path.resolve(resourcesPath)}${path.sep}`;
+ if(!key.startsWith(root)||!fs.existsSync(key))throw Error('E2E commercial public key is missing or outside resources');
+ const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
+ return {metadata,config};
 }
-module.exports={launchArgs,processTree,probeVersion,tail,timeoutDiagnostic,assertE2EAsar};
+module.exports={launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};

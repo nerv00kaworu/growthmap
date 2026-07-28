@@ -54,6 +54,8 @@ jobs:
         run: |
           $pkg = Get-Content desktop/package.json -Raw | ConvertFrom-Json
           if (-not ($pkg.build.files -contains '!e2e-main.js')) { throw 'E2E main exclusion missing' }
+          foreach ($forbidden in @('e2e-main.js','e2e-commercial-config.js')) { if ($pkg.build.files -contains $forbidden) { throw "E2E source ships in production file set: $forbidden" } }
+          if ($pkg.build.extraResources.from -match '(^|[\/])e2e([\/]|$)') { throw 'E2E resource ships in production resource set' }
       - name: Build final noncommercial unsigned NSIS test installer
         run: npm run dist:win
         working-directory: desktop

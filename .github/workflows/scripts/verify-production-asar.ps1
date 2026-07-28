@@ -9,7 +9,7 @@ if (-not (Get-ChildItem $dist -Filter 'GrowthMap-Setup-*.exe' | Select-Object -F
 
 $list = @(npx --yes asar list $asar)
 if ($LASTEXITCODE -ne 0) { throw 'asar list failed' }
-$forbiddenEntries = @('e2e-main.js', 'create-e2e-fixture', 'test-windows-', 'recovery-matrix')
+$forbiddenEntries = @('e2e-main.js', 'e2e-commercial-config.js', 'e2e-license-public-key.pem', 'E2E_ONLY', 'create-e2e-fixture', 'test-windows-', 'recovery-matrix')
 foreach ($needle in $forbiddenEntries) {
   if ($list | Select-String -SimpleMatch $needle) {
     throw "Production ASAR contains forbidden E2E/test entry: $needle"
@@ -49,7 +49,7 @@ if (-not (Test-Path $mainPath) -or -not (Test-Path $packagePath) -or -not (Test-
 }
 $main = Get-Content $mainPath -Raw
 $packageText = Get-Content $packagePath -Raw
-foreach ($needle in @('GROWTHMAP_DESKTOP_E2E', 'E2E_IMPORT', 'remote-debugging-port', 'e2e-main')) {
+foreach ($needle in @('GROWTHMAP_DESKTOP_E2E', 'E2E_IMPORT', 'E2E_ONLY', 'remote-debugging-port', 'e2e-main')) {
   if ($main.Contains($needle) -or $packageText.Contains($needle)) {
     throw "Production ASAR contains forbidden E2E marker: $needle"
   }

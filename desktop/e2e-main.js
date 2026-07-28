@@ -1,6 +1,7 @@
 'use strict';
 // Test-package-only entrypoint. package.json production files excludes this file.
 if(process.env.CI!=='true'||process.env.GROWTHMAP_DESKTOP_E2E!=='1')throw new Error('E2E test package is CI-only');
+const commercialModule=require.resolve('./commercial-config');require(commercialModule);require.cache[commercialModule].exports={...require.cache[commercialModule].exports,loadCommercialConfig:require('./e2e-commercial-config').loadE2ECommercialConfig};
 const fs=require('node:fs'),path=require('node:path'),{app,dialog}=require('electron'),fixture=process.env.GROWTHMAP_E2E_IMPORT_PATH;
 const diagnosticPath=process.env.GROWTHMAP_E2E_DIAGNOSTIC_PATH;
 function phase(name){

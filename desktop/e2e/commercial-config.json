@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "productMajor": 1,
+  "licensePublicKeyResource": "commercial/e2e-license-public-key.pem",
+  "licensePublicKeySha256": "31ea93919322e656df43cb9ff8e10681d82a340c87085b025f81fcd31a6be810",
+  "checkoutOrigin": "",
+  "checkoutUrl": "",
+  "updateUrl": "",
+  "updateOrigin": "",
+  "publisher": "GrowthMap Isolated CI Test Package",
+  "publisherStatus": "E2E_ONLY"
+}
