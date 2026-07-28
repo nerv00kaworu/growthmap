@@ -1,0 +1,21 @@
+{
+  "job_id": "growthmap-payments-v1-20260728",
+  "status": "candidate_implemented_local_review_required",
+  "baseline_documented": "3023e16",
+  "implemented_on_head": "5941384",
+  "live_db_accessed": false,
+  "real_money_or_provider_writes": false,
+  "commit_or_push": false,
+  "checkpoints": [
+    {"name":"separate_ledger_schema","status":"complete","evidence":"services/payments/migrations/001_payments_v1.sql"},
+    {"name":"atomic_allocation_issuer_audit","status":"complete","evidence":"4 payment tests pass including 60-way mixed-rail concurrency and audit tamper"},
+    {"name":"x402_candidate_boundary","status":"mock_only","evidence":"v2 exact Base USDC challenge and deterministic verify/settle tests; real SDK blocked"},
+    {"name":"paypal_manual_boundary","status":"candidate","evidence":"transaction claim and authenticated exact attestation confirmation; no PayPal API"},
+    {"name":"desktop_purchase_panel_config","status":"complete_local","evidence":"frontend lint/typecheck/build; CSP generated; 79 desktop tests"},
+    {"name":"existing_backend","status":"complete","evidence":"53 tests pass from src/backend cwd"},
+    {"name":"windows_package","status":"pending_parent_fresh_review","evidence":"not run on Linux/WSL"}
+  ],
+  "counts": {"payment_tests":4,"backend_tests":53,"desktop_tests":79,"desktop_audit_vulnerabilities":0},
+  "blockers": ["official x402/CDP facilitator SDK integration and multi-instance transaction review","production Base recipient and secure Ed25519 key provider","real HTTPS payment API and wallet portal","PayPal merchant URL and reviewed manual operations","production admin session/Argon2id/CSRF/rate limiting/recovery delivery","revocation check-in","legal/key/config/Windows signing and Windows E2E"],
+  "report":"reports/growthmap-payments-v1-20260728.md"
+}

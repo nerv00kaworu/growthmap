@@ -6,7 +6,8 @@ declare global {
     growthmapDesktop?: {
       readonly isDesktop: true;
       readonly secrets: { has(id:string):Promise<boolean>; set(id:string,value:string):Promise<boolean>; delete(id:string):Promise<boolean> };
-      readonly license: { import():Promise<unknown | null>; checkout():Promise<boolean> };
+      readonly license: { import():Promise<unknown | null> };
+      readonly purchase: { open(rail:'x402'|'paypal'):Promise<boolean> };
       readonly entitlement: { onChanged(callback:()=>void):()=>void };
       readonly updates: { check():Promise<unknown> };
       readonly database: {
