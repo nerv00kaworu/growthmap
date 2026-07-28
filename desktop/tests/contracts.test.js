@@ -5,5 +5,26 @@ test('IPC guard and strict CSP/lifecycle contracts',()=>{assert.match(main,/even
 test('dynamic loopback hook is broad but request policy checks current origin',()=>{assert.match(main,/createRequestPolicy/);assert.match(require('node:fs').readFileSync(require.resolve('../request-policy.js'),'utf8'),/127\.0\.0\.1:\*\/\*/);});
 
 test('native menu removed and renderer diagnostics/error fallback wired',()=>{for(const x of ['Menu.setApplicationMenu(null)','autoHideMenuBar:true','setMenu(null)','did-fail-load','render-process-gone','console-message'])assert.match(main,new RegExp(x.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));assert.match(main,/title:'GrowthMap'/);});
+
+test('entitlement changes invalidate renderer state without weakening the IPC origin guard',()=>{
+ const page=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/app/page.tsx'),'utf8');
+ const hook=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/lib/entitlement.ts'),'utf8');
+ const api=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/lib/api.ts'),'utf8');
+ assert.match(preload,/desktop:entitlement-changed/);assert.match(preload,/removeListener\('desktop:entitlement-changed'/);
+ assert.match(main,/const imported=.*license\/import/);assert.match(main,/notifyEntitlementChanged\(\);return imported/);
+ assert.match(main,/notifyEntitlementChanged\(\);child\.once\('exit'/);
+ assert.match(main,/event\.sender!==expected/);assert.match(main,/origin!==baseUrl/);
+ assert.match(hook,/entitlement\.onChanged/);assert.match(hook,/refreshEntitlement/);assert.match(hook,/requestSequence/);
+ assert.match(api,/getEntitlement:.*cache: "no-store"/);
+ assert.match(page,/entitlement === null \? "Checking entitlement…"/);assert.match(page,/mutations_allowed !== true/);
+});
+
+test('license import and extraction-to-trial transitions revalidate authoritative entitlement',()=>{
+ const page=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/app/page.tsx'),'utf8');
+ const hook=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/lib/entitlement.ts'),'utf8');
+ assert.match(page,/await desktop\.license\.import\(\)/);assert.match(page,/await refreshEntitlement\(\)/);
+ assert.match(hook,/onChanged\(\(\) =>/);assert.match(hook,/api\.getEntitlement\(\)/);
+ assert.doesNotMatch(hook,/setInterval|setTimeout/);
+});
 test('pending-update lock precedes recovery, schema, migration backup and writable policy',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8'),body=source.slice(source.indexOf('async function prepareAndStart'),source.indexOf('async function launch'));const pending=body.indexOf('if(pending)'),verify=body.indexOf('verifyPending'),recover=body.indexOf('recoverStartup'),schema=body.indexOf('schemaStatus'),backup=body.indexOf('migrationBackup');assert(pending>=0&&verify>pending&&recover>verify&&schema>recover&&backup>schema);assert.match(body,/await lifecycle\.cleanup\(\)/);});
 test('packaged launch scrubs attacker trust env and injects bundled key mode',()=>{const source=fs.readFileSync(require('node:path').join(__dirname,'../main.js'),'utf8');for(const key of ['GROWTHMAP_CHECKOUT_ORIGIN','GROWTHMAP_CHECKOUT_URL','GROWTHMAP_UPDATE_URL','GROWTHMAP_LICENSE_PUBLIC_KEY'])assert.match(source,new RegExp(key));assert.match(source,/GROWTHMAP_BUNDLED_LICENSE_PUBLIC_KEY/);assert.match(source,/GROWTHMAP_PACKAGED_MODE/);});

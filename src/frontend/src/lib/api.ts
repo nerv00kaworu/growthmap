@@ -15,6 +15,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
+import type { Entitlement } from "./entitlement";
 import { loadLLMConfig } from "./llm-provider";
 
 function getProviderId(): string | undefined {
@@ -55,7 +56,7 @@ export const api = {
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
   updateProject: (projectId: string, data: Partial<Pick<Project, "status">>) =>
     request<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  getEntitlement: () => request<{ state:string; edition:string; valid:boolean; mutations_allowed:boolean; reason:string; major_version:number|null; max_active_projects:number|null; trial_days_remaining:number; trial_expires_at:string|null }>("/desktop/entitlement"),
+  getEntitlement: () => request<Entitlement>("/desktop/entitlement", { cache: "no-store" }),
 
   // Nodes
   getSubtree: (nodeId: string) => request<GNode>(`/nodes/${nodeId}/subtree`),

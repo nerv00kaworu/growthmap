@@ -8,6 +8,7 @@ import { Toast } from "@/components/Toast";
 import { Settings } from "@/components/Settings";
 import { AgentSessions } from "@/components/AgentSessions";
 import { api } from "@/lib/api";
+import { useEntitlement } from "@/lib/entitlement";
 
 export default function HomePage() {
   const loadProjects = useStore((s) => s.loadProjects);
@@ -46,8 +47,9 @@ export default function HomePage() {
   const [showBranchHistory, setShowBranchHistory] = useState(false);
   const [branchHistory, setBranchHistory] = useState<{ id: string; action_type: string; created_at: string }[]>([]);
   const [branchHistoryLoading, setBranchHistoryLoading] = useState(false);
-  const [entitlement, setEntitlement] = useState<{ state:string; edition:string; valid:boolean; mutations_allowed:boolean; reason:string; major_version:number|null; max_active_projects:number|null; trial_days_remaining:number; trial_expires_at:string|null } | null>(null);
-  const readOnly = entitlement?.state === "extraction";
+  const { entitlement, refreshEntitlement } = useEntitlement();
+  // Keep mutation controls fail-closed until the backend has answered authoritatively.
+  const readOnly = entitlement?.mutations_allowed !== true;
   const importRef = useRef<HTMLInputElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
@@ -67,7 +69,6 @@ export default function HomePage() {
 
   useEffect(() => {
     loadProjects();
-    api.getEntitlement().then(setEntitlement).catch(() => setEntitlement({ state:"extraction", edition:"unpaid", valid:false, mutations_allowed:false, reason:"unavailable", major_version:null, max_active_projects:0, trial_days_remaining:0, trial_expires_at:null }));
   }, [loadProjects]);
 
   useEffect(() => {
@@ -163,8 +164,12 @@ export default function HomePage() {
   const importLicense = async () => {
     const desktop = (window as typeof window & { growthmapDesktop?: { license: { import(): Promise<unknown> } } }).growthmapDesktop;
     if (!desktop) { setToast("License 匯入僅在桌面版提供"); return; }
-    try { await desktop.license.import(); setEntitlement(await api.getEntitlement()); setToast("✅ License 已驗證並匯入"); }
-    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+    try {
+      const imported = await desktop.license.import();
+      if (imported === null) return;
+      await refreshEntitlement();
+      setToast("✅ License 已驗證並匯入");
+    } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
   const openCheckout = async () => {
@@ -309,7 +314,7 @@ export default function HomePage() {
         )}
 
         <span data-testid="entitlement-status" className="shrink-0 text-[10px] text-gray-400">
-          {entitlement?.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement?.state === "trial" ? `Trial · ${entitlement.trial_days_remaining} day(s) · ${projects.filter(p => p.status === "active").length}/2` : "Read-only extraction · exports available"}
+          {entitlement === null ? "Checking entitlement…" : entitlement.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement.state === "trial" ? `Trial · ${entitlement.trial_days_remaining} day(s) · ${projects.filter(p => p.status === "active").length}/2` : "Read-only extraction · exports available"}
         </span>
         <button
           data-testid="new-project-button"
