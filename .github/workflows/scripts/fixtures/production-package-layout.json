@@ -1,0 +1,38 @@
+{
+  "asarListLines": [
+    "\\main.js\r",
+    "/updater.js\r",
+    "\\update-recovery.js\r",
+    "/managed-backup.js\r",
+    "\\commercial-config.js\r",
+    "/product-identity.json\r",
+    "\\startup-policy.js\r",
+    "/startup-verdict.js\r",
+    "\\update-policy.js\r",
+    "/database-manager.js\r",
+    "\\trial-store.js\r"
+  ],
+  "requiredAsarEntries": [
+    "main.js",
+    "updater.js",
+    "update-recovery.js",
+    "update-policy.js",
+    "managed-backup.js",
+    "database-manager.js",
+    "trial-store.js",
+    "startup-policy.js",
+    "startup-verdict.js",
+    "commercial-config.js",
+    "product-identity.json"
+  ],
+  "requiredResourceEntries": [
+    "commercial-config.json",
+    "commercial/license_public_key.pem",
+    "frontend/index.html",
+    "legal/LICENSE",
+    "legal/EULA.md",
+    "legal/PRIVACY.md",
+    "legal/THIRD_PARTY_NOTICES.md",
+    "sidecar/growthmap-sidecar.exe"
+  ]
+}
