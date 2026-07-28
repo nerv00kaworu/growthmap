@@ -29,8 +29,11 @@ test('CDP timeout diagnostic includes process state, tree, streams, probe, phase
  assert.ok(diagnostic.processTree);assert.match(diagnostic.probe.error,/ECONNREFUSED|EACCES/);assert.equal(diagnostic.stdoutStderr,'app-output');assert.match(diagnostic.phases,/entrypoint-loaded/);assert.match(diagnostic.electronLog,/chromium-log/);
 });
 
-test('isolated builder config replaces production exclusion and production config remains closed',()=>{
- const pkg=require('../package.json'),e2e=require('../scripts/e2e-builder-config');
+test('isolated builder config replaces production exclusion and exports only builder keys',()=>{
+ const pkg=require('../package.json'),e2e=require('../scripts/e2e-builder-config'),support=require('../scripts/e2e-config-support');
+ assert.deepEqual(Object.keys(e2e).sort(),[...Object.keys(pkg.build),'extraMetadata'].sort());
+ assert.deepEqual(Object.keys(support).sort(),['generateE2ECommercialConfig','sha256']);
+ assert.equal(e2e.generateE2ECommercialConfig,undefined);assert.equal(e2e.sha256,undefined);
  assert.equal(e2e.extraMetadata.main,'e2e-main.js');assert(e2e.files.includes('e2e-main.js'));assert(e2e.files.includes('e2e-commercial-config.js'));assert(!e2e.files.includes('!e2e-main.js'));
  assert(e2e.extraResources.some(x=>path.isAbsolute(x.from)&&x.to==='commercial-config.json'));
  assert(pkg.build.files.includes('!e2e-main.js'));assert(!pkg.build.files.includes('e2e-main.js'));assert(!pkg.build.files.includes('e2e-commercial-config.js'));
@@ -38,7 +41,7 @@ test('isolated builder config replaces production exclusion and production confi
 });
 
 test('builder hashes exact packaged E2E key bytes for LF and CRLF checkouts',()=>{
- const {generateE2ECommercialConfig,sha256}=require('../scripts/e2e-builder-config'),templatePath=path.join(__dirname,'../e2e/commercial-config.json');
+ const {generateE2ECommercialConfig,sha256}=require('../scripts/e2e-config-support'),templatePath=path.join(__dirname,'../e2e/commercial-config.json');
  for(const newline of ['\n','\r\n']){
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'gm-e2e-builder-test-')),keyPath=path.join(directory,'source.pem'),resourcesPath=path.join(directory,'resources');
   fs.writeFileSync(keyPath,['-----BEGIN PUBLIC KEY-----','test-key-bytes','-----END PUBLIC KEY-----',''].join(newline),'utf8');
