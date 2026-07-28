@@ -86,8 +86,10 @@
       }
     ],
     "win": {
-      "publisherName": "GrowthMap Software Ltd.",
       "verifyUpdateCodeSignature": true,
+      "signtoolOptions": {
+        "publisherName": "GrowthMap Software Ltd."
+      },
       "target": [
         {
           "target": "nsis",
