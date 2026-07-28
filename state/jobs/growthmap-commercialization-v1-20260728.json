@@ -1,7 +1,8 @@
 {
   "job_id": "growthmap-commercialization-v1-20260728",
-  "status": "local_security_qa_go_pending_windows_ci",
+  "status": "candidate_windows_ci_complete_commercial_release_blocked_external",
   "baseline": "5dfb5414ae9f92e2f170b655c4d69e8b7d7db3c9",
+  "verified_head": "59413840550bb149b1c5896c30f62ab26eee4360",
   "live_db_accessed": false,
   "scope": {
     "trial": "7 calendar days, maximum 2 active projects",
@@ -12,45 +13,31 @@
     "entitlement": "protected installation receipt + prior-use evidence; signed per-launch forced-extraction verdict; side-effect-free GET and explicit writable checkpoint"
   },
   "checkpoints": [
-    {
-      "name": "contract_freeze",
-      "status": "complete",
-      "evidence": "docs/COMMERCIALIZATION-CONTRACT-v1.md"
-    },
-    {
-      "name": "trial_and_readonly_gate",
-      "status": "implemented_verified",
-      "evidence": "protected receipt plus validated DB/managed backup/marker/recovery evidence; reset and junk-spoof tests pass"
-    },
-    {
-      "name": "license_activation_payment_contract",
-      "status": "implemented_verified",
-      "evidence": "packaged exact-schema config/hash pinning and environment scrubbing tests pass; commercial placeholders intentionally block release"
-    },
-    {
-      "name": "online_update_framework",
-      "status": "implemented_verified_local",
-      "evidence": "62 desktop tests pass; strict shared managed evidence and interruption phase machine covered"
-    },
-    {
-      "name": "verification",
-      "status": "local_security_qa_go",
-      "evidence": "parent-verified frontend lint/typecheck/build, CSP generation, 62 desktop tests, audit 0, 48 backend tests, diff check; independent security GO; lightweight QA found no source defect and its missing-pytest environment gap is superseded by parent venv 48/48 evidence"
-    },
-    {
-      "name": "windows_signing_and_commercial_package",
-      "status": "pending_external",
-      "evidence": "Windows-only CI/code signing not run locally; preflight blocks missing trust inputs"
-    }
+    {"name":"contract_freeze","status":"complete","evidence":"docs/COMMERCIALIZATION-CONTRACT-v1.md"},
+    {"name":"trial_and_readonly_gate","status":"complete","evidence":"local suites plus packaged Windows lifecycle E2E in run 30345802497"},
+    {"name":"license_activation_payment_contract","status":"candidate_complete_external_service_pending","evidence":"immutable packaged trust and fail-closed placeholders verified; no production payment/issuer service"},
+    {"name":"online_update_framework","status":"candidate_complete_external_feed_signing_pending","evidence":"stable update/recovery framework and final production ASAR/resources verification passed on Windows"},
+    {"name":"verification","status":"complete_candidate","evidence":"local frontend/backend/desktop gates and independent security review GO; Windows run 30345802497 success"},
+    {"name":"windows_noncommercial_package","status":"complete","evidence":"run 30345802497; installer SHA-256 b86cb68dcd40d9d39df5b0a464b8838cae092ba3d530c3269323bad37c577fbb; artifact 8683058267"},
+    {"name":"commercial_release","status":"blocked_external","evidence":"Authenticode publication gate intentionally skipped; production legal/key/payment/feed inputs absent"}
   ],
+  "windows_ci": {
+    "run_id": 30345802497,
+    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30345802497",
+    "conclusion": "success",
+    "installer": "GrowthMap-Setup-0.1.0-desktop.2-x64.exe",
+    "installer_sha256": "b86cb68dcd40d9d39df5b0a464b8838cae092ba3d530c3269323bad37c577fbb",
+    "artifact_id": 8683058267,
+    "artifact_name": "growthmap-windows-noncommercial-unsigned-59413840550bb149b1c5896c30f62ab26eee4360",
+    "artifact_zip_sha256": "dc37ea0db9221e6214082f24aa957ca2cf7a2d86e9f8f9276a9a2b51969707ec",
+    "expires_at": "2026-08-11T09:23:31Z"
+  },
   "blockers": [
     "approved production legal documents",
     "real Ed25519 license public key and offline issuer/private-key operations",
     "real HTTPS checkout/webhook/license service",
     "real HTTPS update feed and operational signing policy",
-    "Windows Authenticode certificate/credentials",
-    "Windows CI execution",
-    "expected Windows publisher legal/certificate approval"
+    "Windows Authenticode certificate/credentials and approved publisher identity"
   ],
   "report": "reports/growthmap-commercialization-v1-20260728.md"
 }

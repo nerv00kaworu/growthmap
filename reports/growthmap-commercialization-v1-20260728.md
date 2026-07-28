@@ -1,7 +1,7 @@
 # GrowthMap commercialization v1 candidate — 2026-07-28
 
 Baseline: `5dfb5414ae9f92e2f170b655c4d69e8b7d7db3c9`
-Result: local trust-boundary remediation verified; **commercial release remains fail-closed/blocked**. No commit, push, tag, release, provider write, charge, or live DB access occurred.
+Result: commercialization candidate and noncommercial unsigned Windows package are verified; **commercial publication remains fail-closed/blocked by external production inputs**. No commercial release, provider write, charge, or live DB access occurred.
 
 ## Implemented
 
@@ -57,4 +57,15 @@ Fresh trial mode now also requires absence of an independent protected installat
 
 The partial security remediation was completed and rerun in required order. One shared exact managed-backup validator now governs database listing/status/backup evidence, trial prior-use, updater pre-download evidence, update promotion/reset/recovery, and migration marker creation. Tests cover malformed timestamps/durability, exact key shape, hash/size, symlink/hardlink and stable identity replacement. Download-started interruption/rejection/error clears safely on the source version; install-ready deferral does not run deep health; only the exact target runs strict evidence plus deep health; impossible versions/corrupt evidence retain the recovery lock. `updateUrl` is a channel-free base path and the updater appends exactly `/stable`. Production ASAR/package lists include `managed-backup.js`.
 
-Local state is **local_remediation_complete_pending_fresh_security**, not final commercial completion. Windows package/NSIS/AuthentiCode/E2E and the external legal, key, payment, feed and signing blockers remain. No live database, commit, push, publish or provider write occurred.
+Local remediation and independent security review are complete. Windows candidate CI is also complete; commercial Authenticode/publication and external legal, key, payment, feed, and signing inputs remain blocked. No live database, commercial publish, charge, or provider write occurred.
+
+## Windows candidate acceptance — 2026-07-28
+
+GitHub Actions run [`30345802497`](https://github.com/nerv00kaworu/growthmap/actions/runs/30345802497) passed at head `59413840550bb149b1c5896c30f62ab26eee4360`. Evidence includes backend/frontend/desktop gates; packaged Trial initialization; database import, backup, restart, and restore E2E; E2E source/package removal; unsigned NSIS build; final production resource and sidecar smoke; Windows hardlink, junction traversal, localhost UNC, and crash-residue recovery matrix; final ASAR/resources trust-module and E2E-exclusion checks; installer SHA generation; and artifact upload.
+
+- Installer: `GrowthMap-Setup-0.1.0-desktop.2-x64.exe`
+- Installer SHA-256: `b86cb68dcd40d9d39df5b0a464b8838cae092ba3d530c3269323bad37c577fbb`
+- Artifact: `growthmap-windows-noncommercial-unsigned-59413840550bb149b1c5896c30f62ab26eee4360` (ID `8683058267`, expires 2026-08-11)
+- Artifact ZIP digest: `dc37ea0db9221e6214082f24aa957ca2cf7a2d86e9f8f9276a9a2b51969707ec`
+
+This proves the **unsigned, noncommercial candidate**. The Authenticode publication gate was intentionally skipped because production certificate/publisher credentials are absent; this report does not claim public-sale readiness.
