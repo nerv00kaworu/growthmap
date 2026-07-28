@@ -1,4 +1,68 @@
+param([switch]$SelfTestOnly)
+
 $ErrorActionPreference = 'Stop'
+
+$requiredEntries = @('main.js','updater.js','update-recovery.js','managed-backup.js','commercial-config.js','commercial-config.json')
+$forbiddenEntries = @('e2e-main.js', 'e2e-commercial-config.js', 'e2e-license-public-key.pem', 'E2E_ONLY', 'create-e2e-fixture', 'test-windows-', 'recovery-matrix')
+
+function ConvertTo-NormalizedAsarEntry {
+  param([Parameter(Mandatory)][string]$Entry)
+  return (($Entry -replace '^[\\/]+', '') -replace '\\', '/')
+}
+
+function Assert-ProductionAsarEntries {
+  param([Parameter(Mandatory)][string[]]$Entries)
+
+  foreach ($needle in $forbiddenEntries) {
+    if ($Entries | Select-String -SimpleMatch $needle) {
+      throw "Production ASAR contains forbidden E2E/test entry: $needle"
+    }
+  }
+  foreach ($entry in $Entries) {
+    $normalizedEntry = ConvertTo-NormalizedAsarEntry $entry
+    if ($normalizedEntry -match '(^|/)(tests?|test[-_]?helpers?)(/|$)') {
+      throw "Production ASAR contains a test path: $entry"
+    }
+  }
+  foreach ($requiredEntry in $requiredEntries) {
+    if (-not ($Entries | Where-Object { (ConvertTo-NormalizedAsarEntry $_) -ceq $requiredEntry })) {
+      throw "Production ASAR is missing required trust-boundary module: $requiredEntry"
+    }
+  }
+}
+
+function Invoke-AsarEntryContractSelfTest {
+  $validEntries = @(
+    '\main.js',
+    '/updater.js',
+    '\\update-recovery.js',
+    '/managed-backup.js',
+    '\commercial-config.js',
+    '//commercial-config.json'
+  )
+  Assert-ProductionAsarEntries $validEntries
+
+  $malformedEntries = @($validEntries | Where-Object { $_ -notmatch 'updater\.js$' }) + @('/nested/updater.js')
+  try {
+    Assert-ProductionAsarEntries $malformedEntries
+    throw 'ASAR verifier self-test accepted a nested required updater module'
+  } catch {
+    if ($_.Exception.Message -notmatch 'missing required trust-boundary module: updater\.js') { throw }
+  }
+
+  try {
+    Assert-ProductionAsarEntries ($validEntries + @('\\fixtures\\e2e-main.js'))
+    throw 'ASAR verifier self-test accepted forbidden E2E material'
+  } catch {
+    if ($_.Exception.Message -notmatch 'forbidden E2E/test entry: e2e-main\.js') { throw }
+  }
+}
+
+Invoke-AsarEntryContractSelfTest
+if ($SelfTestOnly) {
+  Write-Host 'Production ASAR entry contract self-test passed.'
+  return
+}
 
 $dist = (Resolve-Path 'desktop/dist').Path
 $asar = Join-Path $dist 'win-unpacked/resources/app.asar'
@@ -9,22 +73,7 @@ if (-not (Get-ChildItem $dist -Filter 'GrowthMap-Setup-*.exe' | Select-Object -F
 
 $list = @(npx --yes asar list $asar)
 if ($LASTEXITCODE -ne 0) { throw 'asar list failed' }
-$forbiddenEntries = @('e2e-main.js', 'e2e-commercial-config.js', 'e2e-license-public-key.pem', 'E2E_ONLY', 'create-e2e-fixture', 'test-windows-', 'recovery-matrix')
-foreach ($needle in $forbiddenEntries) {
-  if ($list | Select-String -SimpleMatch $needle) {
-    throw "Production ASAR contains forbidden E2E/test entry: $needle"
-  }
-}
-foreach ($entry in $list) {
-  if ($entry -match '(^|[\\/])(tests?|test[-_]?helpers?)([\\/]|$)') {
-    throw "Production ASAR contains a test path: $entry"
-  }
-}
-foreach ($requiredEntry in @('main.js','updater.js','update-recovery.js','managed-backup.js','commercial-config.js','commercial-config.json')) {
-  if (-not ($list | Where-Object { $_.TrimStart('\\','/') -eq $requiredEntry })) {
-    throw "Production ASAR is missing required trust-boundary module: $requiredEntry"
-  }
-}
+Assert-ProductionAsarEntries $list
 
 $tmp = Join-Path $env:RUNNER_TEMP ("growthmap-production-asar-{0}" -f [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp | Out-Null

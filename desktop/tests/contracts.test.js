@@ -26,6 +26,17 @@ test('license import and extraction-to-trial transitions revalidate authoritativ
  assert.match(hook,/onChanged\(\(\) =>/);assert.match(hook,/api\.getEntitlement\(\)/);
  assert.doesNotMatch(hook,/setInterval|setTimeout/);
 });
+test('production ASAR verifier normalizes root prefixes without weakening trust-boundary checks',()=>{
+ const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/verify-production-asar.ps1'),'utf8');
+ assert.match(script,/-replace '\^\[\\\\\/\]\+'/);
+ assert.match(script,/-replace '\\\\', '\/'/);
+ for(const prefix of ["'\\main.js'","'/updater.js'","'\\\\update-recovery.js'"]) assert.ok(script.includes(prefix),`missing prefix contract ${prefix}`);
+ assert.match(script,/nested\/updater\.js/);
+ assert.match(script,/missing required trust-boundary module: updater\\\.js/);
+ assert.match(script,/forbidden E2E\/test entry: e2e-main\\\.js/);
+ assert.match(script,/Assert-ProductionAsarEntries \$list/);
+ assert.doesNotMatch(script,/\.Trim(Start|End)\(/);
+});
 test('Windows database boundary fixtures are isolated under canonical system temp',()=>{
  const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/test-windows-database-boundaries.ps1'),'utf8');
  assert.match(script,/\[System\.IO\.Path\]::GetTempPath\(\)/);
