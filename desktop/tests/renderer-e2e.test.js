@@ -16,7 +16,9 @@ test('CDP version probe records HTTP response and connection errors',async()=>{
  const port=server.address().port,good=await probeVersion(port);
  assert.equal(good.statusCode,200);assert.equal(good.body,'{"Browser":"test"}');
  await new Promise(resolve=>server.close(resolve));
- const bad=await probeVersion(port,100);assert.match(bad.error,/ECONNREFUSED|socket hang up/);
+ const bad=await probeVersion(port,100);
+ assert.equal(typeof bad.error,'string');assert.ok(bad.error.trim());assert.doesNotMatch(bad.error,/\r|\n/);
+ assert.match(bad.error,/ECONNREFUSED|ECONNRESET|socket hang up/);
 });
 
 test('CDP timeout diagnostic includes process state, tree, streams, probe, phases and Electron log',async()=>{
