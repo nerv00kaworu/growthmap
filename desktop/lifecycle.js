@@ -22,5 +22,6 @@ function createLifecycle({platform=process.platform,spawn=defaultSpawn,graceMs=2
  function shutdown(closeWindows=()=>{}){if(shutdownPromise)return shutdownPromise;shuttingDown=true;acceptingIpc=false;shutdownPromise=(async()=>{closeWindows();await cleanup();})();return shutdownPromise;}
  return {attach,cleanup,shutdown,isExpectedExit:target=>expectedExits.has(target),get child(){return child;},get shuttingDown(){return shuttingDown;},get acceptingIpc(){return acceptingIpc;}};
 }
-function spawnOptions(platform=process.platform){return {detached:platform!=='win32',windowsHide:true,stdio:['ignore','ignore','ignore']};}
-module.exports={createLifecycle,spawnOptions,waitForExit,signalTree,killWindowsTree,delay};
+function sidecarSpawnOptions(platform=process.platform){return {detached:platform!=='win32',windowsHide:true,stdio:['ignore','ignore','ignore']};}
+function probeSpawnOptions(platform=process.platform){return {...sidecarSpawnOptions(platform),stdio:['ignore','pipe','pipe']};}
+module.exports={createLifecycle,sidecarSpawnOptions,probeSpawnOptions,waitForExit,signalTree,killWindowsTree,delay};
