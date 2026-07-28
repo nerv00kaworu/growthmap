@@ -8,7 +8,7 @@
     "start": "electron .",
     "pack:dir": "npm run preflight && electron-builder --dir",
     "dist:win": "npm run preflight:win && electron-builder --win nsis --publish never",
-    "dist:win:e2e": "npm run preflight:win && electron-builder --win dir --config.extraMetadata.main=e2e-main.js --config.files=main.js --config.files=e2e-main.js --config.files=preload.js --config.files=lifecycle.js --config.files=database-manager.js --config.files=request-policy.js --config.files=secret-store.js --config.files=csp.js --config.files=generated/** --publish never",
+    "dist:win:e2e": "npm run preflight:win && electron-builder --win dir --config scripts/e2e-builder-config.js --publish never",
     "preflight": "node scripts/preflight.js",
     "preflight:win": "node scripts/preflight.js win32",
     "csp:generate": "node scripts/generate-csp-manifest.js",
