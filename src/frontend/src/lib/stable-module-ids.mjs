@@ -6,10 +6,14 @@ function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"
 function encodedEscape(value) {
   return regexEscape(value).replace(/%([0-9A-F])([0-9A-F])/g, (_, a, b) => `%[${a.toLowerCase()}${a.toUpperCase()}][${b.toLowerCase()}${b.toUpperCase()}]`);
 }
-function rootVariants(root) {
+function rootPatterns(root) {
   // Do not decode caller-controlled identifiers. Match only the exact raw root
-  // and its single, standard URI encodings; this avoids broad/double decoding.
-  return [...new Set([root, encodeURI(root), encodeURIComponent(root)])]
+  // and its single, standard URI encodings. The component-encoded spelling may
+  // mix literal and encoded path separators, as emitted by loader composition.
+  const variants = [root, encodeURI(root), encodeURIComponent(root)];
+  const component = root.split("/").map((part) => encodedEscape(encodeURIComponent(part)))
+    .join("(?:/|%[2][fF])");
+  return [...new Set([...variants.map(encodedEscape), component])]
     .sort((a, b) => b.length - a.length || compareTotal(a, b));
 }
 function replaceFilesystemRoot(value) {
@@ -21,11 +25,11 @@ function replaceFilesystemRoot(value) {
 }
 function replaceRoot(value, root) {
   let out = slash(value);
-  for (const candidate of rootVariants(root)) {
-    const source = encodedEscape(candidate);
-    // Consume and canonicalize a real child separator. The lookahead prevents
-    // lexical-prefix redaction while retaining exact-root and loader matches.
-    const pattern = new RegExp(`${source}(?:\/|%2[fF])|${source}(?=$)`, windowsRoot(root) ? "gi" : "g");
+  for (const source of rootPatterns(root)) {
+    // Consume and canonicalize a real child separator. A literal `!` is the
+    // preserved boundary after a complete loader-chain segment. The lookahead
+    // prevents lexical-prefix redaction while retaining exact-root matches.
+    const pattern = new RegExp(`${source}(?:\/|%2[fF])|${source}(?=!|$)`, windowsRoot(root) ? "gi" : "g");
     out = out.replace(pattern, (match) => `<PROJECT_ROOT>${/(?:\/|%2f)$/i.test(match) ? "/" : ""}`);
   }
   return out;

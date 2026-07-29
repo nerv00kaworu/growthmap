@@ -75,6 +75,30 @@ test("exact roots, child paths, encoded separators, and loader chains normalize"
  assert.equal(normalizeModuleIdentifier("c%3a%2fwork%2fapp%2Fsrc/a.js",win),"<PROJECT_ROOT>/src/a.js");
  assert.equal(normalizeModuleIdentifier("C:/WORK/APP",win),"<PROJECT_ROOT>");
 });
+test("loader delimiters bound raw and encoded project-root segments without leaking roots",()=>{
+ const posix="/repo/app";
+ const posixCases=[
+  [`${posix}!${posix}/src/a.js`,"<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+  [`${posix}!${posix}!${posix}`,"<PROJECT_ROOT>!<PROJECT_ROOT>!<PROJECT_ROOT>"],
+  ["%2Frepo%2Fapp!%2frepo%2fapp/src/a.js","<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+  ["%2Frepo/app!%2frepo/app/src/a.js","<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+  [`${posix}/loader!${posix}/src/a.js`,"<PROJECT_ROOT>/loader!<PROJECT_ROOT>/src/a.js"],
+  ["/repo/application!/repo/app/src/a.js","/repo/application!<PROJECT_ROOT>/src/a.js"],
+ ];
+ for(const [value,expected] of posixCases) assert.equal(normalizeModuleIdentifier(value,posix),expected);
+ const win="C:/Work/App";
+ const windowsCases=[
+  ["c:\\work\\app!C:/WORK/APP/src/a.js","<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+  ["C%3a%2fWork%2fApp!c%3A%2Fwork%2Fapp/src/a.js","<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+  ["C%3A/Work%2fApp!c:/work/app/src/a.js","<PROJECT_ROOT>!<PROJECT_ROOT>/src/a.js"],
+ ];
+ for(const [value,expected] of windowsCases) assert.equal(normalizeModuleIdentifier(value,win),expected);
+ for(const [value,projectRoot] of [...posixCases.slice(0,5).map(([value])=>[value,posix]),...windowsCases.map(([value])=>[value,win])]){
+  const result=normalizeModuleIdentifier(value,projectRoot);
+  for(const variant of [projectRoot,encodeURI(projectRoot),encodeURIComponent(projectRoot)])
+   assert.equal(result.toLowerCase().includes(variant.toLowerCase()),false,`private root survived: ${result}`);
+ }
+});
 test("filesystem root only normalizes absolute path segment starts",()=>{
  const cases=[
   ["/","<PROJECT_ROOT>"],
