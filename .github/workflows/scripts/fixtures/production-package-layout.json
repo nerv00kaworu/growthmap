@@ -10,7 +10,11 @@
     "/startup-verdict.js\r",
     "\\update-policy.js\r",
     "/database-manager.js\r",
-    "\\trial-store.js\r"
+    "\\trial-store.js\r",
+    "/revocation-store.js\r",
+    "/license-freshness-store.js\r",
+    "/protected-history.js\r",
+    "/strict-json.js\r"
   ],
   "requiredAsarEntries": [
     "main.js",
@@ -23,7 +27,11 @@
     "startup-policy.js",
     "startup-verdict.js",
     "commercial-config.js",
-    "product-identity.json"
+    "product-identity.json",
+    "revocation-store.js",
+    "license-freshness-store.js",
+    "protected-history.js",
+    "strict-json.js"
   ],
   "requiredResourceEntries": [
     "commercial-config.json",

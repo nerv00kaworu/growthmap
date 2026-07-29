@@ -1,11 +1,11 @@
 import json, os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import get_db
 from models.models import ProviderConfig
 from pydantic import BaseModel
-from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document, verify_revocation_assertion
+from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document, verify_revocation_assertion, strict_json_loads
 from desktop.startup_verdict import effective_entitlement, verdict_mode
 from desktop.secrets import put, delete
 router = APIRouter(prefix="/desktop")
@@ -43,17 +43,20 @@ def start_trial(body: TrialStartIn, x_growthmap_fresh_install: str | None=Header
     initialize_trial(started_at=body.started_at, installation_id=body.installation_id)
     return peek_current_entitlement().public()
 @router.post("/license/import")
-def import_license(body: LicenseIn):
-    value = verify_document(body.document)
-    if not value.valid: raise HTTPException(400, f"License rejected: {value.reason}")
-    _atomic_json(LICENSE_PATH, body.document)
-    return value.public()
+async def import_license(request: Request):
+    try: body=strict_json_loads((await request.body()).decode("utf-8")); document=body["document"]
+    except Exception: raise HTTPException(400,"License JSON must have unique case-distinct keys")
+    value=verify_document(document)
+    if not value.valid: raise HTTPException(400,f"License rejected: {value.reason}")
+    _atomic_json(LICENSE_PATH,document);return value.public()
 
 @router.post("/revocation/verify")
-def verify_revocation(body: RevocationIn):
-    try: current=verify_document(json.loads(LICENSE_PATH.read_text("utf-8")))
+async def verify_revocation(request: Request):
+    try: body=strict_json_loads((await request.body()).decode("utf-8")); document=body["document"]
+    except Exception: raise HTTPException(400,"Revocation JSON must have unique case-distinct keys")
+    try: license_doc=strict_json_loads(LICENSE_PATH.read_text("utf-8"));current=verify_document(license_doc)
     except Exception: current=None
-    if current is None or current.state!="paid" or not current.valid or not current.license_id: raise HTTPException(400,"An active matching license is required")
-    try: verify_revocation_assertion(body.document,current.license_id)
+    if current is None or current.state not in {"paid","paid_legacy"} or not current.valid or not current.license_id: raise HTTPException(400,"A matching license is required")
+    try: verify_revocation_assertion(document,current.license_id,issued_at=license_doc["issued_at"])
     except Exception as error: raise HTTPException(400,f"Revocation rejected: {error}")
-    return {"accepted":True,"license_id":current.license_id,"sequence":body.document["sequence"]}
+    return {"accepted":True,"license_id":current.license_id,"sequence":document["sequence"]}

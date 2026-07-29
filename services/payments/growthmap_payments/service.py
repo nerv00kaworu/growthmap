@@ -348,8 +348,9 @@ class PaymentService:
    if r[0] not in TRANSITIONS[action]:raise ValueError(f"illegal transition {r[0]} -> {target}")
    now=self.now();assertion=None
    if action=="revoke":
-    assertion=self._revocation(r[1],now,1,reason_code or "administrative")
-    db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(r[1],oid,1,now,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now))
+    revoked_at=datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
+    assertion=self._revocation(r[1],revoked_at,1,reason_code or "administrative")
+    db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(r[1],oid,1,revoked_at,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now))
    db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target,"license_id":r[1] if action=="revoke" else None,"sequence":1 if action=="revoke" else None});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False,"revocation":assertion}
  @_checkpoint_serialized
  @_checkpoint_serialized

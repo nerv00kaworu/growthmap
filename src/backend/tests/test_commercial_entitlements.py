@@ -1,4 +1,4 @@
-import base64, json, os, subprocess, sys
+import base64, json, os, subprocess, sys, pytest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from cryptography.hazmat.primitives import serialization
@@ -98,3 +98,16 @@ with TestClient(app) as c:
     env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'trial','GROWTHMAP_STARTUP_VERDICT_NONCE':'N'*43,'GROWTHMAP_TRIAL_STATE_FILE':str(trial),'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'get.db'}",'GROWTHMAP_SCHEMA_CURRENT':'1'}
     import hashlib,hmac;env['GROWTHMAP_STARTUP_VERDICT_MAC']=hmac.new(b't',f"growthmap-startup-v1:trial:{'N'*43}".encode(),hashlib.sha256).hexdigest()
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
+
+def test_legacy_v1_bootstrap_and_strict_revocation_timestamp_types(tmp_path):
+ from desktop.entitlements import verify_revocation_assertion,strict_json_loads
+ private=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo));legacy=signed(private);legacy.pop('next_check_in_at');legacy['signature']=base64.b64encode(private.sign(json.dumps({k:legacy[k] for k in sorted(legacy) if k!='signature'},sort_keys=True,separators=(',',':')).encode())).decode();v=verify_document(legacy,pub);assert v.state=='paid_legacy' and v.reason=='legacy_bootstrap_required'
+ base={'schema_version':1,'assertion_type':'growthmap_license_revocation','product':'growthmap','major_version':1,'license_id':'TEST-ONLY-1','revoked_at':'2026-01-01T00:00:00Z','sequence':1,'reason_code':'administrative'}
+ def sign(d):d=dict(d);d['signature']=base64.b64encode(private.sign(b'growthmap-revocation-v1\0'+json.dumps(d,sort_keys=True,separators=(',',':')).encode())).decode();return d
+ assert verify_revocation_assertion(sign(base),'TEST-ONLY-1',pub,now=datetime(2026,1,1,tzinfo=timezone.utc))
+ for field,value in [('schema_version',True),('major_version',True),('sequence',True),('revoked_at','2026-01-01T00:00:00+00:00'),('revoked_at','2099-01-01T00:00:00Z')]:
+  bad=dict(base);bad[field]=value
+  with pytest.raises(Exception):verify_revocation_assertion(sign(bad),'TEST-ONLY-1',pub,now=datetime(2026,1,1,tzinfo=timezone.utc))
+ with pytest.raises(Exception):verify_revocation_assertion(sign(base),'TEST-ONLY-1',pub,now=datetime(2026,1,1,tzinfo=timezone.utc),issued_at='2026-01-02T00:00:00+00:00')
+ for raw in ['{"product":"evil","product":"growthmap"}','{"Product":"evil","product":"growthmap"}']:
+  with pytest.raises(ValueError):strict_json_loads(raw)

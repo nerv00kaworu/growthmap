@@ -48,6 +48,8 @@
       "trial-store.js",
       "revocation-store.js",
       "license-freshness-store.js",
+      "protected-history.js",
+      "strict-json.js",
       "startup-policy.js",
       "startup-verdict.js",
       "commercial-config.js",

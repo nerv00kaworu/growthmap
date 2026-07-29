@@ -1,0 +1,2 @@
+'use strict';const test=require('node:test'),assert=require('node:assert/strict');const {parseStrictJson}=require('../strict-json');
+test('strict JSON rejects duplicate and case-colliding keys recursively',()=>{assert.deepEqual(parseStrictJson('{"document":{"product":"growthmap"}}'),{document:{product:'growthmap'}});for(const raw of ['{"product":"evil","product":"growthmap"}','{"Product":"evil","product":"growthmap"}','{"x":{"license_id":"evil","license_id":"good"}}'])assert.throws(()=>parseStrictJson(raw),/(Duplicate|Case-colliding)/);});
