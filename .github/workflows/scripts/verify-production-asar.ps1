@@ -75,9 +75,12 @@ function Assert-ThirdPartyInventory {
   $packaged = Join-Path $ExtractedRoot 'node_modules';$source=(Resolve-Path $InstalledRoot).Path
   foreach($file in Get-ChildItem $source -File -Force -Recurse){$rel=[IO.Path]::GetRelativePath($source,$file.FullName)-replace '\\','/';if(-not $manifestFiles.ContainsKey($rel)-or (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $manifestFiles[$rel]){throw "Installed third-party file differs from frozen clean-install provenance: node_modules/$rel"}}
   if (@(Get-ChildItem $source -File -Force -Recurse).Count -ne $manifestFiles.Count) { throw 'Installed node_modules file set differs from frozen clean-install provenance' }
-  $lock=Get-Content (Resolve-Path $LockPath) -Raw | ConvertFrom-Json -Depth 100
+  # npm lockfile v3 intentionally uses packages[""] for root metadata. PowerShell 7
+  # rejects that valid empty-string JSON key when producing a PSCustomObject, so
+  # parse the lock as a hashtable and use explicit dictionary access throughout.
+  $lock=Get-Content (Resolve-Path $LockPath) -Raw | ConvertFrom-Json -Depth 100 -AsHashtable
   $rootPackage=Get-Content (Resolve-Path $PackagePath) -Raw | ConvertFrom-Json -Depth 100
-  if ($lock.lockfileVersion -ne 3 -or -not $lock.packages -or -not $lock.packages.'') { throw 'Third-party package lock must be npm lockfile v3 with root metadata' }
+  if ($lock['lockfileVersion'] -ne 3 -or -not $lock.ContainsKey('packages') -or -not $lock['packages'].ContainsKey('')) { throw 'Third-party package lock must be npm lockfile v3 with root metadata' }
   foreach ($tree in @($ExtractedRoot,$source)) {
     $treeRoot=(Resolve-Path $tree).Path;$treeFolded=@{}
     foreach ($item in Get-ChildItem $treeRoot -Force -Recurse) {
@@ -88,18 +91,18 @@ function Assert-ThirdPartyInventory {
     }
   }
   $allowed=@{};$folded=@{}
-  foreach ($prop in $lock.packages.psobject.Properties) {
-    $key=($prop.Name -replace '\\','/').TrimEnd('/')
+  foreach ($prop in $lock['packages'].GetEnumerator()) {
+    $key=([string]$prop.Key -replace '\\','/').TrimEnd('/')
     if (-not $key.StartsWith('node_modules/')) { continue }
     if ($key -match '(^|/)\.\.(/|$)') { throw "Invalid node_modules lock path: $key" }
     $relative=$key.Substring(13);$lower=$relative.ToLowerInvariant()
     if ($folded.ContainsKey($lower) -and $folded[$lower] -cne $relative) { throw "Case-colliding lock package paths: $relative" }
     $folded[$lower]=$relative;$meta=$prop.Value
-    if (-not $meta.version -or (($meta.resolved -or $meta.integrity) -and (-not $meta.resolved -or -not $meta.integrity))) { throw "Incomplete lock identity/integrity metadata: $key" }
+    if (-not $meta['version'] -or (($meta['resolved'] -or $meta['integrity']) -and (-not $meta['resolved'] -or -not $meta['integrity']))) { throw "Incomplete lock identity/integrity metadata: $key" }
     $allowed[$relative]=$meta
   }
   $rootDeps=@{};foreach ($kind in @('dependencies','optionalDependencies')) { foreach ($p in $rootPackage.$kind.psobject.Properties) {$rootDeps[$p.Name]=[string]$p.Value} }
-  $lockRootDeps=@{};foreach ($kind in @('dependencies','optionalDependencies')) { foreach ($p in $lock.packages.''.$kind.psobject.Properties) {$lockRootDeps[$p.Name]=[string]$p.Value} }
+  $lockRootDeps=@{};foreach ($kind in @('dependencies','optionalDependencies')) { if ($lock['packages'][''].ContainsKey($kind)) { foreach ($p in $lock['packages'][''][$kind].GetEnumerator()) {$lockRootDeps[[string]$p.Key]=[string]$p.Value} } }
   if (($rootDeps.Keys|Sort-Object) -join "`n" -cne ($lockRootDeps.Keys|Sort-Object) -join "`n") { throw 'desktop package.json dependencies differ from package-lock root entry' }
   foreach ($name in $rootDeps.Keys) { if ($rootDeps[$name] -cne $lockRootDeps[$name] -or -not $allowed.ContainsKey($name)) { throw "Root dependency is not identically represented in lock: $name" } }
   function Get-PackageRoots([string]$Root) {
