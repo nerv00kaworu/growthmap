@@ -21,7 +21,17 @@ jobs:
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
       - name: Tracked CSP manifest must already match the fresh deterministic build
-        run: git diff --exit-code -- desktop/generated/csp-script-hashes.json
+        shell: pwsh
+        run: |
+          git diff --exit-code -- desktop/generated/csp-script-hashes.json
+          $cspStatus = $LASTEXITCODE
+          if ($cspStatus -ne 0) {
+            node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
+            $diagnosticStatus = $LASTEXITCODE
+            if ($diagnosticStatus -ne 0) { Write-Host "::error::CSP diagnostic failed closed with status $diagnosticStatus" }
+            exit $cspStatus
+          }
+          exit 0
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
       - run: npm ci
