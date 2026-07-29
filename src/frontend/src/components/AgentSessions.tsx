@@ -94,7 +94,7 @@ export function AgentSessions({ projectId, rootNode, branches, onClose }: Props)
   const reviewArtifact = async (artifact: AgentArtifact, action: "approve" | "reject") => {
     setBusy(true); setMessage("");
     try {
-      if (action === "approve") await api.approveAgentArtifact(artifact.id, reviewNotes[artifact.id] || "");
+      if (action === "approve") await api.approveAgentArtifact(artifact.id, artifact.target_node_id, reviewNotes[artifact.id] || "");
       else await api.rejectAgentArtifact(artifact.id, reviewNotes[artifact.id] || "");
       if (selectedSession) await loadArtifacts(selectedSession.id);
     } catch (error: unknown) { setMessage(`審核失敗：${(error as Error).message}`); setBusy(false); }

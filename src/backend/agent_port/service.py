@@ -1,97 +1,147 @@
-import hashlib, hmac, json, secrets, uuid
-from datetime import datetime, timezone
+"""Transactional authorization, scope and canonical mutation service for Agent Port."""
+import hashlib,hmac,json,uuid
+from datetime import datetime,timezone
 from fastapi import HTTPException
 from sqlalchemy import select
-from models.models import Project, Node, Edge, ContentBlock, Branch, ActionLog, AgentReceipt
+from sqlalchemy.exc import IntegrityError,OperationalError
+from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 
-NODE_TYPES={"idea","concept","task","question","decision","risk","resource","note","module","spec"}
-RELATIONS={"child_of","extends","depends_on","supports","alternative_to","refines","references","conflicts_with"}
-BLOCK_TYPES={"paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"}
+def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+def digest(v): return hashlib.sha256(canonical(v).encode()).hexdigest()
+def conflict(msg,**extra): raise HTTPException(409,{"code":"REVISION_CONFLICT","message":msg,**extra})
 
-def canonical(value): return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False)
-def digest(value): return hashlib.sha256(canonical(value).encode()).hexdigest()
-def conflict(detail, **extra): raise HTTPException(409,{"code":"REVISION_CONFLICT","message":detail,**extra})
-def bump(project, *entities):
-    project.revision=(project.revision or 1)+1; project.updated_at=datetime.now(timezone.utc)
-    for entity in entities:
-        if hasattr(entity,"revision"): entity.revision=(entity.revision or 1)+1
+def bump(project,entities=()):
+    project.revision=(project.revision or 1)+1;project.updated_at=datetime.now(timezone.utc)
+    # Existing entities change once per transaction. New entities remain revision 1.
+    seen=set()
+    for e in entities:
+        if e.id in seen: continue
+        seen.add(e.id);e.revision=(e.revision or 1)+1
 
-async def descendants(db, root_id):
-    edges=(await db.execute(select(Edge.from_node_id,Edge.to_node_id).where(Edge.relation_type=="child_of"))).all(); children={}
-    for a,b in edges: children.setdefault(a,[]).append(b)
-    out=set(); stack=[root_id]
+async def descendants(db,project_id,root_id,limit=5000):
+    rows=(await db.execute(select(Edge.from_node_id,Edge.to_node_id).where(Edge.project_id==project_id,Edge.relation_type=="child_of"))).all()
+    children={}
+    for a,b in rows:children.setdefault(a,[]).append(b)
+    out=set();stack=[root_id]
     while stack:
         cur=stack.pop()
-        if cur in out: continue
-        out.add(cur); stack.extend(children.get(cur,[]))
+        if cur in out:continue
+        out.add(cur)
+        if len(out)>limit:raise HTTPException(413,{"code":"SCOPE_TOO_LARGE","message":"Scope traversal exceeds limit"})
+        stack.extend(children.get(cur,()))
     return out
-
-async def allowed_nodes(db, grant):
-    if grant.node_scope_id: return {grant.node_scope_id}
-    if grant.branch_root_id: return await descendants(db,grant.branch_root_id)
-    rows=await db.execute(select(Node.id).where(Node.project_id==grant.project_id)); return set(rows.scalars())
-
-async def validate_scope(db, grant, ids):
+async def allowed_nodes(db,grant):
+    if grant.node_scope_id:return {grant.node_scope_id}
+    if grant.branch_root_id:return await descendants(db,grant.project_id,grant.branch_root_id)
+    ids=set((await db.execute(select(Node.id).where(Node.project_id==grant.project_id).limit(5001))).scalars())
+    if len(ids)>5000:raise HTTPException(413,{"code":"SCOPE_TOO_LARGE","message":"Project graph exceeds Agent Port limit"})
+    return ids
+async def validate_scope(db,grant,ids):
     allowed=await allowed_nodes(db,grant)
-    if any(x not in allowed for x in ids if x): raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Target is outside grant scope"})
+    if any(x and x not in allowed for x in ids):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Target is outside grant scope"})
 
-async def apply_batch(db, grant, body, actor=None):
-    project=await db.get(Project,grant.project_id)
-    if not project: raise HTTPException(404,"Project not found")
-    key=body["idempotency_key"]; req_digest=digest(body)
-    prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant.id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
-    if prior:
-        if not hmac.compare_digest(prior.request_digest,req_digest): raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key was used with different payload"})
-        return prior.response
-    if body["expected_project_revision"] != project.revision: conflict("Project revision is stale",expected=body["expected_project_revision"],current=project.revision)
-    operations=body["operations"]
-    if not 1<=len(operations)<=50: raise HTTPException(422,"operations must contain 1..50 items")
-    referenced=[]
-    for op in operations:
-        referenced += [op.get(k) for k in ("node_id","parent_id","from_node_id","to_node_id","source_node_id") if op.get(k)]
-    await validate_scope(db,grant,referenced)
-    # all expected entity revisions and shapes are validated before writes
-    for op in operations:
-        kind=op.get("op")
-        if kind=="update_node":
-            node=await db.get(Node,op.get("node_id"));
-            if not node or node.project_id!=project.id: raise HTTPException(404,"Node not found")
-            if op.get("expected_revision")!=node.revision: conflict("Entity revision is stale",entity_id=node.id,expected=op.get("expected_revision"),current=node.revision)
-            fields=op.get("fields",{}); allowed={"title","summary","description","rules_text","constraints_text","examples_text","questions_text","decision_notes","tags","status","maturity","priority","confidence","workflow_status","file_paths"}
-            if not fields or set(fields)-allowed: raise HTTPException(422,"Invalid update_node fields")
-        elif kind=="create_node":
-            if not isinstance(op.get("title"),str) or not op["title"].strip() or len(op["title"])>500 or op.get("node_type","idea") not in NODE_TYPES: raise HTTPException(422,"Invalid create_node")
+async def validate_operations(db,grant,operations):
+    """Validate every existing/new reference and exact create containment before writes."""
+    project_id=grant.project_id;allowed=await allowed_nodes(db,grant);known=dict()
+    rows=(await db.execute(select(Node).where(Node.project_id==project_id))).scalars().all()
+    known.update({n.id:n for n in rows});new_nodes={}
+    existing_ids={n.id for n in rows}
+    branch_rows=(await db.execute(select(Branch).where(Branch.project_id==project_id))).scalars().all()
+    branches={b.id:b for b in branch_rows};new_branches={}
+    used=set(existing_ids)|set(branches)
+    # First reserve all provided/generated IDs so same-batch forward references work.
+    normalized=[]
+    for model in operations:
+        op=model.model_dump(exclude_none=True) if hasattr(model,"model_dump") else dict(model)
+        if op["op"].startswith("create_"):
+            oid=op.get("id") or str(uuid.uuid4());op["id"]=oid
+            try: uuid.UUID(oid)
+            except Exception:raise HTTPException(422,"Invalid generated/provided id")
+            if oid in used:raise HTTPException(409,{"code":"ID_CONFLICT","message":"Entity id already exists"})
+            used.add(oid)
+            if op["op"]=="create_node":new_nodes[oid]=op
+            if op["op"]=="create_branch":new_branches[oid]=op
+        normalized.append(op)
+    def node_ref(nid):
+        if nid in known:return known[nid]
+        if nid in new_nodes:return new_nodes[nid]
+        raise HTTPException(422,{"code":"INVALID_REFERENCE","message":"Node reference does not exist in project"})
+    def node_branch(n):return n.branch_id if isinstance(n,Node) else n.get("branch_id")
+    for op in normalized:
+        kind=op["op"]
+        refs=[]
+        if kind=="create_node":
+            parent=op.get("parent_id")
+            # Node/branch scopes cannot create roots; containment must be explicit.
+            if (grant.node_scope_id or grant.branch_root_id) and not parent:raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Scoped create_node requires an in-scope parent"})
+            if parent:
+                pn=node_ref(parent);refs.append(parent)
+                inherited=node_branch(pn)
+                if op.get("branch_id") is None and inherited:op["branch_id"]=inherited
+                elif inherited and op.get("branch_id")!=inherited:raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Child must inherit parent branch"})
+            bid=op.get("branch_id")
+            if bid:
+                b=branches.get(bid) or new_branches.get(bid)
+                if not b:raise HTTPException(422,{"code":"INVALID_BRANCH","message":"Branch must exist in project"})
+                if isinstance(b,Branch) and b.status!="active":raise HTTPException(422,{"code":"INACTIVE_BRANCH","message":"Branch is not active"})
+                # Branch scoped grants may only use the branch containing their root.
+                if grant.branch_root_id and bid!=node_branch(known.get(grant.branch_root_id)):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Branch outside grant"})
+            # Newly created nodes become allowed only through an allowed/newly-contained parent.
+            if parent and (parent in allowed or parent in new_nodes):allowed.add(op["id"])
+        elif kind=="update_node":
+            n=node_ref(op["node_id"]);refs.append(op["node_id"])
+            if not isinstance(n,Node):raise HTTPException(422,"Cannot update a not-yet-created node")
+            if op["expected_revision"]!=n.revision:conflict("Entity revision is stale",entity_id=n.id,expected=op["expected_revision"],current=n.revision)
+            if not op["fields"]:raise HTTPException(422,"update_node fields cannot be empty")
         elif kind=="create_edge":
-            if op.get("relation_type","child_of") not in RELATIONS: raise HTTPException(422,"Invalid relation")
-            for k in ("from_node_id","to_node_id"):
-                n=await db.get(Node,op.get(k));
-                if not n or n.project_id!=project.id: raise HTTPException(422,"Edge nodes must exist in project")
-        elif kind=="create_content_block":
-            n=await db.get(Node,op.get("node_id"));
-            if not n or n.project_id!=project.id or op.get("block_type","paragraph") not in BLOCK_TYPES or len(canonical(op.get("content",{})))>65536: raise HTTPException(422,"Invalid content block")
+            a=node_ref(op["from_node_id"]);b=node_ref(op["to_node_id"]);refs += [op["from_node_id"],op["to_node_id"]]
+            if op["relation_type"]=="child_of" and node_branch(a)!=node_branch(b):raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Containment endpoints must share branch"})
+        elif kind=="create_content_block":node_ref(op["node_id"]);refs.append(op["node_id"])
         elif kind=="create_branch":
-            n=await db.get(Node,op.get("source_node_id"));
-            if not n or n.project_id!=project.id or not str(op.get("name","")).strip(): raise HTTPException(422,"Invalid branch")
-        else: raise HTTPException(422,f"Unsupported operation: {kind}")
-    results=[]; touched=[]
-    for op in operations:
+            node_ref(op["source_node_id"]);refs.append(op["source_node_id"])
+            if grant.node_scope_id:raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Node scope cannot create branches"})
+        if any(r not in allowed for r in refs):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Every operation reference must be in scope"})
+    return normalized
+
+async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
+    key=body["idempotency_key"];req_digest=digest(body);grant_id=grant.id;project_id=grant.project_id
+    prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant_id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
+    if prior:
+        if not hmac.compare_digest(prior.request_digest,req_digest):raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key was used with different payload"})
+        return prior.response
+    project=await db.get(Project,project_id)
+    if not project:raise HTTPException(404,"Project not found")
+    if body["expected_project_revision"]!=project.revision:conflict("Project revision is stale",expected=body["expected_project_revision"],current=project.revision)
+    ops=await validate_operations(db,grant,body["operations"]);results=[];existing_touched=[]
+    for op in ops:
         kind=op["op"]
         if kind=="create_node":
-            n=Node(id=op.get("id") or str(uuid.uuid4()),project_id=project.id,title=op["title"].strip(),summary=op.get("summary",""),node_type=op.get("node_type","idea"),branch_id=op.get("branch_id"),created_by=actor or grant.agent_identity,last_edited_by=actor or grant.agent_identity);db.add(n);await db.flush();touched.append(n)
-            if op.get("parent_id"): db.add(Edge(project_id=project.id,from_node_id=op["parent_id"],to_node_id=n.id,relation_type="child_of",is_mainline=False))
-            results.append({"op":kind,"id":n.id})
+            n=Node(id=op["id"],project_id=project.id,title=op["title"].strip(),summary=op.get("summary",""),node_type=op.get("node_type","idea"),branch_id=op.get("branch_id"),created_by=actor or grant.agent_identity,last_edited_by=actor or grant.agent_identity,revision=1);db.add(n)
+            if op.get("parent_id"):db.add(Edge(project_id=project.id,from_node_id=op["parent_id"],to_node_id=n.id,relation_type="child_of",is_mainline=False,revision=1))
+            results.append({"op":kind,"id":n.id,"revision":1})
         elif kind=="update_node":
             n=await db.get(Node,op["node_id"])
-            for k,v in op["fields"].items(): setattr(n,k,v)
-            n.last_edited_by=actor or grant.agent_identity;touched.append(n);results.append({"op":kind,"id":n.id,"revision":n.revision+1})
+            for k,v in op["fields"].items():
+                if v is not None:setattr(n,k,v)
+            n.last_edited_by=actor or grant.agent_identity;existing_touched.append(n);results.append({"op":kind,"id":n.id,"revision":n.revision+1})
         elif kind=="create_edge":
-            e=Edge(id=op.get("id") or str(uuid.uuid4()),project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op.get("relation_type","child_of"),weight=op.get("weight",1.0),note=op.get("note",""),is_mainline=False);db.add(e);touched.append(e);results.append({"op":kind,"id":e.id})
+            e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);results.append({"op":kind,"id":e.id,"revision":1})
         elif kind=="create_content_block":
-            b=ContentBlock(id=op.get("id") or str(uuid.uuid4()),node_id=op["node_id"],block_type=op.get("block_type","paragraph"),content=op.get("content",{}),order_index=op.get("order_index",0),created_by=actor or grant.agent_identity);db.add(b);touched.append(b);results.append({"op":kind,"id":b.id})
+            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
         else:
-            b=Branch(id=op.get("id") or str(uuid.uuid4()),project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op.get("description",""));db.add(b);touched.append(b);results.append({"op":kind,"id":b.id})
-    bump(project,*touched)
+            b=Branch(id=op["id"],project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
+    bump(project,existing_touched)
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
-    db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant.id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
-    db.add(ActionLog(project_id=project.id,actor_type="agent" if not actor else "human",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(operations),"request_digest":req_digest}))
-    await db.commit(); return response
+    db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
+    db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))
+    if proposal is not None:proposal.status="approved";proposal.reviewed_at=datetime.now(timezone.utc)
+    try:
+        await db.flush()
+        if commit:await db.commit()
+    except (IntegrityError,OperationalError):
+        await db.rollback()
+        prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant_id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
+        if prior and hmac.compare_digest(prior.request_digest,req_digest):return prior.response
+        if prior:raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key payload mismatch"})
+        raise HTTPException(409,{"code":"IDEMPOTENCY_IN_PROGRESS","message":"Concurrent request in progress; retry"})
+    return response

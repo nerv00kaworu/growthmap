@@ -1,6 +1,30 @@
 // API client for GrowthMap backend
 const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";
 
+const revisionCache = {
+  projects: new Map<string, number>(),
+  nodes: new Map<string, { projectId: string; revision: number }>(),
+  edges: new Map<string, { projectId: string; revision: number }>(),
+  blocks: new Map<string, { nodeId: string; revision: number }>(),
+  branches: new Map<string, { projectId: string; revision: number }>(),
+};
+
+function remember(value: unknown): void {
+  if (Array.isArray(value)) { value.forEach(remember); return; }
+  if (!value || typeof value !== "object") return;
+  const row = value as Record<string, unknown>;
+  const id = typeof row.id === "string" ? row.id : undefined;
+  const revision = typeof row.revision === "number" ? row.revision : undefined;
+  if (id && revision) {
+    if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
+    else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
+    else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
+    else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") revisionCache.branches.set(id, { projectId: row.project_id, revision });
+    else if (typeof row.project_id === "string" && typeof row.node_type === "string") revisionCache.nodes.set(id, { projectId: row.project_id, revision });
+  }
+  Object.values(row).forEach(remember);
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -11,8 +35,31 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(`API ${res.status}: ${text}`);
   }
   if (res.status === 204) return undefined as T;
-  return res.json();
+  const value = await res.json() as T;
+  remember(value);
+  return value;
 }
+
+function projectExpected(projectId: string): number {
+  const revision = revisionCache.projects.get(projectId);
+  if (!revision) throw new Error("Revision state unavailable; refresh the project and retry");
+  return revision;
+}
+
+function nodeExpected(nodeId: string) {
+  const row = revisionCache.nodes.get(nodeId);
+  if (!row) throw new Error("Node revision unavailable; refresh and retry");
+  return { expected_project_revision: projectExpected(row.projectId), expected_revision: row.revision };
+}
+
+function blockExpected(blockId: string) {
+  const block = revisionCache.blocks.get(blockId);
+  if (!block) throw new Error("Block revision unavailable; refresh and retry");
+  const node = revisionCache.nodes.get(block.nodeId);
+  if (!node) throw new Error("Node revision unavailable; refresh and retry");
+  return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
+}
+
 
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
 import type { Entitlement } from "./entitlement";
@@ -50,8 +97,10 @@ export const api = {
   listAgentArtifacts: (sessionId: string) => request<AgentArtifact[]>(`/agent-sessions/${sessionId}/artifacts`),
   createAgentArtifact: (sessionId: string, data: { target_node_id: string; artifact_type: AgentArtifact["artifact_type"]; payload: Record<string, unknown> }) =>
     request<AgentArtifact>(`/agent-sessions/${sessionId}/artifacts`, { method: "POST", body: JSON.stringify(data) }),
-  approveAgentArtifact: (artifactId: string, reviewNote = "") =>
-    request<AgentArtifact>(`/agent-artifacts/${artifactId}/approve`, { method: "POST", body: JSON.stringify({ review_note: reviewNote }) }),
+  approveAgentArtifact: (artifactId: string, targetNodeId: string, reviewNote = "") => {
+    const expected = nodeExpected(targetNodeId);
+    return request<AgentArtifact>(`/agent-artifacts/${artifactId}/approve`, { method: "POST", body: JSON.stringify({ review_note: reviewNote, expected_project_revision: expected.expected_project_revision, expected_node_revision: expected.expected_revision }) });
+  },
   rejectAgentArtifact: (artifactId: string, reviewNote = "") =>
     request<AgentArtifact>(`/agent-artifacts/${artifactId}/reject`, { method: "POST", body: JSON.stringify({ review_note: reviewNote }) }),
 
@@ -59,42 +108,53 @@ export const api = {
   listProjects: () => request<Project[]>("/projects"),
   createProject: (data: { name: string; description?: string; goal?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
-  updateProject: (projectId: string, data: Partial<Pick<Project, "status">>) =>
-    request<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateProject: (projectId: string, data: Partial<Pick<Project, "status">> & { expected_project_revision?: number }) =>
+    request<Project>(`/projects/${projectId}`, { method: "PATCH", body: JSON.stringify({ ...data, expected_project_revision: data.expected_project_revision ?? projectExpected(projectId) }) }),
   getEntitlement: () => request<Entitlement>("/desktop/entitlement", { cache: "no-store" }),
 
   // Nodes
   getSubtree: (nodeId: string) => request<GNode>(`/nodes/${nodeId}/subtree`),
   getNode: (nodeId: string) => request<GNode>(`/nodes/${nodeId}`),
-  createNode: (projectId: string, data: { title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) =>
+  createNode: (projectId: string, data: { expected_project_revision?: number; title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) =>
     request<GNode>(`/projects/${projectId}/nodes`, { method: "POST", body: JSON.stringify(data) }),
-  updateNode: (nodeId: string, data: Partial<GNode>) =>
-    request<GNode>(`/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  updateEdge: (edgeId: string, data: { weight?: number; note?: string }) =>
-    request<{ id: string; project_id: string; from_node_id: string; to_node_id: string; relation_type: string; weight: number; note: string; is_mainline: boolean; created_at: string }>(`/edges/${edgeId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteEdge: (edgeId: string) => request<void>(`/edges/${edgeId}`, { method: "DELETE" }),
-  deleteNode: (nodeId: string) =>
-    request<void>(`/nodes/${nodeId}`, { method: "DELETE" }),
+  updateNode: (nodeId: string, data: Partial<GNode> & { expected_project_revision?: number; expected_revision?: number }) =>
+    request<GNode>(`/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ ...nodeExpected(nodeId), ...data }) }),
+  updateEdge: (edgeId: string, data: { expected_project_revision?: number; expected_revision?: number; weight?: number; note?: string }) => {
+    const edge = revisionCache.edges.get(edgeId); if (!edge) throw new Error("Edge revision unavailable; refresh and retry");
+    return request<Edge>(`/edges/${edgeId}`, { method: "PATCH", body: JSON.stringify({ expected_project_revision: projectExpected(edge.projectId), expected_revision: edge.revision, ...data }) });
+  },
+  deleteEdge: (edgeId: string, expectedProjectRevision?: number, expectedRevision?: number) => {
+    const edge = revisionCache.edges.get(edgeId); if (!edge) throw new Error("Edge revision unavailable; refresh and retry");
+    return request<void>(`/edges/${edgeId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision ?? projectExpected(edge.projectId), expected_revision: expectedRevision ?? edge.revision }) });
+  },
+  deleteNode: (nodeId: string, expectedProjectRevision: number, expectedRevision: number) =>
+    request<void>(`/nodes/${nodeId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
 
   // Edges
   listEdges: (projectId: string, relationType?: string) =>
     request<Edge[]>(`/projects/${projectId}/edges${relationType ? `?relation_type=${encodeURIComponent(relationType)}` : ""}`),
-  createEdge: (data: { from_node_id: string; to_node_id: string; relation_type?: string; is_mainline?: boolean }) =>
-    request(`/edges`, { method: "POST", body: JSON.stringify(data) }),
-  promoteMainline: (edgeId: string) =>
-    request(`/edges/${edgeId}/promote-mainline`, { method: "POST" }),
-  promoteChildMainline: (parentId: string, childId: string) =>
-    request(`/nodes/${parentId}/promote-child/${childId}`, { method: "POST" }),
+  createEdge: (data: { expected_project_revision?: number; from_node_id: string; to_node_id: string; relation_type?: string; is_mainline?: boolean }) => {
+    const node = revisionCache.nodes.get(data.from_node_id); if (!node) throw new Error("Node revision unavailable; refresh and retry");
+    return request<Edge>(`/edges`, { method: "POST", body: JSON.stringify({ ...data, expected_project_revision: data.expected_project_revision ?? projectExpected(node.projectId) }) });
+  },
+  promoteMainline: (edgeId: string, expectedProjectRevision: number, expectedRevision: number) =>
+    request<Edge>(`/edges/${edgeId}/promote-mainline`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
+  promoteChildMainline: (parentId: string, childId: string, expectedProjectRevision: number, expectedRevision: number) =>
+    request(`/nodes/${parentId}/promote-child/${childId}`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
 
   // Content blocks
   getBlocks: (nodeId: string) =>
-    request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number }[]>(`/nodes/${nodeId}/blocks`),
-  createBlock: (nodeId: string, data: { block_type: string; content: Record<string, string> }) =>
-    request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify(data) }),
-  updateBlock: (blockId: string, data: { content?: Record<string, string>; block_type?: string; order_index?: number }) =>
-    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteBlock: (blockId: string) =>
-    request<void>(`/blocks/${blockId}`, { method: "DELETE" }),
+    request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number }[]>(`/nodes/${nodeId}/blocks`),
+  createBlock: (nodeId: string, data: { expected_project_revision?: number; expected_node_revision?: number; block_type: string; content: Record<string, string> }) => {
+    const node = nodeExpected(nodeId);
+    return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision, ...data }) });
+  },
+  updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) =>
+    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...blockExpected(blockId), ...data }) }),
+  deleteBlock: (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
+    const expected = blockExpected(blockId);
+    return request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify({ ...expected, expected_project_revision: expectedProjectRevision ?? expected.expected_project_revision, expected_node_revision: expectedNodeRevision ?? expected.expected_node_revision, expected_revision: expectedRevision ?? expected.expected_revision }) });
+  },
 
   // History
   getHistory: (nodeId: string) =>
@@ -143,7 +203,7 @@ export const api = {
   // Branches
   listBranches: (projectId: string, includeInactive = false) =>
     request<Branch[]>(`/projects/${projectId}/branches${includeInactive ? "?include_inactive=true" : ""}`),
-  createBranch: (projectId: string, data: { source_node_id: string; name: string; description?: string }) =>
+  createBranch: (projectId: string, data: { expected_project_revision: number; source_node_id: string; name: string; description?: string }) =>
     request<Branch>(`/projects/${projectId}/branches`, { method: "POST", body: JSON.stringify(data) }),
   getBranch: (branchId: string) =>
     request<Branch>(`/branches/${branchId}`),
@@ -153,13 +213,13 @@ export const api = {
     request<BranchComparison>(`/branches/${branchId}/compare`),
   getBranchHistory: (branchId: string) =>
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/branches/${branchId}/history`),
-  mergeBranch: (branchId: string, targetNodeId: string) =>
+  mergeBranch: (branchId: string, targetNodeId: string, expectedProjectRevision: number, expectedRevision: number) =>
     request<{ ok: boolean }>(`/branches/${branchId}/merge`, {
       method: "POST",
-      body: JSON.stringify({ target_node_id: targetNodeId }),
+      body: JSON.stringify({ target_node_id: targetNodeId, expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }),
     }),
-  archiveBranch: (branchId: string) =>
-    request<void>(`/branches/${branchId}`, { method: "DELETE" }),
+  archiveBranch: (branchId: string, expectedProjectRevision: number, expectedRevision: number) =>
+    request<void>(`/branches/${branchId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
 };
 
 

@@ -1,4 +1,4 @@
-import hashlib, hmac, json, secrets, time, uuid
+import hashlib, hmac, json, os, secrets, time, uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -8,10 +8,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import get_db
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentGrant,AgentProposal,AgentEvent,AgentReadback
-from agent_port.service import apply_batch,allowed_nodes,canonical,digest,validate_scope
+from agent_port.service import apply_batch,allowed_nodes,canonical,digest,validate_scope,validate_operations
+from agent_port.schemas import Batch,ProposalIn,EventIn,ReadbackIn,ReviewIn
 
-router=APIRouter(); human_router=APIRouter(); _hits=defaultdict(deque)
+router=APIRouter(); _hits=defaultdict(deque)
 PERMISSIONS={"read":0,"propose":1,"write":2}
+
+async def human_control(request:Request,authorization:str|None=Header(None)):
+    # Separate human capability. Desktop uses its per-launch token; authoring mode
+    # must explicitly provision a local session token or the plane fails closed.
+    token=os.getenv("GROWTHMAP_SESSION_TOKEN") or os.getenv("GROWTHMAP_HUMAN_CONTROL_TOKEN")
+    if not token: raise HTTPException(503,{"code":"HUMAN_CONTROL_DISABLED","message":"Human control session is not initialized"})
+    if not authorization or not hmac.compare_digest(authorization,f"Bearer {token}"): raise HTTPException(401,{"code":"HUMAN_AUTH_REQUIRED","message":"Human session capability required"})
+    origin=request.headers.get("origin")
+    if origin and origin.rstrip("/") not in {"http://127.0.0.1:3000","http://localhost:3000",str(request.base_url).rstrip("/")}: raise HTTPException(403,{"code":"ORIGIN_DENIED","message":"Untrusted browser origin"})
+    request.state.human_identity="desktop-human" if os.getenv("GROWTHMAP_DESKTOP_MODE")=="1" else "local-human-session"
+
+human_router=APIRouter(dependencies=[Depends(human_control)])
 
 def now(): return datetime.now(timezone.utc)
 def iso(value): return value.isoformat() if value else None
@@ -30,14 +43,6 @@ class GrantCreate(Strict):
         if self.node_scope_id and self.branch_root_id: raise ValueError("Choose node or branch scope, not both")
         if self.expires_at <= now()+timedelta(minutes=1) or self.expires_at > now()+timedelta(days=90): raise ValueError("Expiry must be finite, 1 minute to 90 days")
         return self
-class Batch(Strict):
-    expected_project_revision:int=Field(ge=1); idempotency_key:str=Field(min_length=8,max_length=80,pattern=r"^[A-Za-z0-9._:-]+$"); operations:list[dict[str,Any]]=Field(min_length=1,max_length=50)
-class ProposalIn(Strict):
-    idempotency_key:str=Field(min_length=8,max_length=80,pattern=r"^[A-Za-z0-9._:-]+$"); expected_project_revision:int=Field(ge=1); target_node_id:str|None=None; title:str=Field(min_length=1,max_length=200); rationale:str=Field(default="",max_length=4000); operations:list[dict[str,Any]]=Field(min_length=1,max_length=50)
-class EventIn(Strict):
-    idempotency_key:str=Field(min_length=8,max_length=80); target_node_id:str|None=None; event_type:Literal["started","progress","blocked","completed","failed"]; message:str=Field(min_length=1,max_length=4000); payload:dict[str,Any]=Field(default_factory=dict)
-class ReadbackIn(Strict):
-    idempotency_key:str=Field(min_length=8,max_length=80); target_node_id:str|None=None; summary:str=Field(default="",max_length=8000); commit_refs:list[str]=Field(default_factory=list,max_length=100); files:list[str]=Field(default_factory=list,max_length=500); tests:list[dict[str,Any]]=Field(default_factory=list,max_length=200); decisions:list[str]=Field(default_factory=list,max_length=200); risks:list[str]=Field(default_factory=list,max_length=200); todos:list[str]=Field(default_factory=list,max_length=200); evidence:list[dict[str,Any]]=Field(default_factory=list,max_length=200)
 
 async def local_limit(request:Request):
     host=request.client.host if request.client else ""
@@ -58,10 +63,14 @@ async def auth(request:Request,authorization:str|None=Header(None),db:AsyncSessi
     if not hmac.compare_digest(supplied,expected): raise HTTPException(401,{"code":"INVALID_TOKEN","message":"Invalid token"})
     expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant.expires_at.tzinfo is None else grant.expires_at
     if grant.status!="active" or grant.revoked_at or expires<=now(): raise HTTPException(401,{"code":"GRANT_INACTIVE","message":"Grant is revoked or expired"})
-    bucket=_hits[grant.id]; instant=time.monotonic()
+    instant=time.monotonic()
+    if len(_hits)>10000:
+        for gid in list(_hits)[:1000]:
+            if not _hits[gid] or _hits[gid][-1]<instant-60:_hits.pop(gid,None)
+    bucket=_hits[grant.id]
     while bucket and bucket[0]<instant-60: bucket.popleft()
     if len(bucket)>=120: raise HTTPException(429,{"code":"RATE_LIMITED","message":"120 requests/minute limit"})
-    bucket.append(instant);grant.last_used_at=now();await db.commit();return grant
+    bucket.append(instant);grant.last_used_at=now();await db.commit();await db.refresh(grant);return grant
 
 def require(grant,permission):
     if PERMISSIONS[grant.permission]<PERMISSIONS[permission]: raise HTTPException(403,{"code":"PERMISSION_DENIED","message":f"{permission} permission required"})
@@ -85,8 +94,8 @@ async def context(target_id:str,objective:str="",grant=Depends(auth),db:AsyncSes
     if not target or target.project_id!=grant.project_id: raise HTTPException(404,"Node not found")
     graph=await graph_data(db,grant); by={n["id"]:n for n in graph["nodes"]}; parents={e["to_node_id"]:e["from_node_id"] for e in graph["edges"] if e["relation_type"]=="child_of"}; ancestors=[];cur=target_id
     while cur in parents and parents[cur] in by: cur=parents[cur];ancestors.append(by[cur])
-    children=[by[e["to_node_id"]] for e in graph["edges"] if e["from_node_id"]==target_id and e["to_node_id"] in by]
-    relevant=[n for n in graph["nodes"] if n["node_type"] in {"decision","risk"} or n["constraints_text"] or n["decision_notes"]]
+    children=[by[e["to_node_id"]] for e in graph["edges"] if e["from_node_id"]==target_id and e["to_node_id"] in by][:500]
+    relevant=[n for n in graph["nodes"] if n["id"]!=target_id and (n["node_type"] in {"decision","risk"} or n["constraints_text"] or n["decision_notes"])][:200]
     p=await db.get(Project,grant.project_id); snapshot={"project_revision":p.revision,"target_revision":target.revision,"target":by[target_id],"ancestors":ancestors,"children":children,"relevant":relevant,"relations":graph["edges"]}
     return {"objective":objective[:2000],**snapshot,"snapshot_digest":digest(snapshot)}
 
@@ -100,11 +109,11 @@ async def store_once(db,grant,key,payload,kind,create):
 
 @router.post("/proposals",status_code=201)
 async def propose(data:ProposalIn,grant=Depends(auth),db:AsyncSession=Depends(get_db)):
-    require(grant,"propose"); payload=data.model_dump(mode="json"); await validate_scope(db,grant,[data.target_node_id] if data.target_node_id else [])
+    require(grant,"propose"); payload=data.model_dump(mode="json"); await validate_scope(db,grant,[data.target_node_id] if data.target_node_id else []); await validate_operations(db,grant,data.operations)
     async def create():
         p=await db.get(Project,grant.project_id)
         if data.expected_project_revision!=p.revision: raise HTTPException(409,{"code":"REVISION_CONFLICT","message":"Project revision is stale","current":p.revision})
-        proposal=AgentProposal(grant_id=grant.id,project_id=grant.project_id,target_node_id=data.target_node_id,title=data.title,rationale=data.rationale,operations=data.operations,expected_project_revision=data.expected_project_revision);db.add(proposal);await db.flush();return {"proposal_id":proposal.id,"status":"pending","project_revision":p.revision,"canonical_changed":False}
+        proposal=AgentProposal(grant_id=grant.id,project_id=grant.project_id,target_node_id=data.target_node_id,title=data.title,rationale=data.rationale,operations=data.model_dump(mode="json")["operations"],expected_project_revision=data.expected_project_revision);db.add(proposal);await db.flush();return {"proposal_id":proposal.id,"status":"pending","project_revision":p.revision,"canonical_changed":False}
     return await store_once(db,grant,data.idempotency_key,payload,"proposal",create)
 
 @router.post("/batch")
@@ -132,7 +141,12 @@ async def create_grant(data:GrantCreate,db:AsyncSession=Depends(get_db)):
         if value:
             n=await db.get(Node,uuid_value(value,name));
             if not n or n.project_id!=p.id: raise HTTPException(422,"Scope must belong to project")
-    prefix=secrets.token_hex(6);secret=secrets.token_urlsafe(32);salt=secrets.token_hex(16);raw=f"gm1.{prefix}.{secret}"
+    prefix=None
+    for _ in range(8):
+        candidate=secrets.token_hex(6)
+        if not (await db.execute(select(AgentGrant.id).where(AgentGrant.token_prefix==candidate))).scalar_one_or_none(): prefix=candidate;break
+    if not prefix: raise HTTPException(503,"Unable to allocate token prefix")
+    secret=secrets.token_urlsafe(32);salt=secrets.token_hex(16);raw=f"gm1.{prefix}.{secret}"
     g=AgentGrant(token_prefix=prefix,token_salt=salt,token_hash=hash_secret(secret,salt),project_id=p.id,permission=data.permission,node_scope_id=data.node_scope_id,branch_root_id=data.branch_root_id,label=data.label,agent_identity=data.agent_identity,expires_at=data.expires_at);db.add(g);await db.commit();await db.refresh(g)
     return {**public_grant(g),"token":raw,"warning":"Copy now. GrowthMap stores only a strong hash and cannot show this token again."}
 @human_router.get("/agent-port/grants")
@@ -149,12 +163,16 @@ async def activity(project_id:str,db:AsyncSession=Depends(get_db)):
     pid=uuid_value(project_id); proposals=(await db.execute(select(AgentProposal).where(AgentProposal.project_id==pid).order_by(AgentProposal.created_at.desc()))).scalars().all();events=(await db.execute(select(AgentEvent).where(AgentEvent.project_id==pid).order_by(AgentEvent.created_at.desc()).limit(100))).scalars().all();readbacks=(await db.execute(select(AgentReadback).where(AgentReadback.project_id==pid).order_by(AgentReadback.created_at.desc()).limit(100))).scalars().all()
     return {"proposals":[{"id":x.id,"title":x.title,"rationale":x.rationale,"operations":x.operations,"status":x.status,"target_node_id":x.target_node_id,"expected_project_revision":x.expected_project_revision,"review_note":x.review_note,"created_at":iso(x.created_at)} for x in proposals],"events":[{"id":x.id,"event_type":x.event_type,"message":x.message,"target_node_id":x.target_node_id,"payload":x.payload,"created_at":iso(x.created_at)} for x in events],"readbacks":[{"id":x.id,"target_node_id":x.target_node_id,"summary":x.summary,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)} for x in readbacks]}
 @human_router.post("/agent-port/proposals/{proposal_id}/{decision}")
-async def review(proposal_id:str,decision:Literal["approve","reject"],body:dict,db:AsyncSession=Depends(get_db)):
+async def review(proposal_id:str,decision:Literal["approve","reject"],body:ReviewIn,request:Request,db:AsyncSession=Depends(get_db)):
     row=await db.get(AgentProposal,uuid_value(proposal_id));
     if not row: raise HTTPException(404,"Proposal not found")
-    if row.status!="pending": raise HTTPException(409,"Proposal already reviewed")
-    note=str(body.get("review_note", ""))[:2000]
+    if row.status!="pending": return {"proposal_id":row.id,"status":row.status}
+    note=body.review_note
+    reviewer=getattr(request.state,"human_identity","local-human")
     if decision=="reject": row.status="rejected";row.review_note=note;row.reviewed_at=now();await db.commit();return {"proposal_id":row.id,"status":row.status}
     grant=await db.get(AgentGrant,row.grant_id)
-    result=await apply_batch(db,grant,{"expected_project_revision":row.expected_project_revision,"idempotency_key":f"proposal:{row.id}","operations":row.operations},actor="human-review")
-    row=await db.get(AgentProposal,row.id);row.status="approved";row.review_note=note;row.reviewed_at=now();await db.commit();return {"proposal_id":row.id,"status":row.status,"receipt":result}
+    expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant and grant.expires_at.tzinfo is None else (grant.expires_at if grant else None)
+    if not grant or grant.status!="active" or grant.revoked_at or expires<=now() or PERMISSIONS.get(grant.permission,-1)<PERMISSIONS["propose"]: raise HTTPException(409,{"code":"GRANT_INACTIVE","message":"Revocation/expiry invalidates pending proposals"})
+    row.review_note=note
+    result=await apply_batch(db,grant,{"expected_project_revision":row.expected_project_revision,"idempotency_key":f"proposal:{row.id}","operations":row.operations},actor=reviewer,proposal=row)
+    return {"proposal_id":row.id,"status":"approved","receipt":result}

@@ -58,6 +58,7 @@ export interface ContentBlock {
   block_type: string;
   content: Record<string, string>;
   order_index: number;
+  revision: number;
 }
 
 export interface Edge {
@@ -70,6 +71,7 @@ export interface Edge {
   note: string;
   is_mainline: boolean;
   created_at: string;
+  revision: number;
 }
 
 export interface Project {
@@ -139,6 +141,7 @@ export interface Branch {
   source_node_id: string;
   status: string;
   created_at: string;
+  revision: number;
 }
 
 export interface BranchNodeSummary {

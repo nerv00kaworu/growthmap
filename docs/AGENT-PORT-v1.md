@@ -31,3 +31,19 @@ JSON `detail` carries stable `code` values: `AUTH_REQUIRED`, `INVALID_TOKEN`, `G
 `scripts/growthmap_agent.py` exposes capabilities/project/graph/context/propose/apply-batch/report-event/submit-readback. Base URL is env or flag; token is env/file/stdin, never argv. JSON stdin/files produce JSON stdout and stable nonzero failures (2 input/transport, 3 HTTP, 4 auth/scope, 10 conflict).
 
 `scripts/growthmap_mcp.py` is MCP JSON-RPC stdio and exposes matching tools. It forwards every call over REST and has no database or provider path.
+
+## R3 security semantics
+
+All agent references are UUIDs and are validated against the grant project and exact scope before any canonical write. Project scope may create roots. Exact-node and branch scopes may create nodes only beneath an in-scope parent; a child inherits the parent's branch and cannot cross branches. Branch scope is the bounded `child_of` descendant set rooted at the grant root and may manipulate only contained nodes, edges whose two endpoints are contained, blocks on contained nodes, and branches sourced inside it. Branch IDs must be active and owned by the same project. Same-batch IDs are reserved and validated before execution.
+
+Revoking or expiring a grant invalidates every pending proposal from it. Approval reloads current proposal/grant/project state, re-runs the same operation validator, applies canon, writes the receipt/log, and marks approval in one transaction. Repeat review is deterministic; rejection never changes canon.
+
+Canonical transactions increment the project revision exactly once and each touched pre-existing entity once. New entities start at revision 1. Context/read outputs are bounded (5,000-node scope, 500 children, 200 relevant records) and their digest covers the returned canonical snapshot. Agent Port mutations require project and entity revisions. Human control endpoints require a separate unguessable launch/session bearer in every mode (`GROWTHMAP_SESSION_TOKEN`, or explicit local `GROWTHMAP_HUMAN_CONTROL_TOKEN`); absent capability disables them. `/agent/v1` continues to use only grant bearers.
+
+CLI and MCP accept only explicit-port plain HTTP at exact `localhost`, `127.0.0.1`, or `::1`; redirects are disabled. Token files are bounded regular non-symlinks and POSIX owner-only. Never place tokens in URLs. Last-used authentication bookkeeping is intentionally separate from canonical mutation atomicity.
+
+## R3 implementation evidence (2026-07-29)
+
+Implemented on branch `agent-port-v1-20260729` from reviewed baseline `5c34233ddce4302ce12997ef20134757767259ee`; master was not merged or modified. Closure includes strict discriminated operation schemas; all-reference/same-batch/scope/branch validation; atomic proposal review with grant revalidation; bounded graph/context; separate fail-closed human capability; hardened redirect-free loopback CLI/MCP transports; MCP initialize/tool/error semantics; receipt uniqueness/concurrency handling; prefix and rate-table bounds; and detached desktop interpreter dependency probing.
+
+Verified locally: backend `60 passed`; Agent Port focused `4 passed`; frontend typecheck/lint/build; deterministic CSP generation; desktop `96 passed`; Python compileall and `git diff --check`. Remaining architectural work: migrating every legacy GUI canonical mutation route to mandatory shared optimistic-revision request fields is deliberately not represented as complete by this patch; those routes predate Agent Port and require a coordinated API/frontend contract migration. Agent Port itself remains fail-closed and revision-safe.

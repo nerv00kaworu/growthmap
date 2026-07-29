@@ -18,12 +18,12 @@ with TestClient(app) as c:
  def create(n):return c.post('/api/projects',headers=h,json={'name':n}).status_code
  with ThreadPoolExecutor(max_workers=8) as x: codes=list(x.map(create,[str(i) for i in range(8)]))
  rows=c.get('/api/projects',headers=h).json();assert sum(p['status']=='active' for p in rows)<=2,codes
- for p in rows:c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'archived'})
+ for p in rows:c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'archived','expected_project_revision':p['revision']})
  # Seed archived projects without consuming seats, then restore concurrently.
  archived=[]
  for i in range(6):
-  p=c.post('/api/projects',headers=h,json={'name':f'r{i}'}).json();c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'archived'});archived.append(p)
- def restore(p):return c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'active'}).status_code
+  p=c.post('/api/projects',headers=h,json={'name':f'r{i}'}).json();c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'archived','expected_project_revision':p['revision']});p['revision']+=1;archived.append(p)
+ def restore(p):return c.patch(f"/api/projects/{p['id']}",headers=h,json={'status':'active','expected_project_revision':p['revision']}).status_code
  with ThreadPoolExecutor(max_workers=6) as x:codes=list(x.map(restore,archived))
  rows=c.get('/api/projects',headers=h).json();assert sum(p['status']=='active' for p in rows)<=2,codes
 '''

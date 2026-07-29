@@ -9,7 +9,9 @@ from pathlib import Path
 def fixture_output(argument: str) -> Path:
     output = Path(argument).resolve()
     temp_root = Path(tempfile.gettempdir()).resolve()
-    if not output.is_relative_to(temp_root):
+    # A checkout may itself live below /tmp; source-tree paths are never fixture
+    # destinations even though their lexical prefix is the temp directory.
+    if not output.is_relative_to(temp_root) or "src/backend/tests" in output.as_posix():
         raise SystemExit("E2E fixture path must be inside the system temp directory")
     if not output.name.startswith("fixture") or output.suffix.lower() not in {".db", ".sqlite"}:
         raise SystemExit("E2E fixture filename must start with 'fixture' and end in .db or .sqlite")

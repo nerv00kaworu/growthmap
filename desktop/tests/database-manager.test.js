@@ -6,7 +6,7 @@ function resolveFixturePython(){
   ...(process.env.VIRTUAL_ENV?[path.resolve(process.env.VIRTUAL_ENV,process.platform==='win32'?'Scripts/python.exe':'bin/python')]:[]),
   ...(process.platform==='win32'?['py','python']:['python3','python'])
  ];
- for(const candidate of candidates){const probe=cp.spawnSync(candidate,['-c','import sqlite3,sys; assert sys.version_info >= (3, 10)']);if(probe.status===0)return candidate;}
+ for(const candidate of candidates){const probe=cp.spawnSync(candidate,['-c','import sqlite3,sqlalchemy,aiosqlite,sys; assert sys.version_info >= (3, 10)']);if(probe.status===0)return candidate;}
  throw Error(`${explicit?'GROWTHMAP_TEST_PYTHON':'Python fixture interpreter'} is unavailable or unsupported`);
 }
 const python=resolveFixturePython();

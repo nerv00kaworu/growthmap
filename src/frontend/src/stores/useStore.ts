@@ -12,6 +12,11 @@ import {
   type UndoEntry,
 } from "./tree-utils";
 
+function advanceProjectRevision(set: (partial: Partial<GrowthMapStore>) => void, project: Project) {
+  const updated = { ...project, revision: project.revision + 1 };
+  set({ currentProject: updated, projects: useStore.getState().projects.map((row) => row.id === updated.id ? updated : row) });
+}
+
 interface GrowthMapStore {
   // State
   projects: Project[];
@@ -137,6 +142,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { undoStack } = get();
     const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`);
     const newNode = await api.createNode(currentProject.id, {
+      expected_project_revision: currentProject.revision,
       title,
       parent_id: parentId,
       branch_id: get().currentBranch?.id,
@@ -174,6 +180,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     };
     const updated = insertChild(rootNode, parentId, child);
     set({ rootNode: updated, undoStack: newUndoStack });
+    advanceProjectRevision(set, currentProject);
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -181,14 +188,17 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   updateNode: async (nodeId, data) => {
-    const { rootNode, undoStack } = get();
+    const { rootNode, undoStack, currentProject } = get();
+    const existing = rootNode ? findNode(rootNode, nodeId) : null;
+    if (!currentProject || !existing) return;
     if (rootNode) {
       const newUndoStack = pushUndo(undoStack, rootNode, `更新節點`);
       set({ undoStack: newUndoStack });
     }
-    await api.updateNode(nodeId, data);
+    const saved = await api.updateNode(nodeId, { ...data, expected_project_revision: currentProject.revision, expected_revision: existing.revision });
     if (!rootNode) return;
-    const updated = patchNode(rootNode, nodeId, data);
+    const updated = patchNode(rootNode, nodeId, saved);
+    advanceProjectRevision(set, currentProject);
     set({ rootNode: updated });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
@@ -197,13 +207,16 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   deleteNode: async (nodeId) => {
-    const { rootNode, undoStack, selectedNodeId } = get();
+    const { rootNode, undoStack, selectedNodeId, currentProject } = get();
+    const existing = rootNode ? findNode(rootNode, nodeId) : null;
+    if (!currentProject || !existing) return;
     if (rootNode) {
       const node = findNode(rootNode, nodeId);
       const newUndoStack = pushUndo(undoStack, rootNode, `刪除節點: ${node?.title || nodeId}`);
       set({ undoStack: newUndoStack });
     }
-    await api.deleteNode(nodeId);
+    await api.deleteNode(nodeId, currentProject.revision, existing.revision);
+    advanceProjectRevision(set, currentProject);
     if (!rootNode) return;
     const updated = removeNode(rootNode, nodeId);
     set({ rootNode: updated });
@@ -229,9 +242,12 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   promoteMainlineChild: async (parentId, childId) => {
-    const { rootNode } = get();
-    if (!rootNode) return;
-    await api.promoteChildMainline(parentId, childId);
+    const { rootNode, currentProject } = get();
+    if (!rootNode || !currentProject) return;
+    const child = findNode(rootNode, childId);
+    const edgeRevision = typeof child?.meta?.edge_revision === "number" ? child.meta.edge_revision : 1;
+    await api.promoteChildMainline(parentId, childId, currentProject.revision, edgeRevision);
+    advanceProjectRevision(set, currentProject);
     const updated = markMainlineChild(rootNode, parentId, childId);
     set({ rootNode: updated });
     const { selectedNodeId } = get();
@@ -247,11 +263,15 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const newUndoStack = pushUndo(undoStack, rootNode, `移動節點: ${node?.title || nodeId}`);
     set({ undoStack: newUndoStack });
     try {
-      await fetch(`/api/nodes/${nodeId}/reparent`, {
+      const currentProject = get().currentProject;
+      if (!currentProject || !node) return;
+      const response = await fetch(`/api/nodes/${nodeId}/reparent`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_parent_id: newParentId }),
+        body: JSON.stringify({ new_parent_id: newParentId, expected_project_revision: currentProject.revision, expected_revision: node.revision }),
       });
+      if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+      advanceProjectRevision(set, currentProject);
       await get().refreshTree();
     } catch (e: unknown) {
       set({ error: (e as Error).message });
@@ -291,7 +311,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { currentProject } = get();
     if (!currentProject) return;
     try {
-      const branch = await api.createBranch(currentProject.id, { source_node_id: sourceNodeId, name, description });
+      const branch = await api.createBranch(currentProject.id, { expected_project_revision: currentProject.revision, source_node_id: sourceNodeId, name, description });
+      advanceProjectRevision(set, currentProject);
       const { branches } = get();
       set({ branches: [...branches, branch], toast: `✅ 方案線「${name}」已建立` });
       await get().selectBranch(branch);
@@ -332,8 +353,11 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
 
   archiveBranch: async (branchId) => {
     try {
-      await api.archiveBranch(branchId);
       const { currentProject, branches, currentBranch } = get();
+      const branch = branches.find((row) => row.id === branchId);
+      if (!currentProject || !branch) return;
+      await api.archiveBranch(branchId, currentProject.revision, branch.revision);
+      advanceProjectRevision(set, currentProject);
       const remaining = branches.filter((branch) => branch.id !== branchId);
       set({ branches: remaining, branchComparison: null, toast: "🗃️ 方案線已封存" });
       if (currentBranch?.id === branchId && currentProject) {
@@ -347,8 +371,11 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   mergeBranch: async (branchId, targetNodeId) => {
     set({ branchLoading: true });
     try {
-      await api.mergeBranch(branchId, targetNodeId);
       const { currentProject, branches } = get();
+      const branch = branches.find((row) => row.id === branchId);
+      if (!currentProject || !branch) return;
+      await api.mergeBranch(branchId, targetNodeId, currentProject.revision, branch.revision);
+      advanceProjectRevision(set, currentProject);
       set({
         branches: branches.filter((b) => b.id !== branchId),
         currentBranch: null,
