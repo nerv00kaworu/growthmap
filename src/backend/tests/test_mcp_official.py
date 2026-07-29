@@ -77,7 +77,11 @@ async def test_official_client_session_live_uvicorn():
             out,err=server.communicate()
             assert agent_token not in out+err
 
-@pytest.mark.parametrize("frame,code",[(b"{broken}\n",-32700),(b"x"*1_048_577+b"\n",-32602),(json.dumps({"jsonrpc":"2.0","id":8,"method":"tools/list","params":[]}).encode()+b"\n",-32602)])
+@pytest.mark.parametrize("frame,code",[
+    pytest.param(b"{broken}\n", -32700, id="malformed-json"),
+    pytest.param(b"x"*1_048_577+b"\n", -32602, id="oversize-frame"),
+    pytest.param(json.dumps({"jsonrpc":"2.0","id":8,"method":"tools/list","params":[]}).encode()+b"\n", -32602, id="invalid-params"),
+])
 def test_low_level_malformed_oversize_and_invalid_params_recover(frame,code):
     valid=json.dumps({"jsonrpc":"2.0","id":9,"method":"tools/list","params":{}}).encode()+b"\n"
     env={k:v for k,v in os.environ.items() if k != "PYTEST_CURRENT_TEST"}
