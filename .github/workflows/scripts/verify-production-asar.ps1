@@ -116,13 +116,50 @@ function Assert-ThirdPartyInventory {
     } | ForEach-Object { [IO.Path]::GetRelativePath($resolved,$_.FullName) -replace '\\','/' })
   }
   $installedRoots=@(Get-PackageRoots $source);$packagedRoots=@(Get-PackageRoots $packaged)
-  foreach ($root in @($installedRoots+$packagedRoots)) { if (-not $allowed.ContainsKey($root)) { throw "Package root absent from lock inventory: node_modules/$root" } }
-  # Electron may prune optional/platform packages, so packaged roots are a byte-identical
-  # subset of the exact lock-installed roots; installed roots themselves may not exceed lock.
-  foreach ($file in Get-ChildItem $packaged -File -Recurse) {
-    $relative=[IO.Path]::GetRelativePath($packaged,$file.FullName);$expected=Join-Path $source $relative
-    if (-not (Test-Path $expected -PathType Leaf)) { throw "Packaged third-party file absent from lock-installed inventory: node_modules/$($relative -replace '\\','/')" }
-    if ((Get-FileHash $file.FullName -Algorithm SHA256).Hash -cne (Get-FileHash $expected -Algorithm SHA256).Hash) { throw "Packaged third-party file differs from lock-installed inventory: node_modules/$($relative -replace '\\','/')" }
+  foreach ($root in $installedRoots) { if (-not $allowed.ContainsKey($root)) { throw "Installed package root absent from lock inventory: node_modules/$root" } }
+  # electron-builder may flatten production dependencies to different node_modules
+  # paths and prune non-runtime package.json fields. Bind every packaged root to a
+  # non-dev lock-installed package with the exact name/version identity instead of
+  # trusting its mutable output path.
+  $sourceByIdentity=@{}
+  foreach ($root in $installedRoots) {
+    $meta=$allowed[$root]
+    if ($meta['dev'] -eq $true) { continue }
+    $manifestPath=Join-Path (Join-Path $source $root) 'package.json'
+    if (-not (Test-Path $manifestPath -PathType Leaf)) { throw "Installed package lacks package.json: node_modules/$root" }
+    $identity=Get-Content $manifestPath -Raw|ConvertFrom-Json -Depth 100
+    if (-not $identity.name -or -not $identity.version -or [string]$identity.version -cne [string]$meta['version']) { throw "Installed package identity differs from lock: node_modules/$root" }
+    $key="$($identity.name)@$($identity.version)"
+    if (-not $sourceByIdentity.ContainsKey($key)) { $sourceByIdentity[$key]=[Collections.ArrayList]::new() }
+    [void]$sourceByIdentity[$key].Add((Join-Path $source $root))
+  }
+  foreach ($root in $packagedRoots) {
+    $packageRoot=Join-Path $packaged $root;$packageManifest=Join-Path $packageRoot 'package.json'
+    if (-not (Test-Path $packageManifest -PathType Leaf)) { throw "Packaged dependency lacks package.json: node_modules/$root" }
+    $packagedIdentity=Get-Content $packageManifest -Raw|ConvertFrom-Json -Depth 100
+    $key="$($packagedIdentity.name)@$($packagedIdentity.version)"
+    if (-not $packagedIdentity.name -or -not $packagedIdentity.version -or -not $sourceByIdentity.ContainsKey($key)) { throw "Packaged dependency identity absent from non-dev lock inventory: node_modules/$root ($key)" }
+    $candidates=@($sourceByIdentity[$key])
+    foreach ($file in Get-ChildItem $packageRoot -File -Force -Recurse | Where-Object { ([IO.Path]::GetRelativePath($packageRoot,$_.FullName)-replace '\\','/') -notmatch '(^|/)node_modules/' }) {
+      $inside=[IO.Path]::GetRelativePath($packageRoot,$file.FullName)-replace '\\','/'
+      if ($inside -ceq 'package.json') {
+        $matched=$false
+        foreach ($candidate in $candidates) {
+          $sourceManifest=Get-Content (Join-Path $candidate 'package.json') -Raw|ConvertFrom-Json -Depth 100
+          $valid=$true
+          foreach ($property in $packagedIdentity.psobject.Properties) {
+            if (-not $sourceManifest.psobject.Properties[$property.Name] -or
+                ($property.Value|ConvertTo-Json -Depth 100 -Compress) -cne ($sourceManifest.psobject.Properties[$property.Name].Value|ConvertTo-Json -Depth 100 -Compress)) { $valid=$false;break }
+          }
+          if ($valid) { $matched=$true;break }
+        }
+        if (-not $matched) { throw "Packaged dependency package.json adds or modifies frozen metadata: node_modules/$root/package.json" }
+        continue
+      }
+      $hash=(Get-FileHash $file.FullName -Algorithm SHA256).Hash;$matched=$false
+      foreach ($candidate in $candidates) { $expected=Join-Path $candidate $inside;if ((Test-Path $expected -PathType Leaf) -and (Get-FileHash $expected -Algorithm SHA256).Hash -ceq $hash) { $matched=$true;break } }
+      if (-not $matched) { throw "Packaged third-party file absent or byte-different from same-identity frozen inventory: node_modules/$root/$inside" }
+    }
   }
 }
 
