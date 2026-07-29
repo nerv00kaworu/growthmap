@@ -144,6 +144,12 @@ function Assert-ThirdPartyInventory {
       $inside=[IO.Path]::GetRelativePath($packageRoot,$file.FullName)-replace '\\','/'
       if ($inside -ceq 'package.json') {
         $matched=$false
+        # electron-builder prunes a narrow set of non-runtime publishing/tooling
+        # metadata. Runtime resolution fields (for example main/exports/type/bin)
+        # and every other unlisted field must remain present and byte-semantically
+        # equal; otherwise removing a field could redirect Node to another frozen
+        # file while evading per-file provenance.
+        $prunableManifestFields=@('bugs','contributors','eslintConfig','keywords','scripts','xo')
         foreach ($candidate in $candidates) {
           $sourceManifest=Get-Content (Join-Path $candidate 'package.json') -Raw|ConvertFrom-Json -Depth 100
           $valid=$true
@@ -151,9 +157,14 @@ function Assert-ThirdPartyInventory {
             if (-not $sourceManifest.psobject.Properties[$property.Name] -or
                 ($property.Value|ConvertTo-Json -Depth 100 -Compress) -cne ($sourceManifest.psobject.Properties[$property.Name].Value|ConvertTo-Json -Depth 100 -Compress)) { $valid=$false;break }
           }
+          if ($valid) {
+            foreach ($sourceProperty in $sourceManifest.psobject.Properties) {
+              if (-not $packagedIdentity.psobject.Properties[$sourceProperty.Name] -and $prunableManifestFields -cnotcontains $sourceProperty.Name) { $valid=$false;break }
+            }
+          }
           if ($valid) { $matched=$true;break }
         }
-        if (-not $matched) { throw "Packaged dependency package.json adds or modifies frozen metadata: node_modules/$root/package.json" }
+        if (-not $matched) { throw "Packaged dependency package.json adds, modifies, or removes runtime-semantic frozen metadata: node_modules/$root/package.json" }
         continue
       }
       $hash=(Get-FileHash $file.FullName -Algorithm SHA256).Hash;$matched=$false
@@ -230,9 +241,10 @@ function Invoke-ProductionPackageLayoutSelfTest {
     $installed = Join-Path $contentRoot 'node_modules';$extracted = Join-Path $contentRoot 'extracted'
     New-Item -ItemType Directory (Join-Path $installed 'safe-package') -Force | Out-Null
     New-Item -ItemType Directory (Join-Path $extracted 'node_modules/safe-package') -Force | Out-Null
-    $safeManifest='{"name":"safe-package","version":"1.0.0"}'
+    $safeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js","scripts":{"test":"dev-only"}}'
+    $prunedSafeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js"}'
     [IO.File]::WriteAllText((Join-Path $installed 'safe-package/package.json'),$safeManifest)
-    [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$safeManifest)
+    [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$prunedSafeManifest)
     [IO.File]::WriteAllText((Join-Path $installed 'safe-package/index.js'),'module.exports=1')
     [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/index.js'),'-----BEGIN PRIVATE KEY-----')
     $testLock=Join-Path $contentRoot 'package-lock.json';$testPackage=Join-Path $contentRoot 'package.json'
@@ -241,6 +253,16 @@ function Invoke-ProductionPackageLayoutSelfTest {
     $testProvenance=Join-Path $contentRoot 'provenance.json';$testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Third-party inventory accepted a hidden node_modules payload' }
     catch { if ($_.Exception.Message -notmatch 'absent or byte-different from same-identity frozen inventory') { throw } }
+    [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/index.js'),'module.exports=1')
+    foreach ($requiredField in @('main','exports','type')) {
+      $manifest=Get-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Raw|ConvertFrom-Json -Depth 100
+      $manifest.psobject.Properties.Remove($requiredField)
+      $manifest|ConvertTo-Json -Depth 100 -Compress|Set-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Encoding utf8NoBOM
+      try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw "Inventory accepted removal of runtime package field: $requiredField" }
+      catch { if ($_.Exception.Message -notmatch 'removes runtime-semantic frozen metadata') { throw } }
+      [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$prunedSafeManifest)
+    }
+    Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest
     # An extra package present in both installed and ASAR trees must still be rejected
     # because the lock, not either mutable tree, is the trust inventory. Refresh the
     # synthetic frozen provenance after each deliberate fixture mutation so the test
