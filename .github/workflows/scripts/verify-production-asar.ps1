@@ -240,7 +240,7 @@ function Invoke-ProductionPackageLayoutSelfTest {
     [IO.File]::WriteAllText($testLock,'{"lockfileVersion":3,"packages":{"":{"dependencies":{"safe-package":"1.0.0"}},"node_modules/safe-package":{"version":"1.0.0","resolved":"https://registry.invalid/safe-package.tgz","integrity":"sha512-test"}}}')
     $testProvenance=Join-Path $contentRoot 'provenance.json';$testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Third-party inventory accepted a hidden node_modules payload' }
-    catch { if ($_.Exception.Message -notmatch 'differs from lock-installed inventory') { throw } }
+    catch { if ($_.Exception.Message -notmatch 'absent or byte-different from same-identity frozen inventory') { throw } }
     # An extra package present in both installed and ASAR trees must still be rejected
     # because the lock, not either mutable tree, is the trust inventory. Refresh the
     # synthetic frozen provenance after each deliberate fixture mutation so the test
