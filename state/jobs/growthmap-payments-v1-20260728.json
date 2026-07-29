@@ -1,11 +1,11 @@
 {
   "job_id": "growthmap-payments-v1-20260728",
-  "status": "no_go_pending_fresh_independent_review_and_windows_ci",
+  "status": "no_go_production_pending_independent_review_and_external_integrations_windows_candidate_passed",
   "baseline_documented": "3023e16",
-  "implemented_on_head": "5941384",
+  "implemented_on_head": "0950afdb87583d13d11d1e81e58ab3466532a16a",
   "live_db_accessed": false,
   "real_money_or_provider_writes": false,
-  "commit_or_push": false,
+  "commit_or_push": true,
   "checkpoints": [
     {
       "name": "separate_ledger_schema",
@@ -39,8 +39,8 @@
     },
     {
       "name": "windows_package",
-      "status": "pending_parent_fresh_review",
-      "evidence": "not run on Linux/WSL"
+      "status": "candidate_pass",
+      "evidence": "GitHub Actions run 30417689211 PASS on exact SHA 0950afdb87583d13d11d1e81e58ab3466532a16a; unsigned noncommercial NSIS, packaged E2E, adversarial DB/crash recovery, ASAR/resources/provenance gates and artifact upload passed; Authenticode publication gate skipped without production inputs"
     },
     {
       "name": "no_go_remediation",
@@ -72,9 +72,9 @@
     "PayPal merchant URL and reviewed manual operations",
     "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
     "revocation check-in",
-    "legal/key/config/Windows signing and Windows E2E",
     "fresh independent security/QA review of schema v6 authenticated issuance closure and migration quarantine",
-    "Windows execution of lock-derived production package inventory verifier"
+    "production legal/config/Authenticode signing and updater publication inputs",
+    "fresh independent security/QA adjudication of exact committed Windows-passing candidate 0950afd"
   ],
   "report": "reports/growthmap-payments-v1-20260728.md",
   "schema_version": 6,
@@ -108,13 +108,12 @@
     "blockers": [
       "paired historical DB+valid checkpoint rollback needs external monotonic/HSM anchor",
       "fresh independent review",
-      "actual Windows workflow run",
       "production facilitator/reconciler/auth/key/session/deployment",
       "frontend audit has 9 high dev-toolchain findings; breaking ESLint 10 fix not applied"
     ]
   },
   "r7": {
-    "status": "candidate-remediated-local",
+    "status": "candidate-remediated-windows-pass-pending-independent-review",
     "production": "NO-GO",
     "controls": [
       "same BEGIN IMMEDIATE connection for trust verification and protected decision/mutation/read",
@@ -126,9 +125,17 @@
     "evidence": "26 payment tests: 50 unique licenses/ordinals/proofs/transactions plus 10 manual-review outcomes; 53 backend; frontend clean build; desktop 80/audit 0; frontend audit 9 high",
     "blockers": [
       "fresh security/QA re-review",
-      "actual Windows/pwsh workflow run",
       "paired historical rollback external monotonic/HSM",
       "production provider/auth/session/key/deployment"
     ]
+  },
+  "windows_candidate": {
+    "status": "pass",
+    "sha": "0950afdb87583d13d11d1e81e58ab3466532a16a",
+    "run_id": 30417689211,
+    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30417689211",
+    "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary evidence",
+    "publication_gate": "not_run_missing_production_signing_inputs",
+    "product_release": "NO-GO"
   }
 }
