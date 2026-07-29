@@ -1,8 +1,8 @@
 {
   "job_id": "growthmap-payments-v1-20260728",
-  "status": "no_go_production_pending_independent_review_and_external_integrations_windows_candidate_passed",
+  "status": "candidate_security_qa_windows_pass_production_no_go_external_integrations",
   "baseline_documented": "3023e16",
-  "implemented_on_head": "0950afdb87583d13d11d1e81e58ab3466532a16a",
+  "implemented_on_head": "d62091e7c4f3a867d40046fbd5010c4958902bfc",
   "live_db_accessed": false,
   "real_money_or_provider_writes": false,
   "commit_or_push": true,
@@ -39,8 +39,8 @@
     },
     {
       "name": "windows_package",
-      "status": "candidate_pass",
-      "evidence": "GitHub Actions run 30417689211 PASS on exact SHA 0950afdb87583d13d11d1e81e58ab3466532a16a; unsigned noncommercial NSIS, packaged E2E, adversarial DB/crash recovery, ASAR/resources/provenance gates and artifact upload passed; Authenticode publication gate skipped without production inputs"
+      "status": "candidate_pass_after_manifest_high_remediation",
+      "evidence": "GitHub Actions run 30420037621 PASS at d62091e7c4f3a867d40046fbd5010c4958902bfc; packaged E2E, unsigned NSIS, DB/crash boundaries and ordinal package-manifest provenance passed; Authenticode publication gate skipped"
     },
     {
       "name": "no_go_remediation",
@@ -49,12 +49,12 @@
     },
     {
       "name": "evidence_reconciliation_and_migration_v2",
-      "status": "implemented_pending_fresh_review",
+      "status": "implemented_candidate_reviewed",
       "evidence": "preserved 001 + checksum-pinned 002; paid/unpaid mock evidence tests; no production adapter"
     },
     {
       "name": "parent_fk_and_content_reproducer",
-      "status": "fixed_pending_fresh_review",
+      "status": "implemented_candidate_reviewed",
       "evidence": "v1 populated FK child migration test and generic-extension content scanner fixtures"
     }
   ],
@@ -72,9 +72,8 @@
     "PayPal merchant URL and reviewed manual operations",
     "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
     "revocation check-in",
-    "fresh independent security/QA review of schema v6 authenticated issuance closure and migration quarantine",
     "production legal/config/Authenticode signing and updater publication inputs",
-    "fresh independent security/QA adjudication of exact committed Windows-passing candidate 0950afd"
+    "frontend development-toolchain audit has 9 high findings; breaking ESLint 10 remediation not applied"
   ],
   "report": "reports/growthmap-payments-v1-20260728.md",
   "schema_version": 6,
@@ -113,7 +112,7 @@
     ]
   },
   "r7": {
-    "status": "candidate-remediated-windows-pass-pending-independent-review",
+    "status": "candidate-remediated-windows-and-independent-review-pass",
     "production": "NO-GO",
     "controls": [
       "same BEGIN IMMEDIATE connection for trust verification and protected decision/mutation/read",
@@ -124,18 +123,36 @@
     ],
     "evidence": "26 payment tests: 50 unique licenses/ordinals/proofs/transactions plus 10 manual-review outcomes; 53 backend; frontend clean build; desktop 80/audit 0; frontend audit 9 high",
     "blockers": [
-      "fresh security/QA re-review",
       "paired historical rollback external monotonic/HSM",
       "production provider/auth/session/key/deployment"
     ]
   },
   "windows_candidate": {
-    "status": "pass",
-    "sha": "0950afdb87583d13d11d1e81e58ab3466532a16a",
-    "run_id": 30417689211,
-    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30417689211",
-    "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary evidence",
+    "status": "pass_after_manifest_high_remediation_and_targeted_security_review",
+    "sha": "d62091e7c4f3a867d40046fbd5010c4958902bfc",
+    "run_id": 30420037621,
+    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30420037621",
+    "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary and ordinal manifest provenance",
+    "security_review": "targeted_PASS_manifest_deletion_and_case_rename_HIGH_closed",
     "publication_gate": "not_run_missing_production_signing_inputs",
     "product_release": "NO-GO"
+  },
+  "r9": {
+    "status": "candidate_security_qa_windows_pass",
+    "production": "NO-GO",
+    "high_finding": "package manifest runtime fields could be omitted or case-renamed under permissive/case-insensitive comparison",
+    "remediation": "StringComparer.Ordinal maps; exact six-field prune allowlist; behavioral removal/case-rename tests for main/exports/type/bin",
+    "evidence": "Windows run 30420037621 PASS at d62091e; fresh targeted Jian PASS; local PowerShell verifier self-test and desktop 80/80 PASS",
+    "residual_caveat": "raw exact duplicate JSON keys are last-key-wins in both PowerShell and Node; no semantic bypass reproduced",
+    "blockers": [
+      "official x402/CDP facilitator SDK integration and multi-instance transaction review",
+      "production Base recipient and secure Ed25519 key provider",
+      "real HTTPS payment API and wallet portal",
+      "PayPal merchant URL and reviewed manual operations",
+      "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
+      "revocation check-in",
+      "production legal/config/Authenticode signing and updater publication inputs",
+      "frontend development-toolchain audit has 9 high findings; breaking ESLint 10 remediation not applied"
+    ]
   }
 }
