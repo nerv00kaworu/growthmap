@@ -84,6 +84,8 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.match(verifier, /absent or byte-different from same-identity frozen inventory/)
   assert.match(verifier, /\$safeManifest='\{\"name\":\"safe-package\",\"version\":\"1\.0\.0\"\}'/)
   assert.match(verifier, /safe-package\/package\.json/)
+  assert.match(verifier, /\$installed = Join-Path \$contentRoot 'node_modules'/)
+  assert.doesNotMatch(verifier, /\$installed = Join-Path \$contentRoot 'installed'/)
   assert.doesNotMatch(verifier, /\$lock\.packages/)
   assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)

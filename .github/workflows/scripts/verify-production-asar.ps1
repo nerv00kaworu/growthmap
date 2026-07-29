@@ -225,7 +225,9 @@ function Invoke-ProductionPackageLayoutSelfTest {
       try { Assert-NoForbiddenContent $contentRoot 'self-test'; throw 'Content verifier accepted adversarial generic payload' }
       catch { if ($_.Exception.Message -notmatch 'forbidden server/key/database content') { throw } }
     }
-    $installed = Join-Path $contentRoot 'installed';$extracted = Join-Path $contentRoot 'extracted'
+    # Mirror a real npm tree: Get-PackageRoots intentionally recognizes package
+    # roots only beneath directories named node_modules.
+    $installed = Join-Path $contentRoot 'node_modules';$extracted = Join-Path $contentRoot 'extracted'
     New-Item -ItemType Directory (Join-Path $installed 'safe-package') -Force | Out-Null
     New-Item -ItemType Directory (Join-Path $extracted 'node_modules/safe-package') -Force | Out-Null
     $safeManifest='{"name":"safe-package","version":"1.0.0"}'
