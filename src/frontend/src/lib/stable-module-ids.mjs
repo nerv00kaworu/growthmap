@@ -1,28 +1,32 @@
 import crypto from "node:crypto";
 
 function slash(value) { return String(value).replaceAll("\\", "/"); }
-function decodeVariants(value) {
-  const variants = new Set([value]);
-  try { variants.add(decodeURIComponent(value)); } catch { /* malformed escapes stay literal */ }
-  return [...variants];
-}
 function windowsRoot(root) { return /^[A-Za-z]:\//.test(root); }
+function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function encodedEscape(value) {
+  return regexEscape(value).replace(/%([0-9A-F])([0-9A-F])/g, (_, a, b) => `%[${a.toLowerCase()}${a.toUpperCase()}][${b.toLowerCase()}${b.toUpperCase()}]`);
+}
+function rootVariants(root) {
+  // Do not decode caller-controlled identifiers. Match only the exact raw root
+  // and its single, standard URI encodings; this avoids broad/double decoding.
+  return [...new Set([root, encodeURI(root), encodeURIComponent(root)])]
+    .sort((a, b) => b.length - a.length || compareTotal(a, b));
+}
 function replaceRoot(value, root) {
-  const flags = windowsRoot(root) ? "gi" : "g";
-  const roots = new Set();
-  for (const variant of decodeVariants(slash(root))) {
-    roots.add(variant);
-    roots.add(encodeURIComponent(variant));
-    roots.add(encodeURI(variant));
-  }
   let out = slash(value);
-  for (const candidate of [...roots].sort((a, b) => b.length - a.length)) {
-    out = out.replace(new RegExp(candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags), "<PROJECT_ROOT>");
+  for (const candidate of rootVariants(slash(root))) {
+    const source = encodedEscape(candidate);
+    out = out.replace(new RegExp(source, windowsRoot(root) ? "gi" : "g"), "<PROJECT_ROOT>");
   }
   return out;
 }
 export function normalizeModuleIdentifier(identifier, root) {
   return replaceRoot(identifier, slash(root).replace(/\/$/, ""));
+}
+function compareTotal(a, b) {
+  // JS relational string comparison is a total UTF-16 code-unit order: unlike
+  // locale collation, distinct NFC/NFD strings can never compare equal.
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 function stableTie(module, normalized, root) {
   const values = [normalized, module.constructor?.name || "", module.type || "", module.layer || "",
@@ -42,7 +46,7 @@ export function assignStableModuleIds(modules, root, access = {}) {
     const tie = stableTie(module, normalized, root);
     const useIdentity = normalizeModuleIdentifier(identity(module), root);
     return { module, normalized, tie, useIdentity };
-  }).sort((a, b) => a.normalized.localeCompare(b.normalized, "en") || a.tie.localeCompare(b.tie, "en") || a.useIdentity.localeCompare(b.useIdentity, "en"));
+  }).sort((a, b) => compareTotal(a.normalized, b.normalized) || compareTotal(a.tie, b.tie) || compareTotal(a.useIdentity, b.useIdentity));
   for (let index = 1; index < rows.length; index += 1) {
     const a = rows[index - 1], b = rows[index];
     if (a.normalized === b.normalized && a.tie === b.tie && a.useIdentity === b.useIdentity) {
@@ -70,7 +74,7 @@ export class StableModuleIdsPlugin {
           // sort it so iterable order cannot affect suffix allocation.
           identity: (module) => [...compilation.chunkGraph.getModuleChunksIterable(module)]
             .map((chunk) => chunk.name || chunk.id || "")
-            .sort((a, b) => String(a).localeCompare(String(b), "en")).join("\u0000"),
+            .sort(compareTotal).join("\u0000"),
         });
       });
     });

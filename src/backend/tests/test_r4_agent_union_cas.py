@@ -130,3 +130,60 @@ def test_agent_branch_canonical_copy_provided_id_replay_and_same_batch_ref():
   assert len(blocks)==1 and blocks[0].content=={'nested':['x']} and blocks[0].order_index==7 and blocks[0].revision==1
   assert len(edges)==2 and all(e.relation_type=='child_of' and e.revision==1 for e in edges)
   assert c.get(f"/api/nodes/{root['id']}").json()['revision']==root['revision']
+
+def test_forward_branch_reference_is_dependency_ordered_atomically_and_cycles_roll_back():
+ from db.database import async_session
+ from models.models import ActionLog,AgentReceipt,Branch,Node,Project
+ from sqlalchemy import select
+ import asyncio
+ with TestClient(app) as c:
+  p,root,h=setup(c);bid='88444444-4444-4444-8444-444444444448';nid='88555555-5555-4555-8555-555555555558'
+  ops=[{'op':'create_node','id':nid,'title':'forward node','branch_id':bid}, {'op':'create_branch','id':bid,'source_node_id':root['id'],'expected_source_revision':root['revision'],'name':'later branch'}]
+  r=batch(c,h,p,'forward-branch',ops);assert r.status_code==200,r.text
+  body=r.json();assert body['project_revision']==p['revision']+1 and [x['id'] for x in body['results']]==[nid,bid]
+  assert batch(c,h,p,'forward-branch',ops).json()==body
+  async def committed():
+   async with async_session() as db:
+    project=await db.get(Project,p['id']);branch=await db.get(Branch,bid);node=await db.get(Node,nid)
+    receipts=(await db.execute(select(AgentReceipt).where(AgentReceipt.project_id==p['id'],AgentReceipt.idempotency_key=='forward-branch'))).scalars().all()
+    logs=(await db.execute(select(ActionLog).where(ActionLog.project_id==p['id'],ActionLog.action_type=='agent_batch_applied'))).scalars().all()
+    return project,branch,node,receipts,logs
+  project,branch,node,receipts,logs=asyncio.run(committed())
+  assert project.revision==p['revision']+1 and branch.revision==node.revision==1 and node.branch_id==bid
+  assert len(receipts)==1 and receipts[0].response==body and len(logs)==1 and logs[0].payload['receipt_id']==body['receipt_id']
+
+  # This graph is schema- and scope-valid: the node is contained by the existing
+  # root, while its branch is produced by a branch copy sourced from that node.
+  # Neither create can execute first, so the dependency sorter must reject it.
+  p2,root2,h2=setup(c);cyclic_branch='88666666-6666-4666-8666-666666666668';cyclic_node='88777777-7777-4777-8777-777777777778'
+  cycle=[
+   {'op':'create_node','id':cyclic_node,'title':'cycle node','parent_id':root2['id'],'expected_parent_revision':root2['revision'],'branch_id':cyclic_branch},
+   {'op':'create_branch','id':cyclic_branch,'source_node_id':cyclic_node,'expected_source_revision':1,'name':'cycle branch'},
+  ]
+  bad=batch(c,h2,p2,'cycle-001',cycle);assert bad.status_code==422,bad.text
+  assert bad.json()['detail']=={'code':'CYCLIC_BATCH_DEPENDENCY','message':'Atomic batch contains cyclic create dependencies'},bad.text
+  assert c.get(f"/api/projects/{p2['id']}").json()['revision']==p2['revision']
+  assert c.get(f'/api/nodes/{cyclic_node}').status_code==404
+  async def absent():
+   async with async_session() as db:
+    return await db.get(Branch,cyclic_branch),(await db.execute(select(AgentReceipt).where(AgentReceipt.project_id==p2['id'],AgentReceipt.idempotency_key=='cycle-001'))).scalars().all()
+  branch2,receipts2=asyncio.run(absent());assert branch2 is None and receipts2==[]
+
+def test_forward_created_node_dependents_preserve_results_and_never_500():
+ """Later create producers cover edge/block; updates of new nodes stay rejected."""
+ with TestClient(app) as c:
+  p,root,h=setup(c);a='88888888-8888-4888-8888-888888888881';b='88888888-8888-4888-8888-888888888882'
+  # Scope containment must be established before an op can reference a new node.
+  # Once established, mixed dependent creates retain caller-visible result order.
+  ops=[
+   {'op':'create_node','id':a,'title':'a','parent_id':root['id'],'expected_parent_revision':root['revision']},
+   {'op':'create_node','id':b,'title':'b','parent_id':a,'expected_parent_revision':1},
+   {'op':'create_edge','from_node_id':a,'to_node_id':b,'expected_from_revision':1,'expected_to_revision':1,'relation_type':'supports'},
+   {'op':'create_content_block','node_id':b,'expected_node_revision':1,'content':{'body':'ok'}},
+  ]
+  r=batch(c,h,p,'dependent-creates',ops);assert r.status_code==200,r.text
+  assert [item['op'] for item in r.json()['results']]==[op['op'] for op in ops]
+  p2=c.get(f"/api/projects/{p['id']}").json();assert p2['revision']==p['revision']+1
+  update=batch(c,h,p2,'new-update',[{'op':'create_node','id':'88888888-8888-4888-8888-888888888883','title':'new'}, {'op':'update_node','node_id':'88888888-8888-4888-8888-888888888883','expected_revision':1,'fields':{'summary':'no'}}])
+  assert update.status_code==422 and update.json()['detail']=='Cannot update a not-yet-created node'
+  assert c.get(f"/api/projects/{p['id']}").json()['revision']==p2['revision']

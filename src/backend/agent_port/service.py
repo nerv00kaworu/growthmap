@@ -147,6 +147,25 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             remember(op["to_node_id"],op["expected_to_revision"],"expected_to_revision")
         elif kind=="create_content_block": remember(op["node_id"],op["expected_node_revision"],"expected_node_revision")
         elif kind=="create_branch": remember(op["source_node_id"],op["expected_source_revision"],"expected_source_revision")
+    # Execute creates only after their transaction-local FK/data dependencies.
+    # Validation deliberately permits forward references, so caller order is not
+    # an execution order. A stable topological sort preserves caller order among
+    # independent operations and rejects impossible cycles before the CAS/write.
+    producers={op.get("id"):index for index,op in enumerate(ops) if op["op"].startswith("create_")}
+    dependencies=[]
+    for op in ops:
+        refs=()
+        if op["op"]=="create_node": refs=(op.get("parent_id"),op.get("branch_id"))
+        elif op["op"]=="create_branch": refs=(op.get("source_node_id"),)
+        elif op["op"]=="create_edge": refs=(op.get("from_node_id"),op.get("to_node_id"))
+        elif op["op"]=="create_content_block": refs=(op.get("node_id"),)
+        dependencies.append({producers[ref] for ref in refs if ref in producers})
+    pending=set(range(len(ops)));execution_order=[]
+    while pending:
+        ready=[index for index in sorted(pending) if dependencies[index].isdisjoint(pending)]
+        if not ready:
+            raise HTTPException(422,{"code":"CYCLIC_BATCH_DEPENDENCY","message":"Atomic batch contains cyclic create dependencies"})
+        execution_order.extend(ready);pending.difference_update(ready)
     # Claim the shared Project CAS atomically after all schema/reference/entity
     # validation and before any canonical insert/update. This closes true
     # separate-session GUI/Agent and Agent/Agent races.
@@ -170,25 +189,27 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     touched_node_ids &= existing_node_ids
     if touched_node_ids:
         existing_touched=(await db.execute(select(Node).where(Node.id.in_(touched_node_ids)))).scalars().all()
-    for op in ops:
-        kind=op["op"]
+    ordered_results=[None]*len(ops)
+    for op_index in execution_order:
+        op=ops[op_index];kind=op["op"]
         if kind=="create_node":
             n=Node(id=op["id"],project_id=project.id,title=op["title"].strip(),summary=op.get("summary",""),node_type=op.get("node_type","idea"),branch_id=op.get("branch_id"),created_by=actor or grant.agent_identity,last_edited_by=actor or grant.agent_identity,revision=1);db.add(n)
             await db.flush()
             if op.get("parent_id"):db.add(Edge(project_id=project.id,from_node_id=op["parent_id"],to_node_id=n.id,relation_type="child_of",is_mainline=False,revision=1))
-            results.append({"op":kind,"id":n.id,"revision":1})
+            ordered_results[op_index]={"op":kind,"id":n.id,"revision":1}
         elif kind=="update_node":
             n=await db.get(Node,op["node_id"])
             for k,v in op["fields"].items():
                 if v is not None:setattr(n,k,v)
-            n.last_edited_by=actor or grant.agent_identity;results.append({"op":kind,"id":n.id,"revision":n.revision+1})
+            n.last_edited_by=actor or grant.agent_identity;ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision+1}
         elif kind=="create_edge":
-            e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);results.append({"op":kind,"id":e.id,"revision":1})
+            e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
-            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
+            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
         else:
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
-            results.append({"op":kind,"id":b.id,"revision":1})
+            ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
+    results=ordered_results
     bump(existing_touched)
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
