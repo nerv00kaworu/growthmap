@@ -228,6 +228,9 @@ function Invoke-ProductionPackageLayoutSelfTest {
     $installed = Join-Path $contentRoot 'installed';$extracted = Join-Path $contentRoot 'extracted'
     New-Item -ItemType Directory (Join-Path $installed 'safe-package') -Force | Out-Null
     New-Item -ItemType Directory (Join-Path $extracted 'node_modules/safe-package') -Force | Out-Null
+    $safeManifest='{"name":"safe-package","version":"1.0.0"}'
+    [IO.File]::WriteAllText((Join-Path $installed 'safe-package/package.json'),$safeManifest)
+    [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$safeManifest)
     [IO.File]::WriteAllText((Join-Path $installed 'safe-package/index.js'),'module.exports=1')
     [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/index.js'),'-----BEGIN PRIVATE KEY-----')
     $testLock=Join-Path $contentRoot 'package-lock.json';$testPackage=Join-Path $contentRoot 'package.json'
