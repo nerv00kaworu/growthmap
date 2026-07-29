@@ -115,7 +115,7 @@ Agent CLI/MCP ───────────────► /agent/v1 REST (l
                                       └──► LLM API (OpenAI/compat)
 ```
 
-Agent Port protocol and product invariants are normative in [`docs/PRODUCT-CORE-v1.md`](docs/PRODUCT-CORE-v1.md) and [`docs/AGENT-PORT-v1.md`](docs/AGENT-PORT-v1.md). GrowthMap does not execute external agents or bind the port to a provider/model.
+Agent Port protocol and product invariants are normative in [`docs/PRODUCT-CORE-v1.md`](docs/PRODUCT-CORE-v1.md) and [`docs/AGENT-PORT-v1.md`](docs/AGENT-PORT-v1.md). GrowthMap does not execute external agents or bind the port to a provider/model. The desktop sidecar includes the Agent Port REST implementation and schema support; the optional repository-level `scripts/growthmap_agent.py` and `scripts/growthmap_mcp.py` clients are source-distribution tools and are not promised as entries inside the packaged desktop ASAR.
 
 ## ✅ Quality Gates
 
