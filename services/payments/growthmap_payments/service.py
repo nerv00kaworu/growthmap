@@ -9,8 +9,8 @@ from typing import Any,Protocol
 from urllib.parse import urlsplit
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 BASE_NETWORK="eip155:8453";BASE_USDC="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";EARLY_LIMIT=50
-EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=6
-MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e")}
+EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=7
+MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7")}
 TRANSITIONS={"reject":{"pending_payment","manual_review"},"refund":{"payment_confirmed","license_issued"},"revoke":{"license_issued"}}
 _CHECKPOINT_LOCKS_GUARD=threading.Lock();_CHECKPOINT_LOCKS:dict[str,threading.RLock]={}
 def _checkpoint_serialized(method):
@@ -60,7 +60,7 @@ class PaymentService:
  def _schema_snapshot(self,db):
   return [{"type":r[0],"name":r[1],"table":r[2],"sql":re.sub(r"\s+"," ",r[3].strip())} for r in db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name")]
  def _issuance_snapshot(self,db):
-  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state");closure={}
+  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ());closure={}
   for table in tables:
    cols=[r[1] for r in db.execute(f"PRAGMA table_info({table})")];order=",".join('"'+c+'"' for c in cols);closure[table]=[dict(r) for r in db.execute(f'SELECT * FROM "{table}" ORDER BY {order}')]
   schema=self._schema_snapshot(db);raw=json.dumps({"schema":schema,"rows":closure},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
@@ -303,7 +303,7 @@ class PaymentService:
    return self._confirm_payment_locked(db,oid,proof_id,amount,currency,payer_ref,tx_hash,actor)
  def _license(self,license_id,now):
   if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
-  d={"schema_version":1,"edition":"personal","license_id":license_id,"major_version":1,"device_allowance":2,"device_binding":None,"issued_at":now.isoformat(),"expires_at":None,"revoked_at":None,"max_active_projects":None};payload=json.dumps(d,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();d["signature"]=base64.b64encode(self.config.signing_key.sign(payload)).decode();return d
+  d={"schema_version":1,"edition":"personal","license_id":license_id,"major_version":1,"device_allowance":2,"device_binding":None,"issued_at":now.isoformat(),"expires_at":None,"revoked_at":None,"max_active_projects":None,"next_check_in_at":(now+timedelta(days=30)).isoformat()};payload=json.dumps(d,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();d["signature"]=base64.b64encode(self.config.signing_key.sign(payload)).decode();return d
  @staticmethod
  def paypal_minor(value):
   if isinstance(value,(float,int)) or not isinstance(value,str) or re.search(r"[eE]",value):raise ValueError("PayPal amount must be a decimal string")
@@ -328,17 +328,29 @@ class PaymentService:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT payer_ref FROM orders WHERE id=? AND rail='paypal'",(oid,)).fetchone()
    if not r or r[0]!=transaction_id:raise ValueError("transaction does not match submitted claim")
    return self._confirm_payment_locked(db,oid,transaction_id,self.paypal_minor(a["amount"]),"USD",tx_hash=transaction_id,actor=actor)
+ def _revocation(self,license_id,revoked_at,sequence,reason_code):
+  if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
+  if reason_code not in {None,"refund","chargeback","fraud","terms_violation","administrative"}:raise ValueError("invalid revocation reason")
+  d={"schema_version":1,"assertion_type":"growthmap_license_revocation","product":"growthmap","major_version":1,"license_id":license_id,"revoked_at":revoked_at,"sequence":sequence,"reason_code":reason_code}
+  payload=json.dumps(d,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();d["signature"]=base64.b64encode(self.config.signing_key.sign(b"growthmap-revocation-v1\0"+payload)).decode();return d
  @_checkpoint_serialized
- def admin_transition(self,oid,action):
+ def admin_transition(self,oid,action,reason_code=None):
   target={"reject":"rejected","refund":"refunded","revoke":"revoked"}.get(action)
   if not target:raise KeyError("action")
+  if action!="revoke" and reason_code is not None:raise ValueError("reason is only valid for revocation")
   with self._db() as db:
-   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT state FROM orders WHERE id=?",(oid,)).fetchone()
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT state,license_id FROM orders WHERE id=?",(oid,)).fetchone()
    if not r:raise KeyError("order")
    if r[0]==target:
-    self._audit(db,"admin",f"order.{action}.idempotent",oid,{"state":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":True}
+    stored=db.execute("SELECT assertion_json FROM revocation_assertions WHERE order_id=?",(oid,)).fetchone() if action=="revoke" else None
+    if action=="revoke" and not stored:raise RuntimeError("revoked order missing signed assertion")
+    self._audit(db,"admin",f"order.{action}.idempotent",oid,{"state":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":True,"revocation":json.loads(stored[0]) if stored else None}
    if r[0] not in TRANSITIONS[action]:raise ValueError(f"illegal transition {r[0]} -> {target}")
-   db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,self.now(),oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False}
+   now=self.now();assertion=None
+   if action=="revoke":
+    assertion=self._revocation(r[1],now,1,reason_code or "administrative")
+    db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(r[1],oid,1,now,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now))
+   db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target,"license_id":r[1] if action=="revoke" else None,"sequence":1 if action=="revoke" else None});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False,"revocation":assertion}
  @_checkpoint_serialized
  @_checkpoint_serialized
  def admin_list_orders(self):
@@ -347,8 +359,14 @@ class PaymentService:
  def recovery_lookup(self,code):
   with self._checkpoint_lock:
    with self._db() as db:
-    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT state,license_json FROM orders WHERE recovery_code_hash=?",(self._hash(code),)).fetchone();db.rollback()
-  return {"state":"not_found_or_unavailable"} if not r else {"state":r["state"],"license":json.loads(r["license_json"]) if r["state"]=="license_issued" and r["license_json"] else None}
+    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT id,state,license_json FROM orders WHERE recovery_code_hash=?",(self._hash(code),)).fetchone();assertion=db.execute("SELECT assertion_json FROM revocation_assertions WHERE order_id=?",(r["id"],)).fetchone() if r and r["state"]=="revoked" else None;db.rollback()
+  return {"state":"not_found_or_unavailable"} if not r else {"state":r["state"],"license":json.loads(r["license_json"]) if r["state"]=="license_issued" and r["license_json"] else None,"revocation":json.loads(assertion[0]) if assertion else None}
+ @_checkpoint_serialized
+ def candidate_check_in(self,code):
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT id,state,license_id FROM orders WHERE recovery_code_hash=?",(self._hash(code),)).fetchone()
+   if not r or r["state"]!="license_issued" or not r["license_id"]:db.rollback();return {"state":"not_found_or_unavailable"}
+   doc=json.loads(db.execute("SELECT license_json FROM orders WHERE id=?",(r["id"],)).fetchone()[0]);doc["next_check_in_at"]=(datetime.now(timezone.utc)+timedelta(days=30)).isoformat();doc.pop("signature",None);payload=json.dumps(doc,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();doc["signature"]=base64.b64encode(self.config.signing_key.sign(payload)).decode();now=self.now();db.execute("UPDATE orders SET license_json=?,updated_at=? WHERE id=?",(json.dumps(doc,separators=(",",":")),now,r["id"]));self._audit(db,"issuer","license.check_in",r["id"],{"license_id":r["license_id"],"next_check_in_at":doc["next_check_in_at"]});self._commit_trusted(db);return {"state":"license_issued","license":doc}
  @_checkpoint_serialized
  def verify_audit(self):
   prev="0"*64

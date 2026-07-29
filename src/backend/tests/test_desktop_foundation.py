@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from desktop.entitlements import canonical_payload, verify_document
 
 def signed_doc(private, **changes):
-    doc={"schema_version":1,"edition":"pro","license_id":"TEST-ONLY-001","major_version":1,"device_allowance":2,"issued_at":datetime.now(timezone.utc).isoformat(),"expires_at":(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(),"revoked_at":None,"max_active_projects":None}
+    doc={"schema_version":1,"edition":"pro","license_id":"TEST-ONLY-001","major_version":1,"device_allowance":2,"issued_at":datetime.now(timezone.utc).isoformat(),"expires_at":(datetime.now(timezone.utc)+timedelta(days=1)).isoformat(),"revoked_at":None,"max_active_projects":None,"next_check_in_at":(datetime.now(timezone.utc)+timedelta(days=30)).isoformat()}
     doc.update(changes); doc["signature"]=base64.b64encode(private.sign(canonical_payload(doc))).decode(); return doc
 
 def test_license_fail_closed_and_test_only_valid_fixture(tmp_path):

@@ -18,6 +18,7 @@ TRIAL_ACTIVE_PROJECT_LIMIT = 2
 CURRENT_MAJOR_VERSION = 1  # compiled product line; packaging preflight checks desktop metadata agreement
 LICENSE_PATH = Path(os.getenv("GROWTHMAP_LICENSE_FILE", Path.home()/".growthmap"/"license.json"))
 TRIAL_PATH = Path(os.getenv("GROWTHMAP_TRIAL_STATE_FILE", LICENSE_PATH.with_name("trial-state.json")))
+REVOCATION_PATH = Path(os.getenv("GROWTHMAP_REVOCATION_FILE", LICENSE_PATH.with_name("revocation.json")))
 def _public_key_path() -> Path:
     bundled=Path(__file__).with_name("license_public_key.pem")
     # Frozen/packaged builds receive a desktop-authenticated fixed path. The ordinary
@@ -28,9 +29,12 @@ def _public_key_path() -> Path:
     return Path(os.getenv("GROWTHMAP_LICENSE_PUBLIC_KEY", bundled))
 PUBLIC_KEY_PATH = _public_key_path()
 EDITIONS = {"personal", "pro", "studio"}
-LICENSE_FIELDS = {"schema_version","edition","license_id","major_version","device_allowance","device_binding","issued_at","expires_at","revoked_at","max_active_projects","signature"}
-LICENSE_REQUIRED = {"schema_version","edition","license_id","major_version","device_allowance","issued_at","max_active_projects","signature"}
+LICENSE_FIELDS = {"schema_version","edition","license_id","major_version","device_allowance","device_binding","issued_at","expires_at","revoked_at","max_active_projects","next_check_in_at","signature"}
+LICENSE_REQUIRED = {"schema_version","edition","license_id","major_version","device_allowance","issued_at","max_active_projects","next_check_in_at","signature"}
 ROLLBACK_TOLERANCE = timedelta(minutes=5)
+REVOCATION_FIELDS={"schema_version","assertion_type","product","major_version","license_id","revoked_at","sequence","reason_code","signature"}
+REVOCATION_REASONS={None,"refund","chargeback","fraud","terms_violation","administrative"}
+REVOCATION_DOMAIN=b"growthmap-revocation-v1\0"
 
 @dataclass(frozen=True)
 class Entitlement:
@@ -86,8 +90,31 @@ def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, 
         if not isinstance(key,Ed25519PublicKey): return Entitlement(reason="invalid_public_key")
         key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
         if doc["major_version"] != current_major: return Entitlement(reason="major_mismatch", major_version=doc["major_version"])
+        try: next_check_in=_iso(doc["next_check_in_at"])
+        except (ValueError,TypeError,KeyError): return Entitlement(reason="invalid_check_in")
+        if now > next_check_in: return Entitlement(reason="check_in_required",license_id=doc["license_id"],major_version=doc["major_version"])
         return Entitlement(state="paid",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=True,reason="valid")
     except (OSError,ValueError,TypeError,InvalidSignature): return Entitlement(reason="invalid_signature")
+
+def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_path: Path=PUBLIC_KEY_PATH, *, current_major: int=CURRENT_MAJOR_VERSION, minimum_sequence: int=0) -> dict[str,Any]:
+    if not isinstance(doc,dict) or set(doc)!=REVOCATION_FIELDS: raise ValueError("invalid_revocation_document")
+    if doc["schema_version"]!=1 or doc["assertion_type"]!="growthmap_license_revocation" or doc["product"]!="growthmap": raise ValueError("unsupported_revocation_schema")
+    if doc["license_id"]!=license_id: raise ValueError("revocation_license_mismatch")
+    if doc["major_version"]!=current_major: raise ValueError("revocation_major_mismatch")
+    if isinstance(doc["sequence"],bool) or not isinstance(doc["sequence"],int) or doc["sequence"]<=minimum_sequence: raise ValueError("revocation_sequence_replay")
+    if doc["reason_code"] not in REVOCATION_REASONS: raise ValueError("invalid_revocation_reason")
+    _iso(doc["revoked_at"])
+    raw=public_key_path.read_bytes();key=serialization.load_pem_public_key(raw)
+    if not isinstance(key,Ed25519PublicKey): raise ValueError("invalid_public_key")
+    payload=canonical_payload(doc)
+    key.verify(base64.b64decode(doc["signature"],validate=True),REVOCATION_DOMAIN+payload)
+    return doc
+
+def apply_revocation(value: Entitlement, path: Path=REVOCATION_PATH, *, public_key_path: Path=PUBLIC_KEY_PATH) -> Entitlement:
+    if value.state!="paid" or not value.valid or not path.exists(): return value
+    try: verify_revocation_assertion(json.loads(path.read_text("utf-8")),value.license_id or "",public_key_path)
+    except Exception: return Entitlement(reason="revocation_state_invalid",license_id=value.license_id,major_version=value.major_version)
+    return Entitlement(reason="revoked",license_id=value.license_id,major_version=value.major_version)
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -125,7 +152,7 @@ def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, check
 def peek_current_entitlement(*, now: datetime | None=None) -> Entitlement:
     """Cryptographic entitlement lookup with zero file writes."""
     if LICENSE_PATH.exists():
-        try: return verify_document(json.loads(LICENSE_PATH.read_text("utf-8")),public_key_path=_public_key_path(),now=now)
+        try: return apply_revocation(verify_document(json.loads(LICENSE_PATH.read_text("utf-8")),public_key_path=_public_key_path(),now=now),public_key_path=_public_key_path())
         except (OSError,ValueError): return Entitlement(reason="corrupt_license")
     return trial_entitlement(now=now,checkpoint=False)
 

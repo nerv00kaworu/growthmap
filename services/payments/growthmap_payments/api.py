@@ -119,11 +119,15 @@ def create_app(config:Config,facilitator=None,reconciler=None):
   try:return service.reconcile_intent(intent_id,reconciler,"admin-session")
   except (ValueError,KeyError) as e:raise HTTPException(409,str(e))
  @app.post('/v1/admin/orders/{oid}/{action}')
- async def action(oid,action,request:Request,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
+ async def action(oid,action,request:Request,body:dict|None=None,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
   admin(request,authorization,csrf)
-  try:return service.admin_transition(oid,action)
+  try:return service.admin_transition(oid,action,(body or {}).get("reason_code"))
   except KeyError as e:raise HTTPException(404,str(e))
   except ValueError as e:raise HTTPException(409,str(e))
+ @app.get('/v1/candidate/check-in/{code}')
+ async def candidate_check_in(code,request:Request):
+  limiter.check("check-in",request.client.host if request.client else "unknown")
+  return JSONResponse(service.candidate_check_in(code),headers={"Cache-Control":"no-store"})
  @app.get('/v1/recovery/{code}')
  async def recovery(code,request:Request):
   limiter.check("recovery",request.client.host if request.client else "unknown")

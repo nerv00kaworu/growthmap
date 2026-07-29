@@ -387,3 +387,26 @@ def test_r7_sixty_way_mixed_rail_multi_instance_allocation(tmp_path):
   assert tuple(db.execute('SELECT count(*),count(DISTINCT proof_hash),count(DISTINCT tx_hash) FROM payment_proofs').fetchone())==(50,50,50)
   assert db.execute('PRAGMA integrity_check').fetchone()[0]=='ok';assert db.execute('PRAGMA foreign_key_check').fetchall()==[]
  assert services[0].verify_audit();PaymentService(c)
+
+def test_signed_revocation_idempotent_recovery_and_checkpoint(tmp_path):
+ p=tmp_path/'revoked.sqlite';c=config(p);s=PaymentService(c);o=s.create_order('paypal','revoked@e.test');s.paypal_submit(o['order_id'],'REVOKE-TX');issued=s.paypal_confirm(o['order_id'],'REVOKE-TX',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True});assert s.recovery_lookup(o['recovery_code'])['license']['license_id']==issued['license_id']
+ first=s.admin_transition(o['order_id'],'revoke','fraud');again=s.admin_transition(o['order_id'],'revoke','administrative');assert first['revocation']==again['revocation'] and again['idempotent'];assert first['revocation']['reason_code']=='fraud'
+ recovered=s.recovery_lookup(o['recovery_code']);assert recovered['state']=='revoked' and recovered['license'] is None and recovered['revocation']==first['revocation']
+ PaymentService(c)
+ with sqlite3.connect(p) as db:db.execute("DROP TRIGGER revocation_assertion_no_update");db.execute("UPDATE revocation_assertions SET reason_code='refund'")
+ with pytest.raises(RuntimeError,match="checkpoint/database mismatch"):PaymentService(c)
+
+def test_revocation_signature_domain_and_validation(env,tmp_path):
+ from desktop.entitlements import verify_revocation_assertion
+ s,c=env;o=s.create_order('paypal','assertion@e.test');s.paypal_submit(o['order_id'],'ASSERT-TX');issued=s.paypal_confirm(o['order_id'],'ASSERT-TX',{'amount':'10','currency':'USD','status':'COMPLETED','payee_verified':True});a=s.admin_transition(o['order_id'],'revoke')['revocation'];pub=tmp_path/'pub.pem';pub.write_bytes(c.signing_key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo));assert verify_revocation_assertion(a,issued['license_id'],pub)['sequence']==1
+ for field,value in [('license_id','other'),('major_version',2),('schema_version',2),('reason_code','anything')]:
+  bad=dict(a);bad[field]=value
+  with pytest.raises(Exception):verify_revocation_assertion(bad,issued['license_id'],pub)
+ with pytest.raises(Exception):verify_revocation_assertion(a,issued['license_id'],pub,minimum_sequence=1)
+ wrong=tmp_path/'wrong.pem';wrong.write_bytes(Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+ with pytest.raises(Exception):verify_revocation_assertion(a,issued['license_id'],wrong)
+ license_doc=json.loads(issued['license_json'])
+ with pytest.raises(Exception):c.signing_key.public_key().verify(base64.b64decode(license_doc['signature']),b'growthmap-revocation-v1\0'+json.dumps({k:license_doc[k] for k in sorted(license_doc) if k!='signature'},sort_keys=True,separators=(',',':')).encode())
+
+def test_candidate_check_in_refreshes_only_active_license(env):
+ s,c=env;o=s.create_order('paypal','checkin@e.test');assert s.candidate_check_in(o['recovery_code'])['state']=='not_found_or_unavailable';s.paypal_submit(o['order_id'],'CHECKIN');issued=s.paypal_confirm(o['order_id'],'CHECKIN',{'amount':'10','currency':'USD','status':'COMPLETED','payee_verified':True});fresh=s.candidate_check_in(o['recovery_code']);assert fresh['state']=='license_issued' and fresh['license']['license_id']==issued['license_id'];s.admin_transition(o['order_id'],'revoke');assert s.candidate_check_in(o['recovery_code'])['state']=='not_found_or_unavailable'

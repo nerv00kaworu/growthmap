@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from desktop.entitlements import canonical_payload, initialize_trial, trial_entitlement, verify_document
 
 def signed(private, **changes):
-    doc={"schema_version":1,"edition":"personal","license_id":"TEST-ONLY-1","major_version":1,"device_allowance":2,"issued_at":"2026-01-01T00:00:00+00:00","expires_at":None,"revoked_at":None,"max_active_projects":None}
+    doc={"schema_version":1,"edition":"personal","license_id":"TEST-ONLY-1","major_version":1,"device_allowance":2,"issued_at":"2026-01-01T00:00:00+00:00","expires_at":None,"revoked_at":None,"max_active_projects":None,"next_check_in_at":"2099-02-01T00:00:00+00:00"}
     doc.update(changes);doc["signature"]=base64.b64encode(private.sign(canonical_payload(doc))).decode();return doc
 
 def test_entitlement_peek_is_side_effect_free(tmp_path):

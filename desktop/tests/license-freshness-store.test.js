@@ -1,0 +1,3 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');const {createLicenseFreshnessStore}=require('../license-freshness-store');const enc=v=>Buffer.from(v),dec=b=>b.toString();
+test('paid freshness evidence detects rollback deletion and tamper without affecting absent state',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gm-fresh-'));let now=new Date('2026-01-02T00:00:00Z'),s=createLicenseFreshnessStore({userData:dir,encrypt:enc,decrypt:dec,now:()=>now});assert.equal(s.read(),null);s.checkpoint('license-1');now=new Date('2026-01-01T00:00:00Z');assert.throws(()=>s.checkpoint('license-1'),/rollback/);fs.unlinkSync(s.paths.state);assert.equal(s.read().invalid,true);});

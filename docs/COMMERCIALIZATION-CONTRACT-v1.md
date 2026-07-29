@@ -39,7 +39,7 @@ Trial timestamps are UTC and atomically persisted under Electron `userData`; `st
 Ed25519 JSON, canonical UTF-8 sorted compact JSON excluding `signature`:
 
 ```json
-{"schema_version":1,"edition":"personal","license_id":"provider-id","major_version":1,"device_allowance":2,"device_binding":"optional-provider-neutral-fingerprint","issued_at":"ISO-8601 UTC","expires_at":null,"revoked_at":null,"max_active_projects":null,"signature":"base64"}
+{"schema_version":1,"edition":"personal","license_id":"provider-id","major_version":1,"device_allowance":2,"device_binding":"optional-provider-neutral-fingerprint","issued_at":"ISO-8601 UTC","expires_at":null,"revoked_at":null,"max_active_projects":null,"next_check_in_at":"ISO-8601 UTC","signature":"base64"}
 ```
 
 Target allowance is two personal devices. Issuance service—not the client—tracks activations and binds/rebinds devices. Binding is optional until a real privacy-reviewed service exists. The repository contains no private key and the shipped placeholder public key blocks commercial packaging. Offline documents cannot be remotely revoked without a check-in; UI/service must say this honestly. A refund/revocation learned through a signed response transitions to extraction, never deletion.

@@ -1,0 +1,6 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+const {createRevocationStore}=require('../revocation-store');
+const enc=v=>Buffer.from(v),dec=b=>b.toString();
+function doc(sequence=1){return {schema_version:1,assertion_type:'growthmap_license_revocation',product:'growthmap',major_version:1,license_id:'gm-v1-test',revoked_at:'2026-07-29T00:00:00+00:00',sequence,reason_code:'administrative',signature:'fixture'};}
+test('accepted revocation is monotonic and deletion rollback tamper fail closed',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'gm-revoke-')),s=createRevocationStore({userData:dir,encrypt:enc,decrypt:dec});assert.equal(s.inspect().state,'none');assert.equal(s.commit(doc()).state,'accepted');assert.throws(()=>s.commit(doc()),/replay/);assert.equal(s.commit(doc(2)).sequence,2);const old=fs.readFileSync(s.paths.assertion);fs.writeFileSync(s.paths.assertion,JSON.stringify(doc(1)));assert.equal(s.inspect().state,'invalid');fs.writeFileSync(s.paths.assertion,old);fs.unlinkSync(s.paths.assertion);assert.equal(s.inspect().state,'invalid');});
