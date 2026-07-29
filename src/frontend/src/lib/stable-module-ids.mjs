@@ -12,16 +12,29 @@ function rootVariants(root) {
   return [...new Set([root, encodeURI(root), encodeURIComponent(root)])]
     .sort((a, b) => b.length - a.length || compareTotal(a, b));
 }
+function replaceFilesystemRoot(value) {
+  // A filesystem root is itself the separator, so treating it like an ordinary
+  // root would either compile an empty pattern or redact every slash. Limit it
+  // to absolute path starts (including starts of loader-chain segments).
+  return slash(value).replace(/(^|!)(?:\/|%2f)/gi, (match, prefix, offset, input) =>
+    `${prefix}<PROJECT_ROOT>${offset + match.length < input.length ? "/" : ""}`);
+}
 function replaceRoot(value, root) {
   let out = slash(value);
-  for (const candidate of rootVariants(slash(root))) {
+  for (const candidate of rootVariants(root)) {
     const source = encodedEscape(candidate);
-    out = out.replace(new RegExp(source, windowsRoot(root) ? "gi" : "g"), "<PROJECT_ROOT>");
+    // Consume and canonicalize a real child separator. The lookahead prevents
+    // lexical-prefix redaction while retaining exact-root and loader matches.
+    const pattern = new RegExp(`${source}(?:\/|%2[fF])|${source}(?=$)`, windowsRoot(root) ? "gi" : "g");
+    out = out.replace(pattern, (match) => `<PROJECT_ROOT>${/(?:\/|%2f)$/i.test(match) ? "/" : ""}`);
   }
   return out;
 }
 export function normalizeModuleIdentifier(identifier, root) {
-  return replaceRoot(identifier, slash(root).replace(/\/$/, ""));
+  const normalizedRoot = slash(root).replace(/\/+$/, "") || "/";
+  return normalizedRoot === "/"
+    ? replaceFilesystemRoot(identifier)
+    : replaceRoot(identifier, normalizedRoot);
 }
 function compareTotal(a, b) {
   // JS relational string comparison is a total UTF-16 code-unit order: unlike

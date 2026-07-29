@@ -50,6 +50,66 @@ test("Windows encoded separators, percent signs, drive and separator case normal
  const values=["c:\\work\\growth%map\\src\\x.ts","C%3A%2FWork%2FGrowth%25Map/src/x.ts","c%3a%2fwork%2fgrowth%25map/src/x.ts"];
  for(const value of values) assert.equal(normalizeModuleIdentifier(value,percentRoot),"<PROJECT_ROOT>/src/x.ts");
 });
+
+test("lexical root prefixes do not redact POSIX or Windows paths",()=>{
+ const cases=[
+  ["/repo/application/src/a.js","/repo/app"],
+  ["%2frepo%2fapplication%2fsrc%2fa.js","/repo/app"],
+  ["C:/Work/Application/src/a.js","C:/Work/App"],
+  ["c%3a%2fwork%2fapplication%2fsrc%2fa.js","C:/Work/App"],
+ ];
+ for(const [value,projectRoot] of cases) assert.equal(normalizeModuleIdentifier(value,projectRoot),value);
+});
+test("exact roots, child paths, encoded separators, and loader chains normalize",()=>{
+ const posix="/repo/app";
+ const cases=[
+  [posix,"<PROJECT_ROOT>"],
+  [`${posix}/src/a.js`,"<PROJECT_ROOT>/src/a.js"],
+  [`${posix}%2Fsrc%2Fa.js`,"<PROJECT_ROOT>/src%2Fa.js"],
+  ["%2frepo%2fapp%2fsrc%2fa.js","<PROJECT_ROOT>/src%2fa.js"],
+  [`loader-a!loader-b!${posix}/src/a.js`,`loader-a!loader-b!<PROJECT_ROOT>/src/a.js`],
+  [`${posix}/one!${posix}/two`,`<PROJECT_ROOT>/one!<PROJECT_ROOT>/two`],
+ ];
+ for(const [value,expected] of cases) assert.equal(normalizeModuleIdentifier(value,posix),expected);
+ const win="C:/Work/App";
+ assert.equal(normalizeModuleIdentifier("c%3a%2fwork%2fapp%2Fsrc/a.js",win),"<PROJECT_ROOT>/src/a.js");
+ assert.equal(normalizeModuleIdentifier("C:/WORK/APP",win),"<PROJECT_ROOT>");
+});
+test("filesystem root only normalizes absolute path segment starts",()=>{
+ const cases=[
+  ["/","<PROJECT_ROOT>"],
+  ["/anything/src/a.js","<PROJECT_ROOT>/anything/src/a.js"],
+  ["%2Fanything%2Fsrc%2Fa.js","<PROJECT_ROOT>/anything%2Fsrc%2Fa.js"],
+  ["loader!/anything/src/a.js","loader!<PROJECT_ROOT>/anything/src/a.js"],
+  ["relative/path.js","relative/path.js"],
+ ];
+ for(const [value,expected] of cases) assert.equal(normalizeModuleIdentifier(value,"/"),expected);
+ assert.equal((normalizeModuleIdentifier("/anything/src/a.js","/").match(/<PROJECT_ROOT>/g)||[]).length,1);
+});
+test("literal percent, Unicode, regex metacharacters, and trailing slashes are literal roots",()=>{
+ const roots=["/tmp/100%/项目/[a]+(b).","/tmp/café.$^/"];
+ for(const projectRoot of roots){
+  const trimmed=projectRoot.replace(/\/+$/,"");
+  assert.equal(normalizeModuleIdentifier(`${trimmed}/src/x.ts`,projectRoot),"<PROJECT_ROOT>/src/x.ts");
+  assert.equal(normalizeModuleIdentifier(`${encodeURIComponent(trimmed)}%2fsrc%2fx.ts`,projectRoot),"<PROJECT_ROOT>/src%2fx.ts");
+  assert.equal(normalizeModuleIdentifier(`${trimmed}suffix/src/x.ts`,projectRoot),`${trimmed}suffix/src/x.ts`);
+ }
+});
+test("boundary normalization does not leak roots or create lexical collisions",()=>{
+ const projectRoot="/secret/build/repo/app";
+ const child=normalizeModuleIdentifier(`${projectRoot}/src/a.ts`,projectRoot);
+ const lexical=normalizeModuleIdentifier(`${projectRoot}lication/src/a.ts`,projectRoot);
+ assert.equal(child,"<PROJECT_ROOT>/src/a.ts");
+ assert.ok(!child.includes(projectRoot)&&!child.includes(encodeURIComponent(projectRoot)));
+ assert.equal(lexical,`${projectRoot}lication/src/a.ts`);
+ assert.notEqual(child,lexical);
+ const rows=[
+  {key:"child",resource:`${projectRoot}/src/a.ts`,identifier(){return `${projectRoot}/src/a.ts`}},
+  {key:"lexical",resource:`${projectRoot}lication/src/a.ts`,identifier(){return `${projectRoot}lication/src/a.ts`}},
+ ];
+ const ids=run(rows);
+ assert.notEqual(ids.child,ids.lexical);
+});
 test("malformed and double-encoded text is never broadly decoded into a root",()=>{
  const malformed="loader!C%3G/Work/Growth%20Map/src/x.ts";
  const doubled="loader!C%253A%252FWork%252FGrowth%2520Map/src/x.ts";
