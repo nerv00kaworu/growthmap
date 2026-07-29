@@ -1,8 +1,8 @@
 {
   "job_id": "growthmap-payments-v1-20260728",
-  "status": "candidate_security_qa_windows_pass_production_no_go_external_integrations",
+  "status": "candidate_all_local_security_qa_windows_audit_gates_pass_production_no_go_external_inputs",
   "baseline_documented": "3023e16",
-  "implemented_on_head": "d62091e7c4f3a867d40046fbd5010c4958902bfc",
+  "implemented_on_head": "4f381930d2849c87356de73ff655e3851784f1d9",
   "live_db_accessed": false,
   "real_money_or_provider_writes": false,
   "commit_or_push": true,
@@ -63,7 +63,8 @@
     "backend_tests": 53,
     "desktop_tests": 80,
     "desktop_audit_vulnerabilities": 0,
-    "frontend_audit_high": 9
+    "frontend_audit_high": 0,
+    "frontend_audit_total": 0
   },
   "blockers": [
     "official x402/CDP facilitator SDK integration and multi-instance transaction review",
@@ -72,8 +73,7 @@
     "PayPal merchant URL and reviewed manual operations",
     "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
     "revocation check-in",
-    "production legal/config/Authenticode signing and updater publication inputs",
-    "frontend development-toolchain audit has 9 high findings; breaking ESLint 10 remediation not applied"
+    "production legal/config/Authenticode signing and updater publication inputs"
   ],
   "report": "reports/growthmap-payments-v1-20260728.md",
   "schema_version": 6,
@@ -107,8 +107,7 @@
     "blockers": [
       "paired historical DB+valid checkpoint rollback needs external monotonic/HSM anchor",
       "fresh independent review",
-      "production facilitator/reconciler/auth/key/session/deployment",
-      "frontend audit has 9 high dev-toolchain findings; breaking ESLint 10 fix not applied"
+      "production facilitator/reconciler/auth/key/session/deployment"
     ]
   },
   "r7": {
@@ -128,10 +127,10 @@
     ]
   },
   "windows_candidate": {
-    "status": "pass_after_manifest_high_remediation_and_targeted_security_review",
-    "sha": "d62091e7c4f3a867d40046fbd5010c4958902bfc",
-    "run_id": 30420037621,
-    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30420037621",
+    "status": "pass_after_manifest_and_frontend_audit_remediation",
+    "sha": "4f381930d2849c87356de73ff655e3851784f1d9",
+    "run_id": 30421389694,
+    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30421389694",
     "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary and ordinal manifest provenance",
     "security_review": "targeted_PASS_manifest_deletion_and_case_rename_HIGH_closed",
     "publication_gate": "not_run_missing_production_signing_inputs",
@@ -151,8 +150,24 @@
       "PayPal merchant URL and reviewed manual operations",
       "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
       "revocation check-in",
-      "production legal/config/Authenticode signing and updater publication inputs",
-      "frontend development-toolchain audit has 9 high findings; breaking ESLint 10 remediation not applied"
+      "production legal/config/Authenticode signing and updater publication inputs"
+    ]
+  },
+  "r10": {
+    "status": "frontend_audit_closed_windows_pass",
+    "finding": "9 high transitive findings from GHSA-mh99-v99m-4gvg brace-expansion in ESLint development toolchain",
+    "rejected_fix": "global minimatch 10 override broke ESLint 9 ESM default-import compatibility",
+    "remediation": "exact brace-expansion 5.0.8 override, retaining Next 15/ESLint 9/minimatch 3 APIs",
+    "evidence": "clean npm ci; npm audit 0; frontend lint/typecheck/build; desktop 80/80; Windows run 30421389694 PASS at 4f38193",
+    "production": "NO-GO",
+    "blockers": [
+      "official x402/CDP facilitator SDK integration and multi-instance transaction review",
+      "production Base recipient and secure Ed25519 key provider",
+      "real HTTPS payment API and wallet portal",
+      "PayPal merchant URL and reviewed manual operations",
+      "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
+      "revocation check-in",
+      "production legal/config/Authenticode signing and updater publication inputs"
     ]
   }
 }
