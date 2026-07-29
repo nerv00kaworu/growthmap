@@ -35,6 +35,8 @@ ROLLBACK_TOLERANCE = timedelta(minutes=5)
 REVOCATION_FIELDS={"schema_version","assertion_type","product","major_version","license_id","revoked_at","sequence","reason_code","signature"}
 REVOCATION_REASONS={None,"refund","chargeback","fraud","terms_violation","administrative"}
 REVOCATION_DOMAIN=b"growthmap-revocation-v1\0"
+CANONICAL_UTC=re.compile(r"^(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{6})?Z$")
+REVOCATION_FUTURE_SKEW=timedelta(minutes=5)
 
 @dataclass(frozen=True)
 class Entitlement:
@@ -59,13 +61,29 @@ def _iso(value: Any) -> datetime:
     if result.tzinfo is None: raise ValueError("timezone")
     return result.astimezone(timezone.utc)
 
+def strict_json_loads(raw: str) -> Any:
+    def pairs(values):
+        result={}; folded=set()
+        for key,value in values:
+            fold=key.casefold()
+            if key in result or fold in folded: raise ValueError("duplicate_or_case_colliding_json_key")
+            result[key]=value;folded.add(fold)
+        return result
+    return json.loads(raw,object_pairs_hook=pairs)
+
+def _canonical_utc(value: Any) -> datetime:
+    if not isinstance(value,str) or not CANONICAL_UTC.fullmatch(value): raise ValueError("noncanonical_timestamp")
+    result=datetime.strptime(value,"%Y-%m-%dT%H:%M:%S.%fZ" if "." in value else "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    if result.strftime("%Y-%m-%dT%H:%M:%S.%fZ" if "." in value else "%Y-%m-%dT%H:%M:%SZ")!=value: raise ValueError("noncanonical_timestamp")
+    return result
+
 def canonical_payload(doc: dict[str, Any]) -> bytes:
     return json.dumps({k:doc[k] for k in sorted(doc) if k != "signature"}, sort_keys=True, separators=(",",":"), ensure_ascii=False).encode()
 
 def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, *, now: datetime | None=None, current_major: int=CURRENT_MAJOR_VERSION) -> Entitlement:
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
-        if not isinstance(doc, dict) or set(doc)-LICENSE_FIELDS or not LICENSE_REQUIRED <= set(doc): return Entitlement(reason="invalid_document")
+        if not isinstance(doc, dict) or set(doc)-LICENSE_FIELDS or not (LICENSE_REQUIRED-{"next_check_in_at"}) <= set(doc): return Entitlement(reason="invalid_document")
         if doc["schema_version"] != 1: return Entitlement(reason="unsupported_schema")
         if doc["edition"] not in EDITIONS: return Entitlement(reason="invalid_edition")
         if not isinstance(doc["license_id"],str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",doc["license_id"]): return Entitlement(reason="invalid_license_id")
@@ -90,20 +108,24 @@ def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, 
         if not isinstance(key,Ed25519PublicKey): return Entitlement(reason="invalid_public_key")
         key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
         if doc["major_version"] != current_major: return Entitlement(reason="major_mismatch", major_version=doc["major_version"])
-        try: next_check_in=_iso(doc["next_check_in_at"])
-        except (ValueError,TypeError,KeyError): return Entitlement(reason="invalid_check_in")
-        if now > next_check_in: return Entitlement(reason="check_in_required",license_id=doc["license_id"],major_version=doc["major_version"])
-        return Entitlement(state="paid",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=True,reason="valid")
+        legacy="next_check_in_at" not in doc
+        if not legacy:
+            try: next_check_in=_iso(doc["next_check_in_at"])
+            except (ValueError,TypeError,KeyError): return Entitlement(reason="invalid_check_in")
+            if now > next_check_in: return Entitlement(reason="check_in_required",license_id=doc["license_id"],major_version=doc["major_version"])
+        return Entitlement(state="paid",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=True,reason="legacy_bootstrap" if legacy else "valid")
     except (OSError,ValueError,TypeError,InvalidSignature): return Entitlement(reason="invalid_signature")
 
-def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_path: Path=PUBLIC_KEY_PATH, *, current_major: int=CURRENT_MAJOR_VERSION, minimum_sequence: int=0) -> dict[str,Any]:
+def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_path: Path=PUBLIC_KEY_PATH, *, current_major: int=CURRENT_MAJOR_VERSION, minimum_sequence: int=0, now: datetime | None=None) -> dict[str,Any]:
     if not isinstance(doc,dict) or set(doc)!=REVOCATION_FIELDS: raise ValueError("invalid_revocation_document")
-    if doc["schema_version"]!=1 or doc["assertion_type"]!="growthmap_license_revocation" or doc["product"]!="growthmap": raise ValueError("unsupported_revocation_schema")
-    if doc["license_id"]!=license_id: raise ValueError("revocation_license_mismatch")
-    if doc["major_version"]!=current_major: raise ValueError("revocation_major_mismatch")
+    if isinstance(doc["schema_version"],bool) or not isinstance(doc["schema_version"],int) or doc["schema_version"]!=1: raise ValueError("unsupported_revocation_schema")
+    if not isinstance(doc["assertion_type"],str) or doc["assertion_type"]!="growthmap_license_revocation" or not isinstance(doc["product"],str) or doc["product"]!="growthmap": raise ValueError("unsupported_revocation_schema")
+    if not isinstance(doc["license_id"],str) or doc["license_id"]!=license_id: raise ValueError("revocation_license_mismatch")
+    if isinstance(doc["major_version"],bool) or not isinstance(doc["major_version"],int) or doc["major_version"]!=current_major: raise ValueError("revocation_major_mismatch")
     if isinstance(doc["sequence"],bool) or not isinstance(doc["sequence"],int) or doc["sequence"]<=minimum_sequence: raise ValueError("revocation_sequence_replay")
-    if doc["reason_code"] not in REVOCATION_REASONS: raise ValueError("invalid_revocation_reason")
-    _iso(doc["revoked_at"])
+    if doc["reason_code"] not in REVOCATION_REASONS or (doc["reason_code"] is not None and not isinstance(doc["reason_code"],str)): raise ValueError("invalid_revocation_reason")
+    revoked=_canonical_utc(doc["revoked_at"]); instant=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    if revoked > instant+REVOCATION_FUTURE_SKEW: raise ValueError("future_revocation")
     raw=public_key_path.read_bytes();key=serialization.load_pem_public_key(raw)
     if not isinstance(key,Ed25519PublicKey): raise ValueError("invalid_public_key")
     payload=canonical_payload(doc)
@@ -112,7 +134,7 @@ def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_
 
 def apply_revocation(value: Entitlement, path: Path=REVOCATION_PATH, *, public_key_path: Path=PUBLIC_KEY_PATH) -> Entitlement:
     if value.state!="paid" or not value.valid or not path.exists(): return value
-    try: verify_revocation_assertion(json.loads(path.read_text("utf-8")),value.license_id or "",public_key_path)
+    try: verify_revocation_assertion(strict_json_loads(path.read_text("utf-8")),value.license_id or "",public_key_path)
     except Exception: return Entitlement(reason="revocation_state_invalid",license_id=value.license_id,major_version=value.major_version)
     return Entitlement(reason="revoked",license_id=value.license_id,major_version=value.major_version)
 
@@ -138,7 +160,7 @@ def initialize_trial(path: Path=TRIAL_PATH, *, now: datetime | None=None, starte
 def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
     now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
-        doc=json.loads(path.read_text("utf-8"))
+        doc=strict_json_loads(path.read_text("utf-8"))
         if set(doc)!={"schema_version","installation_id","started_at","last_seen_at"} or doc["schema_version"] != 1 or not re.fullmatch(r"[A-Za-z0-9-]{8,80}",doc["installation_id"]): return Entitlement(reason="corrupt_trial_state")
         started,last=_iso(doc["started_at"]),_iso(doc["last_seen_at"])
         if started > now + ROLLBACK_TOLERANCE or now + ROLLBACK_TOLERANCE < last: return Entitlement(reason="clock_rollback",trial_started_at=started.isoformat(),trial_expires_at=(started+timedelta(days=TRIAL_DAYS)).isoformat())
@@ -152,7 +174,7 @@ def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, check
 def peek_current_entitlement(*, now: datetime | None=None) -> Entitlement:
     """Cryptographic entitlement lookup with zero file writes."""
     if LICENSE_PATH.exists():
-        try: return apply_revocation(verify_document(json.loads(LICENSE_PATH.read_text("utf-8")),public_key_path=_public_key_path(),now=now),public_key_path=_public_key_path())
+        try: return apply_revocation(verify_document(strict_json_loads(LICENSE_PATH.read_text("utf-8")),public_key_path=_public_key_path(),now=now),public_key_path=_public_key_path())
         except (OSError,ValueError): return Entitlement(reason="corrupt_license")
     return trial_entitlement(now=now,checkpoint=False)
 

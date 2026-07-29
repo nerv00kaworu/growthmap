@@ -29,7 +29,7 @@ test('license import and extraction-to-trial transitions revalidate authoritativ
 test('production package verifier uses a CRLF fixture and checks actual ASAR/resource boundaries',()=>{
  const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/verify-production-asar.ps1'),'utf8');
  const fixture=JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/fixtures/production-package-layout.json'),'utf8'));
- for(const entry of ['updater.js','update-recovery.js','update-policy.js','managed-backup.js','startup-verdict.js','commercial-config.js','product-identity.json'])assert.ok(fixture.requiredAsarEntries.includes(entry),`missing ASAR contract ${entry}`);
+ for(const entry of ['updater.js','update-recovery.js','update-policy.js','managed-backup.js','startup-verdict.js','commercial-config.js','product-identity.json','revocation-store.js','license-freshness-store.js','strict-json.js'])assert.ok(fixture.requiredAsarEntries.includes(entry),`missing ASAR contract ${entry}`);
  assert.ok(fixture.requiredResourceEntries.includes('commercial-config.json'));
  assert.ok(fixture.asarListLines.some(entry=>entry.startsWith('\\')&&entry.endsWith('\r')));
  assert.ok(fixture.asarListLines.some(entry=>entry.startsWith('/')&&entry.endsWith('\r')));

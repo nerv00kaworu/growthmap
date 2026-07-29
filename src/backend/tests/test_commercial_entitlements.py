@@ -98,3 +98,31 @@ with TestClient(app) as c:
     env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'trial','GROWTHMAP_STARTUP_VERDICT_NONCE':'N'*43,'GROWTHMAP_TRIAL_STATE_FILE':str(trial),'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'get.db'}",'GROWTHMAP_SCHEMA_CURRENT':'1'}
     import hashlib,hmac;env['GROWTHMAP_STARTUP_VERDICT_MAC']=hmac.new(b't',f"growthmap-startup-v1:trial:{'N'*43}".encode(),hashlib.sha256).hexdigest()
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
+
+def test_old_v1_license_bootstraps_without_attacker_timestamp(tmp_path):
+ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+ from cryptography.hazmat.primitives import serialization
+ import base64,json
+ from desktop.entitlements import verify_document
+ key=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+ d={"schema_version":1,"edition":"personal","license_id":"legacy-1","major_version":1,"device_allowance":2,"issued_at":"2000-01-01T00:00:00+00:00","expires_at":None,"revoked_at":None,"max_active_projects":None};d['signature']=base64.b64encode(key.sign(json.dumps(d,sort_keys=True,separators=(',',':')).encode())).decode()
+ v=verify_document(d,pub,now=datetime(2099,1,1,tzinfo=timezone.utc));assert v.valid and v.reason=='legacy_bootstrap'
+
+def test_revocation_assertion_strict_types_canonical_time_and_future(tmp_path):
+ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+ from cryptography.hazmat.primitives import serialization
+ import base64,json,pytest
+ from desktop.entitlements import verify_revocation_assertion,REVOCATION_DOMAIN
+ key=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+ base={"schema_version":1,"assertion_type":"growthmap_license_revocation","product":"growthmap","major_version":1,"license_id":"legacy-1","revoked_at":"2026-01-01T00:00:00.000000Z","sequence":1,"reason_code":None}
+ def signed(**change):
+  d={**base,**change};d['signature']=base64.b64encode(key.sign(REVOCATION_DOMAIN+json.dumps(d,sort_keys=True,separators=(',',':')).encode())).decode();return d
+ now=datetime(2026,1,1,tzinfo=timezone.utc);assert verify_revocation_assertion(signed(),'legacy-1',pub,now=now)
+ for bad in [signed(schema_version=True),signed(major_version=True),signed(revoked_at='2026-01-01T00:00:00+00:00'),signed(revoked_at='2026-01-01T08:00:00+08:00'),signed(revoked_at='2026-01-01T00:06:00.000000Z')]:
+  with pytest.raises(Exception):verify_revocation_assertion(bad,'legacy-1',pub,now=now)
+
+def test_strict_json_rejects_duplicate_and_case_collision():
+ import pytest
+ from desktop.entitlements import strict_json_loads
+ for raw in ['{"product":"evil","product":"growthmap"}','{"license_id":"x","LICENSE_ID":"x"}']:
+  with pytest.raises(ValueError):strict_json_loads(raw)

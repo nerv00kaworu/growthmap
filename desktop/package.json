@@ -46,6 +46,7 @@
       "update-recovery.js",
       "managed-backup.js",
       "trial-store.js",
+      "strict-json.js",
       "revocation-store.js",
       "license-freshness-store.js",
       "startup-policy.js",

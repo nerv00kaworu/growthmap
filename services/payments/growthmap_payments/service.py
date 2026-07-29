@@ -331,6 +331,7 @@ class PaymentService:
  def _revocation(self,license_id,revoked_at,sequence,reason_code):
   if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
   if reason_code not in {None,"refund","chargeback","fraud","terms_violation","administrative"}:raise ValueError("invalid revocation reason")
+  revoked_at=datetime.fromisoformat(revoked_at.replace("Z","+00:00")).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
   d={"schema_version":1,"assertion_type":"growthmap_license_revocation","product":"growthmap","major_version":1,"license_id":license_id,"revoked_at":revoked_at,"sequence":sequence,"reason_code":reason_code}
   payload=json.dumps(d,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();d["signature"]=base64.b64encode(self.config.signing_key.sign(b"growthmap-revocation-v1\0"+payload)).decode();return d
  @_checkpoint_serialized
