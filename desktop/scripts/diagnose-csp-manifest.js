@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -11,8 +12,10 @@ const SHA_RE = /^sha256-[A-Za-z0-9+/]{43}=$/;
 const MAX_FILES = 16;
 const MAX_SCRIPTS = 32;
 const MAX_TUPLES = 24;
-const MAX_FIELD = 160;
-const MAX_LINE = 2048;
+const MAX_FIELDS = 8;
+const MAX_ELEMENTS = 64;
+const MAX_TOKEN = 240;
+const MAX_LINE = 8192;
 
 class DiagnosticError extends Error {}
 function fail(message) { throw new DiagnosticError(message); }
@@ -26,7 +29,7 @@ function parseJson(text, label) {
   return value;
 }
 function safeRelative(value) {
-  return typeof value === 'string' && value.length > 0 && value.length <= 240 && !value.includes('\\') && !value.startsWith('/') && !value.split('/').includes('..') && !/[\u0000-\u001f]/.test(value);
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_TOKEN && !value.includes('\\') && !value.startsWith('/') && !value.split('/').includes('..') && !/[\u0000-\u001f\u007f]/.test(value);
 }
 function decodedForms(value) {
   const forms = [String(value)];
@@ -38,10 +41,51 @@ function decodedForms(value) {
 function containsPrivatePath(value) {
   return decodedForms(value).some((item) => /(?:file:\/{2,}|(?:^|[\s"'])\/{1,2}(?:home|users|tmp|private|runner|github\/workspace)(?:\/|$)|(?:^|[\s"'])[a-z]:\/(?:users|runner|actions|workspace|home|tmp)(?:\/|$)|\/home\/runner\/work\/|\/__w\/)/i.test(item));
 }
-function bounded(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
+function digest(value) { return crypto.createHash('sha256').update(value, 'utf8').digest('hex'); }
+function scalarText(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return JSON.stringify(value);
+  if (Array.isArray(value)) return JSON.stringify(value);
+  fail('unsupported non-scalar RSC tuple field');
+}
+function scalarType(value) { return value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value; }
+function safeChunkLiteral(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_TOKEN || /[\u0000-\u001f\u007f\\]/.test(value) || containsPrivatePath(value)) return false;
+  if (/%(?:25)*2[ef]|%(?:25)*5c|file:/i.test(value)) return false;
+  if (/^[0-9a-f]+$/i.test(value)) return true;
+  if (/^static\/chunks\/(?!.*(?:^|\/)\.\.?\/(?:|$))[A-Za-z0-9._~@+/-]+\.js$/.test(value)) return true;
+  return /^[A-Za-z0-9][A-Za-z0-9._~@+-]*$/.test(value);
+}
+function elementMetadata(value, index) {
+  const text = scalarText(value);
+  if (text.length > MAX_TOKEN) fail('chunk-list element exceeds diagnostic bound');
+  if (/[\u0000-\u001f\u007f]/.test(text)) fail('control character in chunk-list element');
+  const unsafePath = decodedForms(text).some((item) => /^(?:file:|\.{1,2}[\\/]|[\\/]|[a-z]:[\\/])/i.test(item));
+  if (containsPrivatePath(text) || text.includes('\\') || unsafePath) fail('unsafe path in chunk-list element');
+  const result = { index, type: scalarType(value), bytes: Buffer.byteLength(text, 'utf8'), chars: text.length, sha256: digest(text) };
+  if (safeChunkLiteral(value)) result.value = value;
+  return result;
+}
+function strictArrayMetadata(text) {
+  let value;
+  try { value = JSON.parse(text); } catch { fail('malformed JSON-array RSC tuple field'); }
+  if (!Array.isArray(value)) fail('unsupported JSON RSC tuple field');
+  if (value.length > MAX_ELEMENTS) fail('chunk-list element count exceeds diagnostic bound');
+  return value.map((item, index) => {
+    if (item !== null && typeof item === 'object') fail('nested chunk-list value is unsupported');
+    return elementMetadata(item, index);
+  });
+}
+function fieldMetadata(value, index) {
+  const text = scalarText(value);
+  if (/[\u0000-\u001f\u007f]/.test(text)) fail('control character in RSC tuple field');
   if (containsPrivatePath(text)) fail('private absolute path detected');
-  return text.length <= MAX_FIELD ? text : `${text.slice(0, MAX_FIELD - 12)}…[truncated]`;
+  const result = { index, type: scalarType(value), bytes: Buffer.byteLength(text, 'utf8'), chars: text.length, sha256: digest(text) };
+  if (Array.isArray(value)) result.elements = strictArrayMetadata(text);
+  else if (typeof value === 'string' && value.trimStart().startsWith('[')) result.elements = strictArrayMetadata(value);
+  else if (typeof value === 'string' && value.length <= MAX_TOKEN && !value.includes('\\')) result.value = value;
+  else if (typeof value !== 'string') result.value = value;
+  return result;
 }
 function inlineScripts(html) {
   const scripts = [];
@@ -62,9 +106,10 @@ function decodeJsStrings(script) {
 }
 function balancedTuples(text) {
   const tuples = [];
-  for (let cursor = 0; cursor < text.length && tuples.length < MAX_TUPLES;) {
+  for (let cursor = 0; cursor < text.length;) {
     const marker = text.indexOf('I[', cursor);
     if (marker < 0) break;
+    if (tuples.length >= MAX_TUPLES) fail('RSC tuple count exceeds diagnostic bound');
     let depth = 1; let quote = false; let escaped = false; let end = -1;
     for (let i = marker + 2; i < text.length && i - marker <= 4096; i += 1) {
       const char = text[i];
@@ -76,8 +121,8 @@ function balancedTuples(text) {
     if (end < 0) fail('malformed RSC client-reference tuple');
     let tuple;
     try { tuple = JSON.parse(`[${text.slice(marker + 2, end)}]`); } catch { fail('malformed RSC client-reference tuple'); }
-    if (!Array.isArray(tuple) || tuple.length < 1 || tuple.length > 8) fail('unsupported RSC client-reference tuple');
-    tuples.push(tuple.map((field) => bounded(field)));
+    if (!Array.isArray(tuple) || tuple.length < 1 || tuple.length > MAX_FIELDS) fail('unsupported RSC client-reference tuple');
+    tuples.push(tuple.map((field, index) => fieldMetadata(field, index)));
     cursor = end + 1;
   }
   return tuples;
@@ -108,13 +153,18 @@ function compare(tracked, generated, outDirectory) {
   }
   return records;
 }
+function outputLine(value, output) {
+  const line = JSON.stringify(value);
+  if (Buffer.byteLength(line, 'utf8') > MAX_LINE) fail('diagnostic line exceeds output bound');
+  output(line);
+}
 function emit(records, output = console.log) {
   if (!records.length) return;
-  output(JSON.stringify({ type: 'csp-diagnostic', version: 1, changedScripts: records.length }));
+  outputLine({ type: 'csp-diagnostic', version: 2, changedScripts: records.length }, output);
   for (const record of records) {
-    const line = JSON.stringify(record);
-    if (line.length > MAX_LINE) fail('diagnostic line exceeds output bound');
-    output(line);
+    const { rscI, ...script } = record;
+    outputLine({ type: 'csp-script', ...script, tuples: rscI.length }, output);
+    rscI.forEach((fields, tupleIndex) => outputLine({ type: 'rsc-tuple', file: record.file, scriptIndex: record.scriptIndex, tupleIndex, fields }, output));
   }
 }
 function args(argv) {
@@ -140,4 +190,4 @@ function main(argv = process.argv.slice(2), output = console.log) {
 if (require.main === module) {
   try { main(); } catch (error) { console.error(`CSP diagnostic refused output: ${error instanceof DiagnosticError ? error.message : 'unexpected input or I/O failure'}`); process.exitCode = 2; }
 }
-module.exports = { DiagnosticError, balancedTuples, compare, containsPrivatePath, emit, inlineScripts, main, parseJson };
+module.exports = { DiagnosticError, balancedTuples, compare, containsPrivatePath, emit, fieldMetadata, inlineScripts, main, parseJson, safeChunkLiteral, strictArrayMetadata };
