@@ -30,7 +30,11 @@ function Assert-NoProductionTestEntries {
     if ($normalized -match '(?i)(^|/|[-_])e2e([/_-]|$)' -or $normalized -match '(?i)(^|/)(tests?|test[-_]?helpers?)(/|$)') {
       throw "Production $Location contains a test path: $normalized"
     }
-    if ($normalized -match '(?i)\.py[co]?$' -or $normalized -match '(?i)\.(pem|key|p12|pfx|sqlite|sqlite3|db)(-|$|\.)' -or $normalized -match '(?i)(^|/)migrations?(/|$)') {
+    $isApprovedPublicKey = $normalized -ceq 'commercial/license_public_key.pem'
+    if ($normalized -match '(?i)\.py[co]?$' -or
+        ((-not $isApprovedPublicKey) -and $normalized -match '(?i)\.pem(-|$|\.)') -or
+        $normalized -match '(?i)\.(key|p12|pfx|sqlite|sqlite3|db)(-|$|\.)' -or
+        $normalized -match '(?i)(^|/)migrations?(/|$)') {
       throw "Production $Location contains a forbidden server/key/database artifact: $normalized"
     }
   }
