@@ -152,14 +152,21 @@ function Assert-ThirdPartyInventory {
         $prunableManifestFields=@('bugs','contributors','eslintConfig','keywords','scripts','xo')
         foreach ($candidate in $candidates) {
           $sourceManifest=Get-Content (Join-Path $candidate 'package.json') -Raw|ConvertFrom-Json -Depth 100
+          # PSCustomObject property indexers are case-insensitive, but JSON and
+          # Node package fields are case-sensitive. Build ordinal dictionaries so
+          # replacing main with MAIN cannot redirect resolution while appearing equal.
+          $sourceProperties=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+          $packagedProperties=[Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+          foreach ($property in $sourceManifest.psobject.Properties) { if (-not $sourceProperties.TryAdd($property.Name,$property.Value)) { throw "Duplicate exact package.json key: $($property.Name)" } }
+          foreach ($property in $packagedIdentity.psobject.Properties) { if (-not $packagedProperties.TryAdd($property.Name,$property.Value)) { throw "Duplicate exact packaged package.json key: $($property.Name)" } }
           $valid=$true
-          foreach ($property in $packagedIdentity.psobject.Properties) {
-            if (-not $sourceManifest.psobject.Properties[$property.Name] -or
-                ($property.Value|ConvertTo-Json -Depth 100 -Compress) -cne ($sourceManifest.psobject.Properties[$property.Name].Value|ConvertTo-Json -Depth 100 -Compress)) { $valid=$false;break }
+          foreach ($property in $packagedProperties.GetEnumerator()) {
+            if (-not $sourceProperties.ContainsKey($property.Key) -or
+                ($property.Value|ConvertTo-Json -Depth 100 -Compress) -cne ($sourceProperties[$property.Key]|ConvertTo-Json -Depth 100 -Compress)) { $valid=$false;break }
           }
           if ($valid) {
-            foreach ($sourceProperty in $sourceManifest.psobject.Properties) {
-              if (-not $packagedIdentity.psobject.Properties[$sourceProperty.Name] -and $prunableManifestFields -cnotcontains $sourceProperty.Name) { $valid=$false;break }
+            foreach ($sourceProperty in $sourceProperties.GetEnumerator()) {
+              if (-not $packagedProperties.ContainsKey($sourceProperty.Key) -and $prunableManifestFields -cnotcontains $sourceProperty.Key) { $valid=$false;break }
             }
           }
           if ($valid) { $matched=$true;break }
@@ -241,8 +248,8 @@ function Invoke-ProductionPackageLayoutSelfTest {
     $installed = Join-Path $contentRoot 'node_modules';$extracted = Join-Path $contentRoot 'extracted'
     New-Item -ItemType Directory (Join-Path $installed 'safe-package') -Force | Out-Null
     New-Item -ItemType Directory (Join-Path $extracted 'node_modules/safe-package') -Force | Out-Null
-    $safeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js","scripts":{"test":"dev-only"}}'
-    $prunedSafeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js"}'
+    $safeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js","bin":"index.js","scripts":{"test":"dev-only"}}'
+    $prunedSafeManifest='{"name":"safe-package","version":"1.0.0","main":"index.js","type":"commonjs","exports":"./index.js","bin":"index.js"}'
     [IO.File]::WriteAllText((Join-Path $installed 'safe-package/package.json'),$safeManifest)
     [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$prunedSafeManifest)
     [IO.File]::WriteAllText((Join-Path $installed 'safe-package/index.js'),'module.exports=1')
@@ -254,11 +261,21 @@ function Invoke-ProductionPackageLayoutSelfTest {
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Third-party inventory accepted a hidden node_modules payload' }
     catch { if ($_.Exception.Message -notmatch 'absent or byte-different from same-identity frozen inventory') { throw } }
     [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/index.js'),'module.exports=1')
-    foreach ($requiredField in @('main','exports','type')) {
+    foreach ($requiredField in @('main','exports','type','bin')) {
       $manifest=Get-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Raw|ConvertFrom-Json -Depth 100
       $manifest.psobject.Properties.Remove($requiredField)
       $manifest|ConvertTo-Json -Depth 100 -Compress|Set-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Encoding utf8NoBOM
       try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw "Inventory accepted removal of runtime package field: $requiredField" }
+      catch { if ($_.Exception.Message -notmatch 'removes runtime-semantic frozen metadata') { throw } }
+      [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$prunedSafeManifest)
+    }
+    foreach ($caseVariant in @(@{Exact='main';Variant='MAIN'},@{Exact='exports';Variant='EXPORTS'},@{Exact='type';Variant='TYPE'},@{Exact='bin';Variant='BIN'})) {
+      $manifest=Get-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Raw|ConvertFrom-Json -Depth 100
+      $value=$manifest.psobject.Properties[$caseVariant.Exact].Value
+      $manifest.psobject.Properties.Remove($caseVariant.Exact)
+      $manifest|Add-Member -NotePropertyName $caseVariant.Variant -NotePropertyValue $value
+      $manifest|ConvertTo-Json -Depth 100 -Compress|Set-Content (Join-Path $extracted 'node_modules/safe-package/package.json') -Encoding utf8NoBOM
+      try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw "Inventory accepted case-renamed runtime package field: $($caseVariant.Exact)" }
       catch { if ($_.Exception.Message -notmatch 'removes runtime-semantic frozen metadata') { throw } }
       [IO.File]::WriteAllText((Join-Path $extracted 'node_modules/safe-package/package.json'),$prunedSafeManifest)
     }
