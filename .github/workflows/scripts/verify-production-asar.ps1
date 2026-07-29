@@ -103,7 +103,9 @@ function Assert-ThirdPartyInventory {
   }
   $rootDeps=@{};foreach ($kind in @('dependencies','optionalDependencies')) { foreach ($p in $rootPackage.$kind.psobject.Properties) {$rootDeps[$p.Name]=[string]$p.Value} }
   $lockRootDeps=@{};foreach ($kind in @('dependencies','optionalDependencies')) { if ($lock['packages'][''].ContainsKey($kind)) { foreach ($p in $lock['packages'][''][$kind].GetEnumerator()) {$lockRootDeps[[string]$p.Key]=[string]$p.Value} } }
-  if (($rootDeps.Keys|Sort-Object) -join "`n" -cne ($lockRootDeps.Keys|Sort-Object) -join "`n") { throw 'desktop package.json dependencies differ from package-lock root entry' }
+  $rootDependencyNames = (($rootDeps.Keys | Sort-Object) -join "`n")
+  $lockRootDependencyNames = (($lockRootDeps.Keys | Sort-Object) -join "`n")
+  if ($rootDependencyNames -cne $lockRootDependencyNames) { throw 'desktop package.json dependencies differ from package-lock root entry' }
   foreach ($name in $rootDeps.Keys) { if ($rootDeps[$name] -cne $lockRootDeps[$name] -or -not $allowed.ContainsKey($name)) { throw "Root dependency is not identically represented in lock: $name" } }
   function Get-PackageRoots([string]$Root) {
     if (-not (Test-Path $Root -PathType Container)) { return @() }

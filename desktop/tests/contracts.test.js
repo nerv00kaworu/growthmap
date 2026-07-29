@@ -72,6 +72,8 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.match(verifier, /param\(\[switch\]\$SelfTestOnly,\[string\]\$ProvenancePath,\[string\]\$ProvenanceSha256\)/)
   assert.match(verifier, /ConvertFrom-Json -Depth 100 -AsHashtable/)
   assert.match(verifier, /\$lock\['packages'\]\[''\]/)
+  assert.match(verifier, /\$rootDependencyNames = \(\(\$rootDeps\.Keys \| Sort-Object\) -join "`n"\)/)
+  assert.match(verifier, /\$lockRootDependencyNames = \(\(\$lockRootDeps\.Keys \| Sort-Object\) -join "`n"\)/)
   assert.doesNotMatch(verifier, /\$lock\.packages/)
   assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
