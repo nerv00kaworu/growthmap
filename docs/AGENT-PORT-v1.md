@@ -24,11 +24,11 @@ Permission ordering: read < propose < write. Node scope is exact-node; branch sc
 - `POST /events` — propose/write grant; started/progress/blocked/completed/failed.
 - `POST /readbacks` — propose/write grant; target, summary, commit refs, files, tests, decisions, risks, todos, evidence.
 
-Batch operations are typed commands, never arbitrary patches: `create_node`, `update_node`, `create_edge`, `create_content_block`, `create_branch`. `update_node` also requires `expected_revision`. All shapes, permissions, revisions and scope references are validated before one transaction commits. Exact retry with the same idempotency key/payload returns the same receipt. Changed payload returns 409 `IDEMPOTENCY_MISMATCH`. Stale revisions return 409 `REVISION_CONFLICT`; nothing is applied.
+Batch operations are typed commands, never arbitrary patches: `create_node`, `update_node`, `create_edge`, `create_content_block`, `create_branch`. `update_node` requires `expected_revision`; creates require CAS for every existing canonical input: `expected_parent_revision`, endpoint `expected_from_revision`/`expected_to_revision`, `expected_node_revision`, and `expected_source_revision`. All shapes, permissions, revisions and scope references are validated before one transaction commits. Exact retry with the same idempotency key/payload returns the same receipt. Changed payload returns 409 `IDEMPOTENCY_MISMATCH`. Stale revisions return 409 `REVISION_CONFLICT`; nothing is applied.
 
 ## Error contract
 
-JSON `detail` carries stable `code` values: `AUTH_REQUIRED`, `INVALID_TOKEN`, `GRANT_INACTIVE`, `LOCALHOST_ONLY`, `PERMISSION_DENIED`, `SCOPE_DENIED`, `REVISION_CONFLICT`, `IDEMPOTENCY_MISMATCH`, `RATE_LIMITED`. Validation is 422; missing resources 404. Clients must refresh after revision conflict.
+JSON `detail` carries stable `code` values (including non-leaking `CANONICAL_WRITE_CONFLICT` for malformed writes; only a durable matching receipt is treated as a genuine same-key race): `AUTH_REQUIRED`, `INVALID_TOKEN`, `GRANT_INACTIVE`, `LOCALHOST_ONLY`, `PERMISSION_DENIED`, `SCOPE_DENIED`, `REVISION_CONFLICT`, `IDEMPOTENCY_MISMATCH`, `RATE_LIMITED`. Validation is 422; missing resources 404. Clients must refresh after revision conflict.
 
 ## Thin clients
 
@@ -64,8 +64,8 @@ CLI and MCP accept only explicit-port plain HTTP at exact `localhost`, `127.0.0.
 | branch create | no existing canonical entity is intended to change; copied nodes/blocks/edges and branch are rev1 | project CAS only; source is read input | [`api/routes.py:create_branch`](../src/backend/api/routes.py) |
 | branch merge | source branch becomes merged; every existing branch node is cleared/reassigned; target node gains child relationship; old branch-root relationship Edge deleted, new Edge rev1 | branch `expected_revision`; target `expected_target_revision` | [`api/routes.py:merge_branch`](../src/backend/api/routes.py) |
 | artifact approve | target node always (update, new child relationship, or new block ownership); created child/edge/block rev1 | `expected_node_revision` | [`api/routes.py:approve_agent_artifact`](../src/backend/api/routes.py) |
-| Agent proposal approve | union of each operation: update-node targets; create-node parents; content-block owner nodes; create-edge mainline siblings if applicable; created rows rev1; proposal terminal state and receipt commit atomically | project CAS plus every operation entity CAS exposed by operation schema | [`agent_port/routes.py:review`](../src/backend/agent_port/routes.py), [`agent_port/service.py:apply_batch`](../src/backend/agent_port/service.py) |
-| Agent batch | same operation union as proposal approval, deduplicated transaction-locally | project CAS and operation CAS | [`agent_port/service.py`](../src/backend/agent_port/service.py) |
+| Agent proposal approve | union of each operation: update-node targets; create-node parents; content-block owner nodes; create-edge endpoints; created rows rev1; branch source is CAS-validated read input and deliberately not bumped; proposal terminal state and receipt commit atomically | project CAS plus every existing operation owner/input CAS exposed by operation schema | [`agent_port/routes.py:review`](../src/backend/agent_port/routes.py), [`agent_port/service.py:apply_batch`](../src/backend/agent_port/service.py) |
+| Agent batch | same operation union as proposal approval, deduplicated transaction-locally; existing parent/owner/edge endpoints bump once, new rows remain rev1; branch source is derived-from read input and does not bump | project CAS and operation CAS | [`agent_port/service.py`](../src/backend/agent_port/service.py) |
 
 Focused audit progress and unresolved gaps are recorded in [`docs/R4-BLOCKERS-3-5-PROGRESS.md`](R4-BLOCKERS-3-5-PROGRESS.md); this table is an audit, not a claim that every listed gap is closed.
 

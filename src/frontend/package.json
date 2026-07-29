@@ -7,8 +7,9 @@
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit --pretty false",
     "test": "tsx --test src/**/*.test.ts",
-    "build": "next build",
-    "start": "next start --port 3100"
+    "build": "next build && node ../../desktop/scripts/generate-csp-manifest.js",
+    "start": "next start --port 3100",
+    "test:deterministic-build": "node ../../desktop/scripts/test-deterministic-frontend-build.js"
   },
   "dependencies": {
     "@xyflow/react": "^12.6.0",

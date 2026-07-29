@@ -20,8 +20,8 @@ jobs:
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
-      - run: node scripts/generate-csp-manifest.js
-        working-directory: desktop
+      - name: Tracked CSP manifest must already match the fresh deterministic build
+        run: git diff --exit-code -- desktop/generated/csp-script-hashes.json
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
       - run: npm ci

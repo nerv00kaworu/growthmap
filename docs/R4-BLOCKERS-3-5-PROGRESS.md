@@ -49,3 +49,11 @@ This is only narrow remediation evidence: an **entirely new detached full blocke
 ## Blocker 7 second detached gate completion
 
 The mandatory entirely fresh second gate completed all Linux-applicable checks: backend 79/79, frontend 9/9, desktop 96/96, all with zero skips; Python and both npm audits reported zero vulnerabilities; post-build deterministic CSP verification passed and its sole changed generated manifest was synced. Exact materialization hashes, commands, logs, and Windows-only production provenance/ASAR/package limits are recorded in `docs/R4-BLOCKER-7-RELEASE-GATE.md`. Status: **R4 Linux detached gate PASS / ready to form a candidate commit for fresh independent Jian review**. No commit or push.
+
+## Fresh-review remediation follow-up — 2026-07-29
+
+Jian's fresh review at `62f5796` found H1 union-wide Agent owner CAS and H2 fresh-build CSP blockers. Remediation is underway on the preserved isolated worktree. Status is **PENDING A NEW FULL DETACHED GATE AND NEW FRESH JIAN REVIEW**; do not interpret prior PASS wording as applying to this new source state. No commit, push, merge, master/live mutation, package publication, or deployment has occurred.
+
+## Third fresh detached gate after Jian H1/H2 remediation
+
+The wholly new Linux detached gate at `/tmp/zhu-growthmap-r4-gate3-1785325381-974984` completed with backend **85/85**, frontend **9/9**, and desktop **96/96**, all with zero skips; Python and both npm production/full audits were clean; three-build cross-path deterministic CSP verification matched tracked manifest SHA-256 `44adadee693cbe570a6d3d637cebaebf6646478964d94a0835eeefe337d26b1c`. Exact provenance, caveats, and Windows-only platform blocks are in `docs/R4-BLOCKER-7-RELEASE-GATE.md`. Status: **R4 Linux detached gate PASS after fresh-review remediation / ready to form a new candidate commit for another fresh Jian review**. No commit or push.

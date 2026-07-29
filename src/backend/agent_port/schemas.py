@@ -1,7 +1,7 @@
 """Strict, bounded Agent Port v1 wire schemas."""
 from typing import Annotated, Any, Literal, Union
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
 Id = Annotated[str, Field(min_length=36, max_length=36, pattern=r"^[0-9a-fA-F-]{36}$")]
 Short = Annotated[str, Field(max_length=500)]
@@ -26,22 +26,33 @@ class NodeFields(Strict):
 
 class CreateNode(Strict):
     op: Literal["create_node"]
-    id: Id|None=None; parent_id: Id|None=None; branch_id: Id|None=None
+    id: Id|None=None; parent_id: Id|None=None
+    expected_parent_revision: Annotated[int,Field(ge=1)]|None=None
+    branch_id: Id|None=None
+    @model_validator(mode="after")
+    def parent_cas(self):
+        if bool(self.parent_id) != bool(self.expected_parent_revision):
+            raise ValueError("parent_id and expected_parent_revision must be supplied together")
+        return self
     title: Annotated[str,Field(min_length=1,max_length=500)]
     summary: Short=""; node_type: Literal["idea","concept","task","question","decision","risk","resource","note","module","spec"]="idea"
 class UpdateNode(Strict):
     op: Literal["update_node"]; node_id: Id; expected_revision: Annotated[int,Field(ge=1)]; fields: NodeFields
 class CreateEdge(Strict):
     op: Literal["create_edge"]; id: Id|None=None; from_node_id: Id; to_node_id: Id
+    expected_from_revision: Annotated[int,Field(ge=1)]
+    expected_to_revision: Annotated[int,Field(ge=1)]
     relation_type: Literal["child_of","extends","depends_on","supports","alternative_to","refines","references","conflicts_with"]="child_of"
     weight: Annotated[float,Field(ge=-1000,le=1000)]=1.0; note: Short=""
 class CreateBlock(Strict):
     op: Literal["create_content_block"]; id: Id|None=None; node_id: Id
+    expected_node_revision: Annotated[int,Field(ge=1)]
     block_type: Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"]="paragraph"
     content: dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=16384)]]=Field(default_factory=dict,max_length=100)
     order_index: Annotated[int,Field(ge=0,le=100000)]=0
 class CreateBranch(Strict):
     op: Literal["create_branch"]; id: Id|None=None; source_node_id: Id
+    expected_source_revision: Annotated[int,Field(ge=1)]
     name: Annotated[str,Field(min_length=1,max_length=255)]; description: Annotated[str,Field(max_length=4000)]=""
 
 Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,CreateBranch],Field(discriminator="op")]

@@ -2,7 +2,7 @@
 import asyncio,hashlib,hmac,json,threading,uuid
 from datetime import datetime,timezone
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select,update
 from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 
@@ -19,8 +19,7 @@ def idempotency_lock(grant_id: str, key: str) -> threading.Lock:
 def digest(v): return hashlib.sha256(canonical(v).encode()).hexdigest()
 def conflict(msg,**extra): raise HTTPException(409,{"code":"REVISION_CONFLICT","message":msg,**extra})
 
-def bump(project,entities=()):
-    project.revision=(project.revision or 1)+1;project.updated_at=datetime.now(timezone.utc)
+def bump(entities=()):
     # Existing entities change once per transaction. New entities remain revision 1.
     seen=set()
     for e in entities:
@@ -76,6 +75,10 @@ async def validate_operations(db,grant,operations):
         if nid in new_nodes:return new_nodes[nid]
         raise HTTPException(422,{"code":"INVALID_REFERENCE","message":"Node reference does not exist in project"})
     def node_branch(n):return n.branch_id if isinstance(n,Node) else n.get("branch_id")
+    def check_ref_revision(n, expected, field):
+        current=n.revision if isinstance(n,Node) else 1
+        if expected!=current:
+            conflict("Entity revision is stale",entity_id=n.id if isinstance(n,Node) else n["id"],expected=expected,current=current,field=field)
     for op in normalized:
         kind=op["op"]
         refs=[]
@@ -85,6 +88,7 @@ async def validate_operations(db,grant,operations):
             if (grant.node_scope_id or grant.branch_root_id) and not parent:raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Scoped create_node requires an in-scope parent"})
             if parent:
                 pn=node_ref(parent);refs.append(parent)
+                check_ref_revision(pn,op["expected_parent_revision"],"expected_parent_revision")
                 inherited=node_branch(pn)
                 if op.get("branch_id") is None and inherited:op["branch_id"]=inherited
                 elif inherited and op.get("branch_id")!=inherited:raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Child must inherit parent branch"})
@@ -104,10 +108,15 @@ async def validate_operations(db,grant,operations):
             if not op["fields"]:raise HTTPException(422,"update_node fields cannot be empty")
         elif kind=="create_edge":
             a=node_ref(op["from_node_id"]);b=node_ref(op["to_node_id"]);refs += [op["from_node_id"],op["to_node_id"]]
+            check_ref_revision(a,op["expected_from_revision"],"expected_from_revision")
+            check_ref_revision(b,op["expected_to_revision"],"expected_to_revision")
             if op["relation_type"]=="child_of" and node_branch(a)!=node_branch(b):raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Containment endpoints must share branch"})
-        elif kind=="create_content_block":node_ref(op["node_id"]);refs.append(op["node_id"])
+        elif kind=="create_content_block":
+            n=node_ref(op["node_id"]);refs.append(op["node_id"])
+            check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
         elif kind=="create_branch":
-            node_ref(op["source_node_id"]);refs.append(op["source_node_id"])
+            n=node_ref(op["source_node_id"]);refs.append(op["source_node_id"])
+            check_ref_revision(n,op["expected_source_revision"],"expected_source_revision")
             if grant.node_scope_id:raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Node scope cannot create branches"})
         if any(r not in allowed for r in refs):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Every operation reference must be in scope"})
     return normalized
@@ -122,24 +131,63 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     if not project:raise HTTPException(404,"Project not found")
     if body["expected_project_revision"]!=project.revision:conflict("Project revision is stale",expected=body["expected_project_revision"],current=project.revision)
     ops=await validate_operations(db,grant,body["operations"]);results=[];existing_touched=[]
+    # A single expected revision per existing entity governs the whole pre-batch
+    # snapshot. Reject contradictory values rather than depending on op order.
+    expectations={}
+    def remember(entity_id,expected,field):
+        prior=expectations.setdefault(entity_id,expected)
+        if prior!=expected: conflict("Conflicting entity revisions in atomic batch",entity_id=entity_id,expected=expected,current=prior,field=field)
+    for op in ops:
+        kind=op["op"]
+        if kind=="update_node": remember(op["node_id"],op["expected_revision"],"expected_revision")
+        elif kind=="create_node" and op.get("parent_id"): remember(op["parent_id"],op["expected_parent_revision"],"expected_parent_revision")
+        elif kind=="create_edge":
+            remember(op["from_node_id"],op["expected_from_revision"],"expected_from_revision")
+            remember(op["to_node_id"],op["expected_to_revision"],"expected_to_revision")
+        elif kind=="create_content_block": remember(op["node_id"],op["expected_node_revision"],"expected_node_revision")
+        elif kind=="create_branch": remember(op["source_node_id"],op["expected_source_revision"],"expected_source_revision")
+    # Claim the shared Project CAS atomically after all schema/reference/entity
+    # validation and before any canonical insert/update. This closes true
+    # separate-session GUI/Agent and Agent/Agent races.
+    now=datetime.now(timezone.utc)
+    claim=await db.execute(update(Project).where(Project.id==project_id,Project.revision==body["expected_project_revision"]).values(revision=body["expected_project_revision"]+1,updated_at=now))
+    if claim.rowcount!=1:
+        await db.rollback()
+        current=await db.get(Project,project_id)
+        conflict("Project revision is stale",expected=body["expected_project_revision"],current=current.revision if current else None)
+    project.revision=body["expected_project_revision"]+1;project.updated_at=now
+    # Snapshot which node references predate this atomic batch. References to
+    # intra-batch creates use expected revision 1 but never double-bump the new row.
+    existing_node_ids=set((await db.execute(select(Node.id).where(Node.project_id==project_id))).scalars())
+    touched_node_ids=set()
+    for op in ops:
+        kind=op["op"]
+        if kind=="update_node": touched_node_ids.add(op["node_id"])
+        elif kind=="create_node" and op.get("parent_id"): touched_node_ids.add(op["parent_id"])
+        elif kind=="create_edge": touched_node_ids.update((op["from_node_id"],op["to_node_id"]))
+        elif kind=="create_content_block": touched_node_ids.add(op["node_id"])
+    touched_node_ids &= existing_node_ids
+    if touched_node_ids:
+        existing_touched=(await db.execute(select(Node).where(Node.id.in_(touched_node_ids)))).scalars().all()
     for op in ops:
         kind=op["op"]
         if kind=="create_node":
             n=Node(id=op["id"],project_id=project.id,title=op["title"].strip(),summary=op.get("summary",""),node_type=op.get("node_type","idea"),branch_id=op.get("branch_id"),created_by=actor or grant.agent_identity,last_edited_by=actor or grant.agent_identity,revision=1);db.add(n)
+            await db.flush()
             if op.get("parent_id"):db.add(Edge(project_id=project.id,from_node_id=op["parent_id"],to_node_id=n.id,relation_type="child_of",is_mainline=False,revision=1))
             results.append({"op":kind,"id":n.id,"revision":1})
         elif kind=="update_node":
             n=await db.get(Node,op["node_id"])
             for k,v in op["fields"].items():
                 if v is not None:setattr(n,k,v)
-            n.last_edited_by=actor or grant.agent_identity;existing_touched.append(n);results.append({"op":kind,"id":n.id,"revision":n.revision+1})
+            n.last_edited_by=actor or grant.agent_identity;results.append({"op":kind,"id":n.id,"revision":n.revision+1})
         elif kind=="create_edge":
             e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);results.append({"op":kind,"id":e.id,"revision":1})
         elif kind=="create_content_block":
             b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
         else:
             b=Branch(id=op["id"],project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
-    bump(project,existing_touched)
+    bump(existing_touched)
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))
@@ -152,7 +200,10 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
         prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant_id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
         if prior and hmac.compare_digest(prior.request_digest,req_digest):return prior.response
         if prior:raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key payload mismatch"})
-        raise HTTPException(409,{"code":"IDEMPOTENCY_IN_PROGRESS","message":"Concurrent request in progress; retry"})
+        # A winner proves a genuine same-key race and is recovered above. Other
+        # integrity/operational failures are canonical write conflicts, not
+        # idempotency races; keep the response stable without leaking DB detail.
+        raise HTTPException(409,{"code":"CANONICAL_WRITE_CONFLICT","message":"Atomic canonical write could not be applied"})
     return response
 
 async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
