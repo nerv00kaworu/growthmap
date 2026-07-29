@@ -27,6 +27,9 @@ export interface GNode {
   created_at: string;
   updated_at: string;
   revision: number;
+  authoritative_project_revision?: number;
+  authoritative_parent_id?: string | null;
+  authoritative_parent_revision?: number | null;
   ancestor_path?: LineageNode[];
   children?: GNode[];
   is_mainline?: boolean;

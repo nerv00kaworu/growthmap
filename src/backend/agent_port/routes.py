@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.database import get_db
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentGrant,AgentProposal,AgentEvent,AgentReadback
-from agent_port.service import apply_batch,allowed_nodes,canonical,digest,validate_scope,validate_operations
+from agent_port.service import apply_batch,allowed_nodes,canonical,digest,idempotency_lock,validate_scope,validate_operations
 from agent_port.schemas import Batch,ProposalIn,EventIn,ReadbackIn,ReviewIn
 
 router=APIRouter(); _hits=defaultdict(deque)
@@ -18,7 +18,7 @@ async def human_control(request:Request,authorization:str|None=Header(None)):
     # Separate human capability. Desktop uses its per-launch token; authoring mode
     # must explicitly provision a local session token or the plane fails closed.
     token=os.getenv("GROWTHMAP_SESSION_TOKEN") or os.getenv("GROWTHMAP_HUMAN_CONTROL_TOKEN")
-    if not token: raise HTTPException(503,{"code":"HUMAN_CONTROL_DISABLED","message":"Human control session is not initialized"})
+    if not token: raise HTTPException(403,{"code":"HUMAN_CONTROL_DISABLED","message":"Human control session is not initialized"})
     if not authorization or not hmac.compare_digest(authorization,f"Bearer {token}"): raise HTTPException(401,{"code":"HUMAN_AUTH_REQUIRED","message":"Human session capability required"})
     origin=request.headers.get("origin")
     if origin and origin.rstrip("/") not in {"http://127.0.0.1:3000","http://localhost:3000",str(request.base_url).rstrip("/")}: raise HTTPException(403,{"code":"ORIGIN_DENIED","message":"Untrusted browser origin"})
@@ -96,16 +96,36 @@ async def context(target_id:str,objective:str="",grant=Depends(auth),db:AsyncSes
     while cur in parents and parents[cur] in by: cur=parents[cur];ancestors.append(by[cur])
     children=[by[e["to_node_id"]] for e in graph["edges"] if e["from_node_id"]==target_id and e["to_node_id"] in by][:500]
     relevant=[n for n in graph["nodes"] if n["id"]!=target_id and (n["node_type"] in {"decision","risk"} or n["constraints_text"] or n["decision_notes"])][:200]
-    p=await db.get(Project,grant.project_id); snapshot={"project_revision":p.revision,"target_revision":target.revision,"target":by[target_id],"ancestors":ancestors,"children":children,"relevant":relevant,"relations":graph["edges"]}
-    return {"objective":objective[:2000],**snapshot,"snapshot_digest":digest(snapshot)}
+    p=await db.get(Project,grant.project_id)
+    # Digest exactly the complete canonical packet consumed by the agent. No
+    # volatile timestamps or transport fields are excluded implicitly.
+    packet={"objective":objective[:2000],"project":{"id":p.id,"name":p.name,"description":p.description,
+            "goal":p.goal,"status":p.status,"revision":p.revision},"target_revision":target.revision,
+            "target":by[target_id],"ancestors":ancestors,"children":children,"relevant":relevant,
+            "relations":graph["edges"][:2000]}
+    return {**packet,"snapshot_digest":digest(packet)}
 
 async def store_once(db,grant,key,payload,kind,create):
+    import asyncio
     from models.models import AgentReceipt
-    req=digest(payload); prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant.id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
-    if prior:
-        if not hmac.compare_digest(prior.request_digest,req): raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key payload mismatch"})
-        return prior.response
-    response=await create(); db.add(AgentReceipt(grant_id=grant.id,project_id=grant.project_id,idempotency_key=key,request_digest=req,action_type=kind,status="recorded",response=response));await db.commit();return response
+    # Snapshot primitives before expire/commit/rollback; ORM instances are
+    # expired by those lifecycle operations and attribute access may otherwise
+    # attempt async IO outside SQLAlchemy's greenlet context.
+    grant_id, project_id = grant.id, grant.project_id
+    req=digest(payload); lock=idempotency_lock(grant_id,key)
+    await asyncio.to_thread(lock.acquire)
+    try:
+        # Query the winner's durable receipt using only snapshotted primitives.
+        prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant_id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
+        if prior:
+            if not hmac.compare_digest(prior.request_digest,req): raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key payload mismatch"})
+            return prior.response
+        response=await create()
+        db.add(AgentReceipt(grant_id=grant_id,project_id=project_id,idempotency_key=key,request_digest=req,action_type=kind,status="recorded",response=response))
+        await db.commit()
+        return response
+    finally:
+        lock.release()
 
 @router.post("/proposals",status_code=201)
 async def propose(data:ProposalIn,grant=Depends(auth),db:AsyncSession=Depends(get_db)):
@@ -174,5 +194,7 @@ async def review(proposal_id:str,decision:Literal["approve","reject"],body:Revie
     expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant and grant.expires_at.tzinfo is None else (grant.expires_at if grant else None)
     if not grant or grant.status!="active" or grant.revoked_at or expires<=now() or PERMISSIONS.get(grant.permission,-1)<PERMISSIONS["propose"]: raise HTTPException(409,{"code":"GRANT_INACTIVE","message":"Revocation/expiry invalidates pending proposals"})
     row.review_note=note
-    result=await apply_batch(db,grant,{"expected_project_revision":row.expected_project_revision,"idempotency_key":f"proposal:{row.id}","operations":row.operations},actor=reviewer,proposal=row)
-    return {"proposal_id":row.id,"status":"approved","receipt":result}
+    # Snapshot all wire primitives before apply_batch commits and expires row.
+    proposal_id, expected_revision, operations = row.id, row.expected_project_revision, row.operations
+    result=await apply_batch(db,grant,{"expected_project_revision":expected_revision,"idempotency_key":f"proposal:{proposal_id}","operations":operations},actor=reviewer,proposal=row)
+    return {"proposal_id":proposal_id,"status":"approved","receipt":result}

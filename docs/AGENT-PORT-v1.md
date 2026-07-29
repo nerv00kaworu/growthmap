@@ -4,9 +4,13 @@
 
 Base URL: `http://127.0.0.1:<port>/agent/v1`. Only loopback clients and trusted local Host headers are accepted. Except `GET /capabilities`, requests require `Authorization: Bearer gm1.<12-hex-prefix>.<secret>`. Tokens in URLs are forbidden. JSON requests are limited to 1 MiB and 120 requests/grant/minute.
 
-## Grants
+## Grants and human control
 
-GUI REST (`/api/agent-port`): `POST /grants`, `GET /grants?project_id=`, `POST /grants/{id}/revoke`, `GET /activity?project_id=`, `POST /proposals/{id}/approve|reject`. Grant creation accepts project, permission, at most one `node_scope_id`/`branch_root_id`, expiry (1 minute–90 days), label, and agent identity. Omit both scopes for project-wide. The response contains `token` exactly once.
+Agent Port REST remains provider-neutral. In v1, the **human grant, activity, and proposal-review GUI is desktop-only**: its menu and panel require explicit trusted desktop preload markers (`isDesktop` and `agentPortControl`). Normal web authoring—including a localhost browser—does not infer or bootstrap that capability. This does not disable other web authoring features.
+
+Human-control REST (`/api/agent-port`): `POST /grants`, `GET /grants?project_id=`, `POST /grants/{id}/revoke`, `GET /activity?project_id=`, `POST /proposals/{id}/approve|reject`. Every route requires an explicit bearer capability. Desktop uses its per-launch `GROWTHMAP_SESSION_TOKEN`. Headless/local operators may explicitly configure `GROWTHMAP_HUMAN_CONTROL_TOKEN` and send it only in `Authorization: Bearer`; they must protect it as a local secret and retain loopback/trusted-host controls. With neither variable configured the routes are disabled, and there is no automatic web bootstrap.
+
+Grant creation accepts project, permission, at most one `node_scope_id`/`branch_root_id`, expiry (1 minute–90 days), label, and agent identity. Omit both scopes for project-wide. The response contains `token` exactly once.
 
 Permission ordering: read < propose < write. Node scope is exact-node; branch scope contains its root and current `child_of` descendants. New references and both endpoints of relations are checked. Revoked/expired grants fail closed.
 
@@ -30,7 +34,7 @@ JSON `detail` carries stable `code` values: `AUTH_REQUIRED`, `INVALID_TOKEN`, `G
 
 `scripts/growthmap_agent.py` exposes capabilities/project/graph/context/propose/apply-batch/report-event/submit-readback. Base URL is env or flag; token is env/file/stdin, never argv. JSON stdin/files produce JSON stdout and stable nonzero failures (2 input/transport, 3 HTTP, 4 auth/scope, 10 conflict).
 
-`scripts/growthmap_mcp.py` is MCP JSON-RPC stdio and exposes matching tools. It forwards every call over REST and has no database or provider path.
+`scripts/growthmap_mcp.py` is MCP JSON-RPC stdio and exposes matching tools. It forwards every call over REST and has no database or provider path. The adapter negotiates MCP protocol version `2025-11-25`; this protocol identifier is distinct from the pinned official Python SDK package version `mcp==1.28.1` used for client conformance tests.
 
 ## R3 security semantics
 
@@ -41,6 +45,29 @@ Revoking or expiring a grant invalidates every pending proposal from it. Approva
 Canonical transactions increment the project revision exactly once and each touched pre-existing entity once. New entities start at revision 1. Context/read outputs are bounded (5,000-node scope, 500 children, 200 relevant records) and their digest covers the returned canonical snapshot. Agent Port mutations require project and entity revisions. Human control endpoints require a separate unguessable launch/session bearer in every mode (`GROWTHMAP_SESSION_TOKEN`, or explicit local `GROWTHMAP_HUMAN_CONTROL_TOKEN`); absent capability disables them. `/agent/v1` continues to use only grant bearers.
 
 CLI and MCP accept only explicit-port plain HTTP at exact `localhost`, `127.0.0.1`, or `::1`; redirects are disabled. Token files are bounded regular non-symlinks and POSIX owner-only. Never place tokens in URLs. Last-used authentication bookkeeping is intentionally separate from canonical mutation atomicity.
+
+## R4 canonical touched-existing/CAS audit (2026-07-29)
+
+`Project` is implicit in every canonical write and requires `expected_project_revision`; success increments it exactly once. “Touched” below means an existing canonical row whose state or owned relationship changes and therefore requires entity CAS and one revision bump. New rows start at revision 1.
+
+| Canonical route | Direct and implicit existing mutations | Entity CAS inputs | Source |
+|---|---|---|---|
+| `POST /api/projects/{id}/nodes` | parent node (new child relationship and possible maturity advance) | `expected_parent_revision` when parent supplied | [`api/routes.py:create_node`](../src/backend/api/routes.py), [`models/schemas.py:NodeCreate`](../src/backend/models/schemas.py) |
+| `PATCH/DELETE /api/nodes/{id}` | target node; delete also removes owned descendant/edge/block rows rather than revising deleted rows | `expected_revision` | [`api/routes.py`](../src/backend/api/routes.py) |
+| `POST /api/edges` | any currently-mainline sibling edges demoted; created edge is rev1 | no endpoint CAS currently; project CAS only | [`api/routes.py:create_edge`](../src/backend/api/routes.py), `demote_mainline_siblings` |
+| `PATCH /api/edges/{id}` | target edge | `expected_revision` | [`api/routes.py:update_edge`](../src/backend/api/routes.py) |
+| edge/mainline promote routes | promoted edge plus every mainline sibling actually demoted | promoted edge `expected_revision`; siblings are implicit | [`api/routes.py:promote_mainline`](../src/backend/api/routes.py), `promote_child_mainline` |
+| move/reparent | moved node, old parent node, new parent node; old `child_of` Edge is deleted and replacement Edge is new rev1 (the relationship is an `Edge`, not a `Node`) | moved `expected_revision`, `expected_old_parent_revision`, `expected_new_parent_revision` | [`api/routes.py:move_node`](../src/backend/api/routes.py), `reparent_node` |
+| content block create | owner node (ownership/content richness and possible maturity); block new rev1 | `expected_node_revision` | [`api/routes.py:create_block`](../src/backend/api/routes.py) |
+| content block update | block and owner node | `expected_revision`, `expected_node_revision` | [`api/routes.py:update_block`](../src/backend/api/routes.py) |
+| content block delete | owner node; deleted block has no post-delete revision | `expected_revision`, `expected_node_revision` | [`api/routes.py:delete_block`](../src/backend/api/routes.py) |
+| branch create | no existing canonical entity is intended to change; copied nodes/blocks/edges and branch are rev1 | project CAS only; source is read input | [`api/routes.py:create_branch`](../src/backend/api/routes.py) |
+| branch merge | source branch becomes merged; every existing branch node is cleared/reassigned; target node gains child relationship; old branch-root relationship Edge deleted, new Edge rev1 | branch `expected_revision`; target `expected_target_revision` | [`api/routes.py:merge_branch`](../src/backend/api/routes.py) |
+| artifact approve | target node always (update, new child relationship, or new block ownership); created child/edge/block rev1 | `expected_node_revision` | [`api/routes.py:approve_agent_artifact`](../src/backend/api/routes.py) |
+| Agent proposal approve | union of each operation: update-node targets; create-node parents; content-block owner nodes; create-edge mainline siblings if applicable; created rows rev1; proposal terminal state and receipt commit atomically | project CAS plus every operation entity CAS exposed by operation schema | [`agent_port/routes.py:review`](../src/backend/agent_port/routes.py), [`agent_port/service.py:apply_batch`](../src/backend/agent_port/service.py) |
+| Agent batch | same operation union as proposal approval, deduplicated transaction-locally | project CAS and operation CAS | [`agent_port/service.py`](../src/backend/agent_port/service.py) |
+
+Focused audit progress and unresolved gaps are recorded in [`docs/R4-BLOCKERS-3-5-PROGRESS.md`](R4-BLOCKERS-3-5-PROGRESS.md); this table is an audit, not a claim that every listed gap is closed.
 
 ## R3 implementation evidence (2026-07-29)
 

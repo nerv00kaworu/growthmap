@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Optional, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # === Project ===
@@ -43,6 +43,7 @@ class ProjectOut(BaseModel):
 
 class NodeCreate(BaseModel):
     expected_project_revision: int
+    expected_parent_revision: Optional[int] = None
     title: str
     summary: str = ""
     node_type: str = "idea"
@@ -50,6 +51,14 @@ class NodeCreate(BaseModel):
     branch_id: Optional[str] = None  # 由目前方案線建立的節點
     description: str = ""
     tags: list[str] = []
+
+    @model_validator(mode="after")
+    def parent_cas_is_mandatory(self):
+        if self.parent_id is not None and self.expected_parent_revision is None:
+            raise ValueError("expected_parent_revision is required when parent_id is provided")
+        if self.parent_id is None and self.expected_parent_revision is not None:
+            raise ValueError("expected_parent_revision requires parent_id")
+        return self
 
 
 class NodeUpdate(BaseModel):
@@ -102,6 +111,9 @@ class NodeOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     revision: int = 1
+    authoritative_project_revision: Optional[int] = None
+    authoritative_parent_id: Optional[str] = None
+    authoritative_parent_revision: Optional[int] = None
 
     @field_validator(
         "summary", "description", "rules_text", "constraints_text", "examples_text",
@@ -233,6 +245,8 @@ class NodeMoveRequest(BaseModel):
     new_parent_id: str
     expected_project_revision: int
     expected_revision: int
+    expected_new_parent_revision: int
+    expected_old_parent_revision: Optional[int] = None
 
 
 class AncestorNode(BaseModel):
@@ -397,6 +411,7 @@ class NodeEntityRevisionRequest(EntityRevisionRequest):
 
 class BranchMergeRequest(EntityRevisionRequest):
     target_node_id: str
+    expected_target_revision: int
 
 
 # === Agent Session ===

@@ -16,6 +16,13 @@ function remember(value: unknown): void {
   const id = typeof row.id === "string" ? row.id : undefined;
   const revision = typeof row.revision === "number" ? row.revision : undefined;
   if (id && revision) {
+    if (typeof row.authoritative_project_revision === "number" && typeof row.project_id === "string") {
+      revisionCache.projects.set(row.project_id, row.authoritative_project_revision);
+    }
+    if (typeof row.authoritative_parent_revision === "number" && typeof row.authoritative_parent_id === "string") {
+      const cachedParent = revisionCache.nodes.get(row.authoritative_parent_id);
+      if (cachedParent) revisionCache.nodes.set(row.authoritative_parent_id, { ...cachedParent, revision: row.authoritative_parent_revision });
+    }
     if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
     else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
     else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
@@ -25,6 +32,13 @@ function remember(value: unknown): void {
   Object.values(row).forEach(remember);
 }
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, public readonly code: string | undefined, message: string, public readonly detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -32,7 +46,19 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${res.status}: ${text}`);
+    let detail: unknown = text;
+    let code: string | undefined;
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      detail = parsed.detail ?? parsed;
+      if (detail && typeof detail === "object") {
+        const row = detail as Record<string, unknown>;
+        code = typeof row.code === "string" ? row.code : undefined;
+        if (typeof row.message === "string") message = row.message;
+      }
+    } catch { /* retain plain-text response */ }
+    throw new ApiError(res.status, code, message || `API ${res.status}`, detail);
   }
   if (res.status === 204) return undefined as T;
   const value = await res.json() as T;
@@ -115,8 +141,15 @@ export const api = {
   // Nodes
   getSubtree: (nodeId: string) => request<GNode>(`/nodes/${nodeId}/subtree`),
   getNode: (nodeId: string) => request<GNode>(`/nodes/${nodeId}`),
-  createNode: (projectId: string, data: { expected_project_revision?: number; title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) =>
-    request<GNode>(`/projects/${projectId}/nodes`, { method: "POST", body: JSON.stringify(data) }),
+  createNode: (projectId: string, data: { expected_project_revision?: number; expected_parent_revision?: number; title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) => {
+    const parent = data.parent_id ? revisionCache.nodes.get(data.parent_id) : undefined;
+    if (data.parent_id && !parent) throw new Error("Parent revision unavailable; refresh and retry");
+    return request<GNode>(`/projects/${projectId}/nodes`, { method: "POST", body: JSON.stringify({
+      ...data,
+      expected_project_revision: data.expected_project_revision ?? projectExpected(projectId),
+      ...(data.parent_id ? { expected_parent_revision: data.expected_parent_revision ?? parent!.revision } : {}),
+    }) });
+  },
   updateNode: (nodeId: string, data: Partial<GNode> & { expected_project_revision?: number; expected_revision?: number }) =>
     request<GNode>(`/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ ...nodeExpected(nodeId), ...data }) }),
   updateEdge: (edgeId: string, data: { expected_project_revision?: number; expected_revision?: number; weight?: number; note?: string }) => {
@@ -213,10 +246,10 @@ export const api = {
     request<BranchComparison>(`/branches/${branchId}/compare`),
   getBranchHistory: (branchId: string) =>
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/branches/${branchId}/history`),
-  mergeBranch: (branchId: string, targetNodeId: string, expectedProjectRevision: number, expectedRevision: number) =>
+  mergeBranch: (branchId: string, targetNodeId: string, expectedProjectRevision: number, expectedRevision: number, expectedTargetRevision: number) =>
     request<{ ok: boolean }>(`/branches/${branchId}/merge`, {
       method: "POST",
-      body: JSON.stringify({ target_node_id: targetNodeId, expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }),
+      body: JSON.stringify({ target_node_id: targetNodeId, expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision, expected_target_revision: expectedTargetRevision }),
     }),
   archiveBranch: (branchId: string, expectedProjectRevision: number, expectedRevision: number) =>
     request<void>(`/branches/${branchId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),

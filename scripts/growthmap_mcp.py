@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
-"""MCP stdio thin adapter for localhost Agent Port REST (MCP 2025-03-26)."""
+"""MCP stdio thin adapter for localhost Agent Port REST (protocol 2025-11-25)."""
 import json,os,sys,urllib.error,urllib.parse,urllib.request
-MAX_LINE=1_048_576;PROTOCOL="2025-03-26"
+from pathlib import Path
+MAX_LINE=1_048_576;PROTOCOL="2025-11-25"
+def canonical_schemas():
+ backend=Path(__file__).resolve().parents[1]/"src"/"backend"
+ sys.path.insert(0,str(backend))
+ from agent_port.schemas import Batch,ProposalIn,EventIn,ReadbackIn
+ return {"propose":ProposalIn.model_json_schema(),"apply_batch":Batch.model_json_schema(),
+         "report_event":EventIn.model_json_schema(),"submit_readback":ReadbackIn.model_json_schema()}
+_STRICT=canonical_schemas()
 TOOLS={
  "capabilities":("GET","/capabilities",{"type":"object","additionalProperties":False}),
  "read_project":("GET","/project",{"type":"object","additionalProperties":False}),
  "read_graph":("GET","/graph",{"type":"object","additionalProperties":False}),
  "get_context":("GET","/context/{target_id}",{"type":"object","properties":{"target_id":{"type":"string","format":"uuid"}},"required":["target_id"],"additionalProperties":False}),
- "propose":("POST","/proposals",{"type":"object","required":["idempotency_key","expected_project_revision","title","operations"],"additionalProperties":True}),
- "apply_batch":("POST","/batch",{"type":"object","required":["idempotency_key","expected_project_revision","operations"],"additionalProperties":False}),
- "report_event":("POST","/events",{"type":"object","required":["idempotency_key","event_type","message"],"additionalProperties":True}),
- "submit_readback":("POST","/readbacks",{"type":"object","required":["idempotency_key"],"additionalProperties":True})}
+ "propose":("POST","/proposals",_STRICT["propose"]),
+ "apply_batch":("POST","/batch",_STRICT["apply_batch"]),
+ "report_event":("POST","/events",_STRICT["report_event"]),
+ "submit_readback":("POST","/readbacks",_STRICT["submit_readback"])}
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**k):return None
 def send(o):sys.stdout.write(json.dumps(o,separators=(",",":"),ensure_ascii=False)+"\n");sys.stdout.flush()

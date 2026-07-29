@@ -46,14 +46,27 @@ def check_entity_revision(entity, expected: int, *, kind: str | None = None) -> 
                           entity_id=str(entity.id), expected=expected, current=current)
 
 
+class TouchedEntities:
+    """Transaction-local collector that bumps every existing canonical row once.
+
+    Routes add rows whenever their canonical state or owned relationship changes.
+    Applying at the end avoids accidental double bumps when helpers overlap.
+    """
+    def __init__(self) -> None:
+        self._entities: dict[tuple[type, str], object] = {}
+
+    def add(self, *entities) -> None:
+        for entity in entities:
+            if entity is not None:
+                self._entities[(type(entity), str(entity.id))] = entity
+
+    def apply(self) -> None:
+        for entity in self._entities.values():
+            entity.revision = (entity.revision or 1) + 1
+
+
 def bump_existing(*entities) -> None:
-    """Increment each touched pre-existing revision once (deduplicated by type/id)."""
-    seen: set[tuple[type, str]] = set()
-    for entity in entities:
-        if entity is None:
-            continue
-        key = (type(entity), str(entity.id))
-        if key in seen:
-            continue
-        seen.add(key)
-        entity.revision = (entity.revision or 1) + 1
+    """Compatibility wrapper; prefer one TouchedEntities collector per route."""
+    touched = TouchedEntities()
+    touched.add(*entities)
+    touched.apply()

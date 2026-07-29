@@ -1,5 +1,5 @@
 """Transactional authorization, scope and canonical mutation service for Agent Port."""
-import hashlib,hmac,json,uuid
+import asyncio,hashlib,hmac,json,threading,uuid
 from datetime import datetime,timezone
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -7,6 +7,15 @@ from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
+
+# Process-local serialization complements the database unique constraint and
+# keeps SQLite from surfacing `database locked`.  Fixed stripes keep this
+# supplemental lock structure bounded under attacker-controlled keys.
+_IDEMPOTENCY_LOCK_STRIPES = tuple(threading.Lock() for _ in range(256))
+def idempotency_lock(grant_id: str, key: str) -> threading.Lock:
+    token = f"{grant_id}\0{key}".encode()
+    index = int.from_bytes(hashlib.sha256(token).digest()[:2], "big") % len(_IDEMPOTENCY_LOCK_STRIPES)
+    return _IDEMPOTENCY_LOCK_STRIPES[index]
 def digest(v): return hashlib.sha256(canonical(v).encode()).hexdigest()
 def conflict(msg,**extra): raise HTTPException(409,{"code":"REVISION_CONFLICT","message":msg,**extra})
 
@@ -103,7 +112,7 @@ async def validate_operations(db,grant,operations):
         if any(r not in allowed for r in refs):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Every operation reference must be in scope"})
     return normalized
 
-async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
+async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=None):
     key=body["idempotency_key"];req_digest=digest(body);grant_id=grant.id;project_id=grant.project_id
     prior=(await db.execute(select(AgentReceipt).where(AgentReceipt.grant_id==grant_id,AgentReceipt.idempotency_key==key))).scalar_one_or_none()
     if prior:
@@ -145,3 +154,11 @@ async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
         if prior:raise HTTPException(409,{"code":"IDEMPOTENCY_MISMATCH","message":"Key payload mismatch"})
         raise HTTPException(409,{"code":"IDEMPOTENCY_IN_PROGRESS","message":"Concurrent request in progress; retry"})
     return response
+
+async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
+    lock=idempotency_lock(grant.id,body["idempotency_key"])
+    await asyncio.to_thread(lock.acquire)
+    try:
+        return await _apply_batch_serialized(db,grant,body,actor=actor,commit=commit,proposal=proposal)
+    finally:
+        lock.release()

@@ -19,7 +19,7 @@ from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret
-from api.revisions import claim_project_revision, check_entity_revision, bump_existing
+from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
@@ -474,6 +474,18 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
     if not project:
         raise HTTPException(404, "Project not found")
 
+    # Load and validate every existing entity CAS before the project claim or any
+    # canonical write. A child relationship touches its parent even if maturity
+    # happens not to advance.
+    parent = None
+    if data.parent_id:
+        parent = await db.get(Node, data.parent_id)
+        if not parent or parent.project_id != project_id:
+            raise HTTPException(400, "Invalid parent node")
+        check_entity_revision(parent, data.expected_parent_revision, kind="node")
+        if (parent.branch_id or None) != (data.branch_id or None):
+            raise HTTPException(400, "Parent and child must belong to the same branch")
+
     await claim_project_revision(db, project_id, data.expected_project_revision)
     branch = None
     if data.branch_id:
@@ -496,12 +508,6 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
 
     # 如果指定 parent，自動建 child_of edge
     if data.parent_id:
-        parent = await db.get(Node, data.parent_id)
-        if not parent or parent.project_id != project_id:
-            raise HTTPException(400, "Invalid parent node")
-        if (parent.branch_id or None) != (data.branch_id or None):
-            raise HTTPException(400, "Parent and child must belong to the same branch")
-
         # Determine if child should be mainline (first child)
         result = await db.execute(
             select(func.count()).select_from(Edge).where(
@@ -526,11 +532,20 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         action_type="create_node",
         payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
     ))
-    # Auto-advance parent maturity
-    if data.parent_id:
-        await auto_advance_maturity(data.parent_id, db)
+    # Auto-advance parent maturity and bump the touched existing parent exactly
+    # once for the relationship plus any maturity transition.
+    touched = TouchedEntities()
+    if parent:
+        touched.add(parent)
+        await auto_advance_maturity(parent.id, db, touched=touched)
+    touched.apply()
     await db.commit()
     await db.refresh(node)
+    # Response carries all authoritative CAS values needed by a serialized GUI
+    # workflow; these are response-only Pydantic fields, never canonical columns.
+    node.authoritative_project_revision = data.expected_project_revision + 1
+    node.authoritative_parent_id = parent.id if parent else None
+    node.authoritative_parent_revision = parent.revision if parent else None
     return node
 
 
@@ -873,8 +888,17 @@ async def move_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = Depe
         raise HTTPException(404, "New parent not found")
     if new_parent.project_id != node.project_id:
         raise HTTPException(400, "Cannot move node to a different project")
-    await claim_project_revision(db, node.project_id, body.expected_project_revision)
+    old_edge = (await db.execute(select(Edge).where(
+        Edge.to_node_id == node_id, Edge.relation_type == "child_of"
+    ))).scalar_one_or_none()
+    old_parent = await db.get(Node, old_edge.from_node_id) if old_edge else None
     check_entity_revision(node, body.expected_revision, kind="node")
+    check_entity_revision(new_parent, body.expected_new_parent_revision, kind="node")
+    if old_parent:
+        if body.expected_old_parent_revision is None:
+            raise HTTPException(422, "expected_old_parent_revision is required")
+        check_entity_revision(old_parent, body.expected_old_parent_revision, kind="node")
+    await claim_project_revision(db, node.project_id, body.expected_project_revision)
 
     # Cycle detection: walk descendants of node_id
     descendants: set[str] = set()
@@ -893,10 +917,6 @@ async def move_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = Depe
         raise HTTPException(400, "Cannot move node under its own descendant (would create cycle)")
 
     # Remove old incoming child_of edge
-    old_edge_result = await db.execute(
-        select(Edge).where(Edge.to_node_id == node_id, Edge.relation_type == "child_of")
-    )
-    old_edge = old_edge_result.scalar_one_or_none()
     if old_edge:
         await db.delete(old_edge)
 
@@ -922,9 +942,13 @@ async def move_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = Depe
         action_type="move", actor_type="human",
         payload={"from_parent": old_edge.from_node_id if old_edge else None, "to_parent": body.new_parent_id},
     ))
-    bump_existing(node)
+    touched = TouchedEntities()
+    touched.add(node, old_parent, new_parent)
+    touched.apply()
     await db.commit()
-    return {"ok": True, "is_mainline": is_mainline}
+    return {"ok": True, "is_mainline": is_mainline, "project_revision": body.expected_project_revision + 1,
+            "node_revision": node.revision, "old_parent_revision": old_parent.revision if old_parent else None,
+            "new_parent_revision": new_parent.revision}
 
 
 @router.get("/nodes/{node_id}/ancestors", response_model=list[AncestorNode])
@@ -1110,7 +1134,7 @@ async def delete_block(block_id: str, data: NodeEntityRevisionRequest, db: Async
 
 MATURITY_ORDER = ["seed", "rough", "developing", "stable", "finalized"]
 
-async def auto_advance_maturity(node_id: str, db: AsyncSession):
+async def auto_advance_maturity(node_id: str, db: AsyncSession, *, touched: TouchedEntities | None = None):
     """Auto-advance node maturity based on content richness.
     
     Rules:
@@ -1153,6 +1177,8 @@ async def auto_advance_maturity(node_id: str, db: AsyncSession):
 
     if new_maturity != current:
         node.maturity = new_maturity
+        if touched is not None:
+            touched.add(node)
         db.add(ActionLog(
             project_id=node.project_id,
             node_id=node.id,
@@ -1354,8 +1380,17 @@ async def reparent_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = 
     new_parent = await db.get(Node, new_parent_id)
     if not new_parent or new_parent.project_id != node.project_id:
         raise HTTPException(400, "Invalid new parent")
-    await claim_project_revision(db, node.project_id, body.expected_project_revision)
+    old_edge = (await db.execute(select(Edge).where(
+        Edge.to_node_id == node_id, Edge.relation_type == "child_of"
+    ))).scalar_one_or_none()
+    old_parent = await db.get(Node, old_edge.from_node_id) if old_edge else None
     check_entity_revision(node, body.expected_revision, kind="node")
+    check_entity_revision(new_parent, body.expected_new_parent_revision, kind="node")
+    if old_parent:
+        if body.expected_old_parent_revision is None:
+            raise HTTPException(422, "expected_old_parent_revision is required")
+        check_entity_revision(old_parent, body.expected_old_parent_revision, kind="node")
+    await claim_project_revision(db, node.project_id, body.expected_project_revision)
 
     # Cycle detection
     descendants: set[str] = set()
@@ -1374,10 +1409,6 @@ async def reparent_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = 
         raise HTTPException(400, "Cannot reparent under descendant (cycle)")
 
     # Remove old child_of edge
-    old_edge_result = await db.execute(
-        select(Edge).where(Edge.to_node_id == node_id, Edge.relation_type == "child_of")
-    )
-    old_edge = old_edge_result.scalar_one_or_none()
     if old_edge:
         await db.delete(old_edge)
 
@@ -1396,9 +1427,13 @@ async def reparent_node(node_id: str, body: NodeMoveRequest, db: AsyncSession = 
         is_mainline=existing_children == 0,
     )
     db.add(new_edge)
-    bump_existing(node)
+    touched = TouchedEntities()
+    touched.add(node, old_parent, new_parent)
+    touched.apply()
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "project_revision": body.expected_project_revision + 1,
+            "node_revision": node.revision, "old_parent_revision": old_parent.revision if old_parent else None,
+            "new_parent_revision": new_parent.revision}
 
 
 # ─── Import / Export JSON ───
@@ -2075,6 +2110,7 @@ async def merge_branch(branch_id: str, body: BranchMergeRequest, db: AsyncSessio
     target_node = await db.get(Node, target_node_id)
     if not target_node or target_node.project_id != branch.project_id or target_node.branch_id:
         raise HTTPException(400, "Target node must be on this project mainline")
+    check_entity_revision(target_node, body.expected_target_revision, kind="node")
 
     # Find branch nodes
     branch_nodes_result = await db.execute(
@@ -2132,7 +2168,9 @@ async def merge_branch(branch_id: str, body: BranchMergeRequest, db: AsyncSessio
         ))
 
     branch.status = "merged"
-    bump_existing(branch, *branch_nodes)
+    # The target gains the canonical child relationship; branch nodes are
+    # canonically reassigned to mainline. Deduplication prevents a double bump.
+    bump_existing(branch, target_node, *branch_nodes)
     db.add(ActionLog(
         project_id=branch.project_id,
         actor_type="human",

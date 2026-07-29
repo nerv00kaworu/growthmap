@@ -6,6 +6,7 @@
     "dev": "next dev --port 3100",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit --pretty false",
+    "test": "tsx --test src/**/*.test.ts",
     "build": "next build",
     "start": "next start --port 3100"
   },
@@ -32,6 +33,7 @@
     "eslint-config-next": "15.5.21",
     "postcss": "^8.5.18",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   }
 }

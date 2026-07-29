@@ -21,7 +21,10 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
         return client.get(f"/api/nodes/{node_id}").json()["revision"]
 
     def create_node(self, client, project, **data):
-        return client.post(f"/api/projects/{project['id']}/nodes", json={"expected_project_revision": self.project_revision(client, project["id"]), **data})
+        payload = {"expected_project_revision": self.project_revision(client, project["id"]), **data}
+        if payload.get("parent_id"):
+            payload["expected_parent_revision"] = self.node_revision(client, payload["parent_id"])
+        return client.post(f"/api/projects/{project['id']}/nodes", json=payload)
 
     def patch_node(self, client, project_id, node_id, data):
         return client.patch(f"/api/nodes/{node_id}", json={"expected_project_revision": self.project_revision(client, project_id), "expected_revision": self.node_revision(client, node_id), **data})
@@ -402,17 +405,30 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
 
             invalid_target = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": branch_root["id"], "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": branch["revision"]},
+                json={"target_node_id": branch_root["id"], "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": branch["revision"], "expected_target_revision": branch_root["revision"]},
             )
             self.assertEqual(invalid_target.status_code, 400)
 
+            root_before_merge = client.get(f"/api/nodes/{root_id}").json()
+            branch_nodes_before = {row["id"]: row["revision"] for row in [refreshed, *refreshed["children"]]}
+            project_before_merge = self.project_revision(client, project["id"])
             merged = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": branch["revision"]},
+                json={"target_node_id": root_id, "expected_project_revision": project_before_merge, "expected_revision": branch["revision"], "expected_target_revision": root_before_merge["revision"]},
             )
             self.assertEqual(merged.status_code, 200)
             self.assertTrue(merged.json()["ok"])
-            self.assertEqual(client.get(f"/api/branches/{branch['id']}").json()["status"], "merged")
+            self.assertEqual(self.project_revision(client, project["id"]), project_before_merge + 1)
+            self.assertEqual(client.get(f"/api/nodes/{root_id}").json()["revision"], root_before_merge["revision"] + 1)
+            merged_branch = client.get(f"/api/branches/{branch['id']}").json()
+            self.assertEqual(merged_branch["status"], "merged")
+            self.assertEqual(merged_branch["revision"], branch["revision"] + 1)
+            nodes_after = {row["id"]: row for row in client.get(f"/api/projects/{project['id']}/nodes").json()}
+            for node_id, revision in branch_nodes_before.items():
+                self.assertEqual(nodes_after[node_id]["revision"], revision + 1)
+                self.assertIsNone(client.get(f"/api/nodes/{node_id}").json()["branch_id"])
+            merged_edge = next(row for row in client.get(f"/api/projects/{project['id']}/edges?relation_type=child_of").json() if row["from_node_id"] == root_id and row["to_node_id"] == branch_root["id"])
+            self.assertEqual(merged_edge["revision"], 1)
 
             archived = client.post(
                 f"/api/projects/{project['id']}/branches",
@@ -422,7 +438,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(archived_response.status_code, 204)
             self.assertEqual(client.get(f"/api/branches/{archived['id']}").json()["status"], "archived")
             self.assertEqual(
-                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"] + 1}).status_code,
+                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"] + 1, "expected_target_revision": client.get(f"/api/nodes/{root_id}").json()["revision"]}).status_code,
                 400,
             )
 

@@ -1,4 +1,4 @@
-import os,sys,tempfile,unittest
+import os,subprocess,sys,tempfile,unittest
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -19,7 +19,12 @@ class AgentPortV1(unittest.TestCase):
  def human_patch(self,**fields):
   p,n=self.revisions();return self.client.patch(f"/api/nodes/{self.root}",json={"expected_project_revision":p["revision"],"expected_revision":n["revision"],**fields})
  def child(self,title="other"):
-  p,_=self.revisions();return self.client.post(f"/api/projects/{self.pid}/nodes",json={"expected_project_revision":p["revision"],"title":title,"parent_id":self.root})
+  p,n=self.revisions();return self.client.post(f"/api/projects/{self.pid}/nodes",json={"expected_project_revision":p["revision"],"expected_parent_revision":n["revision"],"title":title,"parent_id":self.root})
+ def test_non_desktop_human_routes_require_explicit_capability_and_bearer(self):
+  script='''import os,sys,tempfile\nfrom fastapi.testclient import TestClient\nt=tempfile.TemporaryDirectory();os.environ["DATABASE_URL"]=f"sqlite+aiosqlite:///{t.name}/db";os.environ["APP_ENV"]="test"\nif sys.argv[1]:os.environ["GROWTHMAP_HUMAN_CONTROL_TOKEN"]=sys.argv[1]\nsys.path.insert(0,sys.argv[2]);import main\nwith TestClient(main.app) as c:\n print(c.get("/api/agent-port/grants?project_id=00000000-0000-0000-0000-000000000000").status_code,c.get("/api/agent-port/grants?project_id=00000000-0000-0000-0000-000000000000",headers={"Authorization":"Bearer wrong"}).status_code,c.get("/api/agent-port/grants?project_id=00000000-0000-0000-0000-000000000000",headers={"Authorization":"Bearer "+sys.argv[1]}).status_code if sys.argv[1] else "-")\n'''
+  backend=str(Path(__file__).parents[1]);env={k:v for k,v in os.environ.items() if k not in {"GROWTHMAP_HUMAN_CONTROL_TOKEN","GROWTHMAP_SESSION_TOKEN","GROWTHMAP_DESKTOP_MODE"}}
+  disabled=subprocess.run([sys.executable,"-c",script,"",backend],env=env,text=True,capture_output=True,check=True);self.assertEqual(disabled.stdout.strip(),"403 403 -")
+  enabled=subprocess.run([sys.executable,"-c",script,"explicit-local",backend],env=env,text=True,capture_output=True,check=True);self.assertEqual(enabled.stdout.strip(),"401 401 200")
  def test_security_proposal_revision_scope_revoke_idempotency_and_context(self):
   read=self.grant("read").json();r=self.client.post("/agent/v1/batch",headers=self.auth(read["token"]),json={"expected_project_revision":1,"idempotency_key":"read-denied","operations":[{"op":"update_node","node_id":self.root,"expected_revision":1,"fields":{"title":"x"}}]});self.assertEqual(r.status_code,403)
   prop=self.grant("propose").json();before=self.client.get(f"/api/nodes/{self.root}").json()["title"];r=self.client.post("/agent/v1/proposals",headers=self.auth(prop["token"]),json={"idempotency_key":"proposal-001","expected_project_revision":1,"target_node_id":self.root,"title":"review","operations":[{"op":"update_node","node_id":self.root,"expected_revision":1,"fields":{"title":"proposed"}}]});self.assertEqual(r.status_code,201,r.text);self.assertEqual(self.client.get(f"/api/nodes/{self.root}").json()["title"],before);approved=self.client.post(f'/api/agent-port/proposals/{r.json()["proposal_id"]}/approve',json={},headers=self.human);self.assertEqual(approved.status_code,200,approved.text);self.assertEqual(self.client.get(f"/api/nodes/{self.root}").json()["title"],"proposed")
