@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import crypto from "node:crypto";
-import { assignStableModuleIds, normalizeModuleIdentifier } from "./stable-module-ids.mjs";
+import { assignStableModuleIds, normalizeModuleIdentifier, stabilizeChunkTraversal } from "./stable-module-ids.mjs";
 const root="C:/Work/Growth Map";
 const normalized="loader!<PROJECT_ROOT>/src/a.ts";
 const base=crypto.createHash("sha256").update(normalized).digest("hex").slice(0,16);
@@ -141,6 +141,23 @@ test("malformed and double-encoded text is never broadly decoded into a root",()
  assert.equal(normalizeModuleIdentifier(doubled,root),doubled);
  assert.notEqual(normalizeModuleIdentifier(malformed,root),normalized);
  assert.notEqual(normalizeModuleIdentifier(doubled,root),normalized);
+});
+test("chunk groups and file sets normalize filesystem-dependent insertion order",()=>{
+ const make=()=>{
+  const chunks=[
+   {name:"vendors-z",id:"vendors-z",files:new Set(["static/chunks/z-2.js","static/chunks/z-1.js"])},
+   {name:"app/page",id:"app/page",files:new Set(["static/chunks/page-b.js","static/chunks/page-a.js"])},
+   {name:"a",id:"a",files:new Set(["static/chunks/a.js"])},
+  ];
+  return {chunks,compilation:{chunks:new Set(chunks),chunkGroups:[{chunks:chunks.slice()}]}};
+ };
+ const left=make(),right=make();
+ right.compilation.chunkGroups[0].chunks.reverse();
+ right.chunks.forEach((chunk)=>{chunk.files=new Set([...chunk.files].reverse())});
+ stabilizeChunkTraversal(left.compilation);stabilizeChunkTraversal(right.compilation);
+ const view=({compilation})=>compilation.chunkGroups[0].chunks.map((chunk)=>[chunk.name,[...chunk.files]]);
+ assert.deepEqual(view(left),view(right));
+ assert.deepEqual(view(left),[["a",["static/chunks/a.js"]],["app/page",["static/chunks/page-a.js","static/chunks/page-b.js"]],["vendors-z",["static/chunks/z-1.js","static/chunks/z-2.js"]]]);
 });
 test("total ordering includes every metadata field and chunk identity",()=>{
  const fields=["type","layer","resource","userRequest","request","rawRequest"];
