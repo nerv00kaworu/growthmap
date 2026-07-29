@@ -111,7 +111,7 @@ function Assert-ThirdPartyInventory {
     if (-not (Test-Path $Root -PathType Container)) { return @() }
     $resolved=(Resolve-Path $Root).Path
     return @(Get-ChildItem $resolved -Directory -Force -Recurse | Where-Object {
-      ($_.Parent.Name -eq 'node_modules' -and -not $_.Name.StartsWith('@')) -or
+      ($_.Parent.Name -eq 'node_modules' -and -not $_.Name.StartsWith('@') -and $_.Name -cne '.bin') -or
       ($_.Parent.Parent -and $_.Parent.Parent.Name -eq 'node_modules' -and $_.Parent.Name.StartsWith('@'))
     } | ForEach-Object { [IO.Path]::GetRelativePath($resolved,$_.FullName) -replace '\\','/' })
   }
