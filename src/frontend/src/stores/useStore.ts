@@ -170,6 +170,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       children: [],
       created_at: newNode.created_at || "",
       updated_at: newNode.updated_at || "",
+      revision: newNode.revision || 1,
     };
     const updated = insertChild(rootNode, parentId, child);
     set({ rootNode: updated, undoStack: newUndoStack });

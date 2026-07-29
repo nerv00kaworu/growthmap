@@ -26,6 +26,7 @@ The release launcher and backend are localhost-only: non-loopback frontend/backe
 - **Node Types** — idea, concept, task, question, decision, risk, resource, note, module
 - **Mainline tracking** — mark primary child paths for structured work
 - **Parallel branches** — create, switch, merge, and archive proposal branches
+- **Provider-neutral Agent Port v1** — scoped grants, revision-safe proposals/direct batches, context packets, progress and implementation readback over REST/CLI/MCP
 - **DB auto-backup** — local SQLite backup before destructive operations
 - **Dark theme** throughout
 
@@ -110,8 +111,11 @@ growthmap/
 
 ```
 Browser ──► Next.js (3100) ──► FastAPI (8100) ──► SQLite
+Agent CLI/MCP ───────────────► /agent/v1 REST (localhost, scoped bearer grant)
                                       └──► LLM API (OpenAI/compat)
 ```
+
+Agent Port protocol and product invariants are normative in [`docs/PRODUCT-CORE-v1.md`](docs/PRODUCT-CORE-v1.md) and [`docs/AGENT-PORT-v1.md`](docs/AGENT-PORT-v1.md). GrowthMap does not execute external agents or bind the port to a provider/model.
 
 ## ✅ Quality Gates
 

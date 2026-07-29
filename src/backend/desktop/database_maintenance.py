@@ -5,8 +5,8 @@ from pathlib import Path
 CURRENT_USER_VERSION=0
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
-ALLOWED_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions"}
-ALLOWED_INDEXES={"idx_nodes_project","idx_nodes_type","idx_nodes_status","idx_edges_project","idx_edges_from","idx_edges_to","idx_content_blocks_node","idx_suggestions_node","idx_suggestions_status","idx_action_logs_project","idx_action_logs_node","idx_branches_project","idx_agent_artifacts_session","idx_agent_artifacts_status","ux_edges_one_mainline_per_parent"}
+ALLOWED_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
+ALLOWED_INDEXES={"idx_nodes_project","idx_nodes_type","idx_nodes_status","idx_edges_project","idx_edges_from","idx_edges_to","idx_content_blocks_node","idx_suggestions_node","idx_suggestions_status","idx_action_logs_project","idx_action_logs_node","idx_branches_project","idx_agent_artifacts_session","idx_agent_artifacts_status","ux_edges_one_mainline_per_parent","ix_agent_grants_token_prefix","ix_agent_grants_project_id","ix_agent_receipts_grant_id","ix_agent_receipts_project_id","ux_agent_receipt_idempotency","ix_agent_proposals_grant_id","ix_agent_proposals_project_id","ix_agent_events_grant_id","ix_agent_events_project_id","ix_agent_readbacks_grant_id","ix_agent_readbacks_project_id"}
 ALLOWED_TRIGGERS={"trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"}
 REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
@@ -94,10 +94,10 @@ def schema_status(path):
  if not source.exists(): return {"exists":False,"migrationNeeded":True,"reasons":["database_missing"]}
  connection,meta=_open_validated(source)
  try:
-  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("nodes","provider_configs")}
+  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("projects","nodes","edges","content_blocks","branches","provider_configs")}
   objects={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('index','trigger')")}
   reasons=[]
-  for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key")):
+  for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),("edges","revision"),("content_blocks","revision"),("branches","revision")):
    if column not in columns[table]: reasons.append(f"column:{table}.{column}")
   for name in ("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"):
    if name not in objects: reasons.append(f"object:{name}")

@@ -26,6 +26,7 @@ export interface GNode {
   content_blocks: ContentBlock[];
   created_at: string;
   updated_at: string;
+  revision: number;
   ancestor_path?: LineageNode[];
   children?: GNode[];
   is_mainline?: boolean;
@@ -81,6 +82,7 @@ export interface Project {
   settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
 
 export interface AgentArtifact {

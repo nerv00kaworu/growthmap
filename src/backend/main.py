@@ -17,6 +17,7 @@ from desktop.mutation_gate import DesktopMutationGateMiddleware
 from desktop.startup_verdict import effective_entitlement
 from desktop.migration_auth import authorized as migration_authorized
 from desktop.secrets import desktop_mode
+from agent_port.routes import router as agent_port_router, human_router as agent_port_human_router
 
 STATIC_DIR = Path(os.getenv("GROWTHMAP_STATIC_DIR", Path(__file__).parent.parent / "frontend" / "out"))
 
@@ -69,6 +70,11 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'",
             "ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'",
             "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''",
+            "ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
         ):
             try:
                 await conn.execute(__import__("sqlalchemy").text(statement))
@@ -170,6 +176,8 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(agent_port_human_router, prefix="/api")
+app.include_router(agent_port_router, prefix="/agent/v1")
 if desktop_mode():
     app.include_router(desktop_router, prefix="/api")
 else:

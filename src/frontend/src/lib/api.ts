@@ -23,6 +23,11 @@ function getProviderId(): string | undefined {
 }
 
 export const api = {
+  listAgentGrants: (projectId: string) => request<Record<string, unknown>[]>(`/agent-port/grants?project_id=${encodeURIComponent(projectId)}`),
+  createAgentGrant: (data: Record<string, unknown>) => request<Record<string, unknown>>("/agent-port/grants", {method:"POST",body:JSON.stringify(data)}),
+  revokeAgentGrant: (id: string) => request<Record<string, unknown>>(`/agent-port/grants/${id}/revoke`, {method:"POST"}),
+  getAgentPortActivity: (projectId: string) => request<{proposals:Record<string, unknown>[];events:Record<string, unknown>[];readbacks:Record<string, unknown>[]}>(`/agent-port/activity?project_id=${encodeURIComponent(projectId)}`),
+  reviewAgentProposal: (id:string, decision:"approve"|"reject", review_note="") => request<Record<string, unknown>>(`/agent-port/proposals/${id}/${decision}`, {method:"POST",body:JSON.stringify({review_note})}),
   // Server-side provider profiles. API keys remain in local environment variables.
   listProviders: () => request<ProviderConfig[]>("/providers"),
   createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at">) =>

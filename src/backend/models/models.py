@@ -27,6 +27,7 @@ class Project(Base):
     settings = Column(JSON, default={})
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     nodes = relationship("Node", back_populates="project", cascade="all, delete-orphan")
     edges = relationship("Edge", back_populates="project", cascade="all, delete-orphan")
@@ -63,6 +64,7 @@ class Node(Base):
     position_y = Column(Float, default=0)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     project = relationship("Project", back_populates="nodes")
     content_blocks = relationship("ContentBlock", back_populates="node", cascade="all, delete-orphan")
@@ -88,6 +90,7 @@ class Edge(Base):
     note = Column(Text, default="", server_default="")
     is_mainline = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     project = relationship("Project", back_populates="edges")
 
@@ -109,6 +112,7 @@ class ContentBlock(Base):
     created_by = Column(Text, default="human")
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     node = relationship("Node", back_populates="content_blocks")
 
@@ -185,6 +189,7 @@ class Branch(Base):
     source_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
     status = Column(String(20), default="active")  # active, merged, archived
     created_at = Column(DateTime(timezone=True), default=utcnow)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     __table_args__ = (
         Index("idx_branches_project", "project_id"),
@@ -227,3 +232,76 @@ class AgentSession(Base):
     last_heartbeat_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+class AgentGrant(Base):
+    __tablename__ = "agent_grants"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    token_prefix = Column(String(20), nullable=False, unique=True, index=True)
+    token_salt = Column(String(64), nullable=False)
+    token_hash = Column(String(128), nullable=False)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    permission = Column(String(10), nullable=False)
+    node_scope_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True)
+    branch_root_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True)
+    label = Column(String(120), nullable=False)
+    agent_identity = Column(String(120), nullable=False)
+    status = Column(String(12), nullable=False, default="active")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+class AgentReceipt(Base):
+    __tablename__ = "agent_receipts"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id = Column(String(36), ForeignKey("agent_grants.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    idempotency_key = Column(String(80), nullable=False)
+    request_digest = Column(String(64), nullable=False)
+    action_type = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False)
+    response = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (Index("ux_agent_receipt_idempotency", "grant_id", "idempotency_key", unique=True),)
+
+class AgentProposal(Base):
+    __tablename__ = "agent_proposals"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id = Column(String(36), ForeignKey("agent_grants.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(200), nullable=False)
+    rationale = Column(Text, default="")
+    operations = Column(JSON, nullable=False)
+    expected_project_revision = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    review_note = Column(Text, default="")
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+class AgentEvent(Base):
+    __tablename__ = "agent_events"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id = Column(String(36), ForeignKey("agent_grants.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
+    event_type = Column(String(30), nullable=False)
+    message = Column(Text, nullable=False)
+    payload = Column(JSON, nullable=False, default={})
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+class AgentReadback(Base):
+    __tablename__ = "agent_readbacks"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id = Column(String(36), ForeignKey("agent_grants.id", ondelete="CASCADE"), nullable=False, index=True)
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    target_node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True)
+    commit_refs = Column(JSON, nullable=False, default=[])
+    files = Column(JSON, nullable=False, default=[])
+    tests = Column(JSON, nullable=False, default=[])
+    decisions = Column(JSON, nullable=False, default=[])
+    risks = Column(JSON, nullable=False, default=[])
+    todos = Column(JSON, nullable=False, default=[])
+    evidence = Column(JSON, nullable=False, default=[])
+    summary = Column(Text, default="")
+    created_at = Column(DateTime(timezone=True), default=utcnow)

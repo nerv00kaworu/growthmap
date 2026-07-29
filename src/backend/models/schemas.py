@@ -33,6 +33,7 @@ class ProjectOut(BaseModel):
     settings: dict
     created_at: datetime
     updated_at: datetime
+    revision: int = 1
 
     model_config = {"from_attributes": True}
 
@@ -96,6 +97,7 @@ class NodeOut(BaseModel):
     branch_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    revision: int = 1
 
     @field_validator(
         "summary", "description", "rules_text", "constraints_text", "examples_text",

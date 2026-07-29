@@ -7,6 +7,7 @@ import { NodePanel } from "@/components/NodePanel";
 import { Toast } from "@/components/Toast";
 import { Settings } from "@/components/Settings";
 import { AgentSessions } from "@/components/AgentSessions";
+import { AgentPortPanel } from "@/components/AgentPortPanel";
 import { api } from "@/lib/api";
 import { useEntitlement } from "@/lib/entitlement";
 
@@ -42,6 +43,7 @@ export default function HomePage() {
   const [newDesc, setNewDesc] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   const [showAgentSessions, setShowAgentSessions] = useState(false);
+  const [showAgentPort, setShowAgentPort] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showBranchHistory, setShowBranchHistory] = useState(false);
@@ -423,6 +425,7 @@ export default function HomePage() {
               {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
               <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
+              <button type="button" onClick={() => { setShowAgentPort(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30 disabled:opacity-40">🔌 Agent Port</button>
               <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
               <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">🗂️ 方案線歷史</button>
             </div>
@@ -522,6 +525,7 @@ export default function HomePage() {
       {/* Settings Modal */}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       {showAgentSessions && currentProject && rootNode && <AgentSessions projectId={currentProject.id} rootNode={rootNode} branches={branches} onClose={() => setShowAgentSessions(false)} />}
+      {showAgentPort && currentProject && rootNode && <AgentPortPanel projectId={currentProject.id} rootNode={rootNode} onClose={() => setShowAgentPort(false)} />}
 
       {/* Keyboard Shortcuts Modal */}
       {showShortcuts && (

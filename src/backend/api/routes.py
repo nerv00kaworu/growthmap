@@ -57,6 +57,7 @@ def backup_db():
 def touch_project(project: Project | None):
     if project:
         project.updated_at = datetime.now(timezone.utc)
+        project.revision = (project.revision or 1) + 1
 
 
 # ─── Provider configurations ───
@@ -369,6 +370,9 @@ async def reject_agent_artifact(artifact_id: str, data: AgentArtifactReview, db:
 
 @router.get("/projects", response_model=list[ProjectOut])
 async def list_projects(db: AsyncSession = Depends(get_db)):
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        rows=(await db.execute(__import__("sqlalchemy").text("SELECT id,name,description,goal,root_node_id,status,settings,created_at,updated_at FROM projects ORDER BY updated_at DESC"))).mappings().all()
+        return [{**dict(row),"settings":json.loads(row["settings"]) if isinstance(row["settings"],str) else (row["settings"] or {}),"revision":1} for row in rows]
     result = await db.execute(select(Project).order_by(Project.updated_at.desc()))
     return result.scalars().all()
 
@@ -538,6 +542,7 @@ async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(node, k, v)
     node.last_edited_by = "human"
+    node.revision = (node.revision or 1) + 1
     # Auto-advance maturity based on content richness
     await auto_advance_maturity(node_id, db)
 
@@ -1028,6 +1033,8 @@ async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession 
         raise HTTPException(404, "Node not found")
     block = ContentBlock(node_id=node_id, **data.model_dump())
     db.add(block)
+    node.revision = (node.revision or 1) + 1
+    touch_project(await db.get(Project, node.project_id))
     await auto_advance_maturity(node_id, db)
     await db.commit()
     await db.refresh(block)
@@ -1041,6 +1048,9 @@ async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession
         raise HTTPException(404, "Block not found")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(block, k, v)
+    block.revision = (block.revision or 1) + 1
+    node = await db.get(Node, block.node_id)
+    if node: node.revision = (node.revision or 1) + 1; touch_project(await db.get(Project, node.project_id))
     await db.commit()
     await db.refresh(block)
     return block
