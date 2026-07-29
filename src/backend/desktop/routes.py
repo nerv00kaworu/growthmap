@@ -62,6 +62,6 @@ async def verify_revocation(request: Request):
     try: current=verify_document(strict_json_loads(LICENSE_PATH.read_text("utf-8")))
     except Exception: current=None
     if current is None or current.state!="paid" or not current.valid or not current.license_id: raise HTTPException(400,"An active matching license is required")
-    try: verify_revocation_assertion(document,current.license_id)
+    try: verify_revocation_assertion(document,current.license_id,license_issued_at=strict_json_loads(LICENSE_PATH.read_text("utf-8")).get("issued_at"))
     except Exception as error: raise HTTPException(400,f"Revocation rejected: {error}")
     return {"accepted":True,"license_id":current.license_id,"sequence":document["sequence"]}

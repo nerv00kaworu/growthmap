@@ -118,8 +118,8 @@ def test_revocation_assertion_strict_types_canonical_time_and_future(tmp_path):
  def signed(**change):
   d={**base,**change};d['signature']=base64.b64encode(key.sign(REVOCATION_DOMAIN+json.dumps(d,sort_keys=True,separators=(',',':')).encode())).decode();return d
  now=datetime(2026,1,1,tzinfo=timezone.utc);assert verify_revocation_assertion(signed(),'legacy-1',pub,now=now)
- for bad in [signed(schema_version=True),signed(major_version=True),signed(revoked_at='2026-01-01T00:00:00+00:00'),signed(revoked_at='2026-01-01T08:00:00+08:00'),signed(revoked_at='2026-01-01T00:06:00.000000Z')]:
-  with pytest.raises(Exception):verify_revocation_assertion(bad,'legacy-1',pub,now=now)
+ for bad in [signed(schema_version=True),signed(major_version=True),signed(revoked_at='2026-01-01T00:00:00+00:00'),signed(revoked_at='2026-01-01T08:00:00+08:00'),signed(revoked_at='2026-01-01T00:06:00.000000Z'),signed(revoked_at='2025-12-31T23:59:59.000000Z')]:
+  with pytest.raises(Exception):verify_revocation_assertion(bad,'legacy-1',pub,now=now,license_issued_at='2026-01-01T00:00:00+00:00')
 
 def test_strict_json_rejects_duplicate_and_case_collision():
  import pytest
