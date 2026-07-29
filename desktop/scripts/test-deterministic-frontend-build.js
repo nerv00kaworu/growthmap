@@ -9,7 +9,9 @@ const {scan,stable}=require('./csp-manifest');
 const root=path.resolve(__dirname,'..','..'), source=path.join(root,'src','frontend');
 const temporary=[];
 try{
-  for(const label of ['a','b']){
+  // Three unrelated absolute roots catch path leakage while keeping every run
+  // a clean dependency install and production build.
+  for(const label of ['a','b','encoded root %20']){
     const dir=fs.mkdtempSync(path.join(os.tmpdir(),`growthmap-deterministic-${label}-`));temporary.push(dir);
     const frontend=path.join(dir,'src','frontend');fs.mkdirSync(path.dirname(frontend),{recursive:true});
     fs.cpSync(source,frontend,{recursive:true,filter:(entry)=>!['node_modules','.next','out','tsconfig.tsbuildinfo'].includes(path.basename(entry))});
@@ -19,7 +21,7 @@ try{
     run('npm',['ci']);run('npm',['run','build']);
   }
   const manifests=temporary.map(dir=>stable(scan(path.join(dir,'src','frontend','out'))));
-  assert.equal(manifests[0],manifests[1],'two clean production builds produced different complete CSP manifests');
+  for(const manifest of manifests.slice(1))assert.equal(manifests[0],manifest,'clean production builds produced different complete CSP manifests');
   const tracked=fs.readFileSync(path.join(root,'desktop','generated','csp-script-hashes.json'),'utf8');assert.equal(tracked,manifests[0]);
-  console.log(`Two clean builds and tracked CSP manifest are identical: ${crypto.createHash('sha256').update(tracked).digest('hex')}`);
+  console.log(`Three clean builds and tracked CSP manifest are identical: ${crypto.createHash('sha256').update(tracked).digest('hex')}`);
 }finally{for(const dir of temporary)fs.rmSync(dir,{recursive:true,force:true});}

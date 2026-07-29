@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import select,update
 from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
+from api.branching import deep_copy_branch
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 
@@ -186,7 +187,8 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
         elif kind=="create_content_block":
             b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
         else:
-            b=Branch(id=op["id"],project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],revision=1);db.add(b);results.append({"op":kind,"id":b.id,"revision":1})
+            b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
+            results.append({"op":kind,"id":b.id,"revision":1})
     bump(existing_touched)
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))

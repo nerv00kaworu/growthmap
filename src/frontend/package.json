@@ -6,7 +6,7 @@
     "dev": "next dev --port 3100",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit --pretty false",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test src/**/*.test.ts && node --test src/lib/stable-module-ids.node-test.mjs",
     "build": "next build && node ../../desktop/scripts/generate-csp-manifest.js",
     "start": "next start --port 3100",
     "test:deterministic-build": "node ../../desktop/scripts/test-deterministic-frontend-build.js"

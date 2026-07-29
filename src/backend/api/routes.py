@@ -20,6 +20,7 @@ from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, 
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret
 from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
+from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
@@ -1741,128 +1742,21 @@ async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/projects/{project_id}/branches", response_model=BranchOut, status_code=201)
 async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = Depends(get_db)):
-    """Create a branch by deep-copying source node and all its descendants."""
+    """Create a branch through the canonical transaction-local deep-copy primitive."""
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
-
     source_node = await db.get(Node, data.source_node_id)
     if not source_node or source_node.project_id != project_id:
         raise HTTPException(400, "Invalid source node")
 
     await claim_project_revision(db, project_id, data.expected_project_revision)
-    # Create branch record
-    branch = Branch(
-        project_id=project_id,
-        name=data.name,
-        description=data.description,
-        source_node_id=data.source_node_id,
-        status="active",
+    branch = await deep_copy_branch(
+        db, project_id=project_id, source_node_id=data.source_node_id,
+        name=data.name, description=data.description, actor="branch",
     )
-    db.add(branch)
-    await db.flush()
-
-    # Load all edges for this project
-    edges_result = await db.execute(
-        select(Edge).where(Edge.project_id == project_id, Edge.relation_type == "child_of")
-    )
-    all_edges = edges_result.scalars().all()
-    child_map_all: dict[str, list[str]] = {}
-    child_mainline_all: dict[tuple[str, str], bool] = {}
-    for e in all_edges:
-        from_id, to_id = str(e.from_node_id), str(e.to_node_id)
-        child_map_all.setdefault(from_id, []).append(to_id)
-        child_mainline_all[(from_id, to_id)] = bool(e.is_mainline)
-
-    # Collect all nodes in subtree
-    subtree_ids: list[str] = []
-    frontier = [data.source_node_id]
-    while frontier:
-        nid = frontier.pop()
-        subtree_ids.append(nid)
-        for cid in child_map_all.get(nid, []):
-            if cid not in subtree_ids:
-                frontier.append(cid)
-
-    # Load all subtree nodes
-    nodes_result = await db.execute(select(Node).where(Node.id.in_(subtree_ids)))
-    subtree_nodes = {str(n.id): n for n in nodes_result.scalars().all()}
-
-    # Load blocks
-    blocks_result = await db.execute(
-        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids))
-    )
-    blocks_by_node: dict[str, list] = {}
-    for b in blocks_result.scalars().all():
-        blocks_by_node.setdefault(str(b.node_id), []).append(b)
-
-    # Deep copy: create id mapping
-    id_map: dict[str, str] = {}
-    for old_id in subtree_ids:
-        new_node_id = str(uuid.uuid4())
-        id_map[old_id] = new_node_id
-
-    # Create new nodes
-    for old_id, old_node in subtree_nodes.items():
-        new_id = id_map[old_id]
-        copied = Node(
-            id=new_id,
-            project_id=project_id,
-            title=old_node.title,
-            summary=old_node.summary,
-            node_type=old_node.node_type,
-            status=old_node.status,
-            maturity=old_node.maturity,
-            tags=old_node.tags or [],
-            description=old_node.description,
-            rules_text=old_node.rules_text,
-            constraints_text=old_node.constraints_text,
-            examples_text=old_node.examples_text,
-            questions_text=old_node.questions_text,
-            decision_notes=old_node.decision_notes,
-            priority=old_node.priority,
-            confidence=old_node.confidence,
-            workflow_status=old_node.workflow_status,
-            file_paths=old_node.file_paths or [],
-            created_by="branch",
-            last_edited_by=old_node.last_edited_by or "branch",
-            position_x=old_node.position_x,
-            position_y=old_node.position_y,
-            branch_id=branch.id,
-        )
-        db.add(copied)
-        # Copy blocks
-        for b in blocks_by_node.get(old_id, []):
-            db.add(ContentBlock(
-                node_id=new_id,
-                block_type=b.block_type,
-                content=b.content,
-                order_index=b.order_index,
-                created_by="branch",
-            ))
-
-    await db.flush()
-
-    # Create new edges mirroring original structure (child_of only within subtree)
-    for old_from, old_tos in child_map_all.items():
-        if old_from not in id_map:
-            continue
-        for old_to in old_tos:
-            if old_to not in id_map:
-                continue
-            db.add(Edge(
-                project_id=project_id,
-                from_node_id=id_map[old_from],
-                to_node_id=id_map[old_to],
-                relation_type="child_of",
-                # 分支需保留來源樹的主線語意，不能把每個複製子節點都升為主線。
-                is_mainline=child_mainline_all.get((old_from, old_to), False),
-            ))
-
     db.add(ActionLog(
-        project_id=project_id,
-        actor_type="human",
-        action_type="create_branch",
+        project_id=project_id, actor_type="human", action_type="create_branch",
         payload={"branch_name": data.name, "source_node_id": data.source_node_id},
     ))
     await db.commit()

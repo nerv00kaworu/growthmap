@@ -104,3 +104,29 @@ def test_true_separate_request_sessions_gui_vs_agent_race_for_every_create_owner
    with ThreadPoolExecutor(max_workers=2) as pool:
     a=pool.submit(agent);g=pool.submit(gui);statuses=[a.result(),g.result()]
    assert sorted(statuses)==[200,409],(kind,statuses)
+
+def test_agent_branch_canonical_copy_provided_id_replay_and_same_batch_ref():
+ from db.database import async_session
+ from models.models import Branch,ContentBlock,Edge,Node
+ from sqlalchemy import select
+ import asyncio
+ with TestClient(app) as c:
+  p,root,h=setup(c)
+  child=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':p['revision'],'expected_parent_revision':root['revision'],'title':'child','parent_id':root['id']}).json()
+  p,root=state(c,p,root)
+  grand=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':p['revision'],'expected_parent_revision':child['revision'],'title':'grand','parent_id':child['id']}).json()
+  p,root=state(c,p,root)
+  made=c.post(f"/api/nodes/{root['id']}/blocks",json={'expected_project_revision':p['revision'],'expected_node_revision':root['revision'],'block_type':'code','content':{'nested':['x']},'order_index':7});assert made.status_code==201,made.text
+  p,root=state(c,p,root);bid='22222222-2222-4222-8222-222222222222';nid='33333333-3333-4333-8333-333333333333'
+  ops=[{'op':'create_branch','id':bid,'source_node_id':root['id'],'expected_source_revision':root['revision'],'name':'copy'}, {'op':'create_node','id':nid,'title':'same batch','branch_id':bid}]
+  r=batch(c,h,p,'tree-copy',ops);assert r.status_code==200,r.text
+  assert batch(c,h,p,'tree-copy',ops).json()==r.json()
+  async def rows():
+   async with async_session() as db:
+    branch=await db.get(Branch,bid);nodes=(await db.execute(select(Node).where(Node.branch_id==bid))).scalars().all();ids={n.id for n in nodes};blocks=(await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(ids)))).scalars().all();edges=(await db.execute(select(Edge).where(Edge.from_node_id.in_(ids),Edge.to_node_id.in_(ids)))).scalars().all();return branch,nodes,blocks,edges
+  branch,nodes,blocks,edges=asyncio.run(rows())
+  assert branch.status=='active' and branch.revision==1
+  assert sorted(n.title for n in nodes)==['child','grand','same batch','union'] and all(n.revision==1 and n.branch_id==bid for n in nodes)
+  assert len(blocks)==1 and blocks[0].content=={'nested':['x']} and blocks[0].order_index==7 and blocks[0].revision==1
+  assert len(edges)==2 and all(e.relation_type=='child_of' and e.revision==1 for e in edges)
+  assert c.get(f"/api/nodes/{root['id']}").json()['revision']==root['revision']

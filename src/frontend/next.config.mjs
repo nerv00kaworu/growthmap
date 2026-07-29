@@ -1,29 +1,5 @@
-import crypto from "node:crypto";
 import path from "node:path";
-
-class StableModuleIdsPlugin {
-  constructor(root) { this.root = root; }
-  apply(compiler) {
-    compiler.hooks.compilation.tap("GrowthMapStableModuleIds", (compilation) => {
-      compilation.hooks.beforeModuleIds.tap("GrowthMapStableModuleIds", (modules) => {
-        const rawRoot = this.root.split(path.sep).join("/");
-        const encodedRoot = encodeURIComponent(rawRoot);
-        const rows = [...modules].filter((module) => module.id == null).map((module) => {
-          const normalized = module.identifier().split(path.sep).join("/")
-            .replaceAll(encodedRoot, "<PROJECT_ROOT>").replaceAll(rawRoot, "<PROJECT_ROOT>");
-          return { module, normalized };
-        }).sort((a, b) => a.normalized.localeCompare(b.normalized, "en"));
-        const used = new Set();
-        for (const row of rows) {
-          const base = crypto.createHash("sha256").update(row.normalized).digest("hex").slice(0, 16);
-          let id = base, suffix = 0;
-          while (used.has(id)) id = `${base}-${++suffix}`;
-          used.add(id); row.module.id = id;
-        }
-      });
-    });
-  }
-}
+import { StableModuleIdsPlugin } from "./src/lib/stable-module-ids.mjs";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
