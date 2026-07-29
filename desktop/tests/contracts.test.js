@@ -97,3 +97,4 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
 })
+test('expired paid identity reaches freshness high-water while trial and no-license do not',()=>{const main=fs.readFileSync(path.resolve(__dirname,'../main.js'),'utf8');assert.match(main,/else if\(entitlement\.license_id\).*freshness\.checkpoint\(entitlement\.license_id\)/s);assert.doesNotMatch(main,/else\s*\{\s*freshness\.checkpoint/);});

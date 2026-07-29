@@ -87,15 +87,14 @@ def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, 
         binding=doc.get("device_binding")
         if binding is not None: return Entitlement(reason="device_binding_unsupported")
         _iso(doc["issued_at"])
-        expires=doc.get("expires_at")
+        expires=doc.get("expires_at");expiry=None
         if expires is not None:
             try: expiry=_iso(expires)
             except (ValueError,TypeError): return Entitlement(reason="invalid_expiry")
-            if expiry <= now: return Entitlement(reason="expired")
+        revoked=None
         if doc.get("revoked_at") is not None:
             try: revoked=_iso(doc["revoked_at"])
             except (ValueError,TypeError): return Entitlement(reason="invalid_revocation")
-            if revoked <= now: return Entitlement(reason="revoked")
         if doc["max_active_projects"] is not None: return Entitlement(reason="invalid_limit")
         raw=public_key_path.read_bytes()
         if b"REPLACE_WITH" in raw: return Entitlement(reason="placeholder_public_key")
@@ -103,6 +102,9 @@ def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, 
         if not isinstance(key,Ed25519PublicKey): return Entitlement(reason="invalid_public_key")
         key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
         if doc["major_version"] != current_major: return Entitlement(reason="major_mismatch", major_version=doc["major_version"])
+        observed=dict(state="paid_observed",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None)
+        if expiry is not None and expiry <= now: return Entitlement(**observed,reason="expired")
+        if revoked is not None and revoked <= now: return Entitlement(**observed,reason="revoked")
         if "next_check_in_at" in doc:
             try: next_check_in=_iso(doc["next_check_in_at"])
             except (ValueError,TypeError,KeyError): return Entitlement(reason="invalid_check_in")
@@ -133,7 +135,7 @@ def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_
     return doc
 
 def apply_revocation(value: Entitlement, path: Path=REVOCATION_PATH, *, public_key_path: Path=PUBLIC_KEY_PATH, issued_at: str|None=None) -> Entitlement:
-    if value.state!="paid" or not value.valid or not path.exists(): return value
+    if value.state not in {"paid","paid_legacy"} or not value.valid or not path.exists(): return value
     try: verify_revocation_assertion(strict_json_loads(path.read_text("utf-8")),value.license_id or "",public_key_path,issued_at=issued_at)
     except Exception: return Entitlement(reason="revocation_state_invalid",license_id=value.license_id,major_version=value.major_version)
     return Entitlement(reason="revoked",license_id=value.license_id,major_version=value.major_version)

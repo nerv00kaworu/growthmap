@@ -111,3 +111,15 @@ def test_legacy_v1_bootstrap_and_strict_revocation_timestamp_types(tmp_path):
  with pytest.raises(Exception):verify_revocation_assertion(sign(base),'TEST-ONLY-1',pub,now=datetime(2026,1,1,tzinfo=timezone.utc),issued_at='2026-01-02T00:00:00+00:00')
  for raw in ['{"product":"evil","product":"growthmap"}','{"Product":"evil","product":"growthmap"}']:
   with pytest.raises(ValueError):strict_json_loads(raw)
+
+def test_expired_signed_paid_preserves_identity_for_desktop_high_water(tmp_path):
+ private=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+ value=verify_document(signed(private,expires_at='2026-01-02T00:00:00+00:00'),pub,now=datetime(2099,1,1,tzinfo=timezone.utc))
+ assert value.state=='paid_observed' and value.license_id=='TEST-ONLY-1' and not value.valid and value.reason=='expired'
+
+def test_true_signed_legacy_license_applies_true_signed_matching_revocation(tmp_path):
+ from desktop.entitlements import apply_revocation,REVOCATION_DOMAIN
+ private=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+ legacy=signed(private);legacy.pop('next_check_in_at');legacy['signature']=base64.b64encode(private.sign(canonical_payload(legacy))).decode();value=verify_document(legacy,pub,now=datetime(2026,7,29,tzinfo=timezone.utc));assert value.state=='paid_legacy'
+ assertion={'schema_version':1,'assertion_type':'growthmap_license_revocation','product':'growthmap','major_version':1,'license_id':'TEST-ONLY-1','revoked_at':'2026-07-29T00:00:00Z','sequence':1,'reason_code':'administrative'};assertion['signature']=base64.b64encode(private.sign(REVOCATION_DOMAIN+canonical_payload(assertion))).decode();path=tmp_path/'revocation.json';path.write_text(json.dumps(assertion))
+ result=apply_revocation(value,path,public_key_path=pub,issued_at=legacy['issued_at']);assert result.reason=='revoked' and result.license_id=='TEST-ONLY-1' and not result.valid

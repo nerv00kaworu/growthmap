@@ -410,3 +410,31 @@ def test_revocation_signature_domain_and_validation(env,tmp_path):
 
 def test_candidate_check_in_refreshes_only_active_license(env):
  s,c=env;o=s.create_order('paypal','checkin@e.test');assert s.candidate_check_in(o['recovery_code'])['state']=='not_found_or_unavailable';s.paypal_submit(o['order_id'],'CHECKIN');issued=s.paypal_confirm(o['order_id'],'CHECKIN',{'amount':'10','currency':'USD','status':'COMPLETED','payee_verified':True});fresh=s.candidate_check_in(o['recovery_code']);assert fresh['state']=='license_issued' and fresh['license']['license_id']==issued['license_id'];s.admin_transition(o['order_id'],'revoke');assert s.candidate_check_in(o['recovery_code'])['state']=='not_found_or_unavailable'
+
+def test_populated_authenticated_v6_upgrades_to_v7_and_reopens(tmp_path,monkeypatch):
+ import growthmap_payments.service as module
+ p=tmp_path/'populated-v6.sqlite';c=config(p);monkeypatch.setattr(module,'SCHEMA_VERSION',6);v6=PaymentService(c);o=v6.create_order('paypal','v6@e.test');v6.paypal_submit(o['order_id'],'V6-TX');issued=v6.paypal_confirm(o['order_id'],'V6-TX',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True});assert issued['state']=='license_issued'
+ monkeypatch.setattr(module,'SCHEMA_VERSION',7);v7=PaymentService(c)
+ with v7._db() as db:
+  assert db.execute('PRAGMA user_version').fetchone()[0]==7
+  assert tuple(db.execute('SELECT version,filename,checksum FROM migration_ledger WHERE version=7').fetchone())==(7,*module.MIGRATIONS[7])
+  assert db.execute('SELECT count(*) FROM revocation_assertions').fetchone()[0]==0
+ reopened=PaymentService(c);assert reopened.recovery_lookup(o['recovery_code'])['license']['license_id']==issued['license_id']
+
+def test_migration_007_delete_reinsert_checkpoint_failure_and_tamper(tmp_path,monkeypatch):
+ p=tmp_path/'migration-007-security.sqlite';c=config(p);s=PaymentService(c);o=s.create_order('paypal','m7@e.test');s.paypal_submit(o['order_id'],'M7-TX');s.paypal_confirm(o['order_id'],'M7-TX',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True});a=s.admin_transition(o['order_id'],'revoke')['revocation']
+ with s._db() as db:
+  with pytest.raises(sqlite3.IntegrityError,match='immutable'):db.execute('DELETE FROM revocation_assertions')
+  with pytest.raises(sqlite3.IntegrityError):db.execute("INSERT INTO revocation_assertions SELECT * FROM revocation_assertions")
+ with sqlite3.connect(p) as db:db.execute('DROP TRIGGER revocation_assertion_no_delete');db.execute('DELETE FROM revocation_assertions')
+ with pytest.raises(RuntimeError,match='checkpoint/database mismatch'):PaymentService(c)
+ # A checkpoint publication failure rolls back insertion and permanently closes the instance.
+ p2=tmp_path/'migration-007-checkpoint.sqlite';c2=config(p2);s2=PaymentService(c2);o2=s2.create_order('paypal','m7-fail@e.test');s2.paypal_submit(o2['order_id'],'M7-FAIL');s2.paypal_confirm(o2['order_id'],'M7-FAIL',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True})
+ monkeypatch.setattr(s2,'_write_checkpoint_document',lambda _doc:(_ for _ in ()).throw(OSError('injected')))
+ with pytest.raises(RuntimeError,match='checkpoint update failed'):s2.admin_transition(o2['order_id'],'revoke')
+ with sqlite3.connect(p2) as db:assert db.execute('SELECT count(*) FROM revocation_assertions').fetchone()[0]==0
+ with pytest.raises(RuntimeError,match='fail-closed'):s2.recovery_lookup(o2['recovery_code'])
+ # Reinserted byte-tampered assertion is covered by the authenticated closure.
+ p3=tmp_path/'migration-007-tamper.sqlite';c3=config(p3);s3=PaymentService(c3);o3=s3.create_order('paypal','m7-tamper@e.test');s3.paypal_submit(o3['order_id'],'M7-TAMPER');s3.paypal_confirm(o3['order_id'],'M7-TAMPER',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True});s3.admin_transition(o3['order_id'],'revoke')
+ with sqlite3.connect(p3) as db:db.execute('DROP TRIGGER revocation_assertion_no_update');db.execute("UPDATE revocation_assertions SET assertion_json=replace(assertion_json,'administrative','fraud')")
+ with pytest.raises(RuntimeError,match='checkpoint/database mismatch'):PaymentService(c3)
