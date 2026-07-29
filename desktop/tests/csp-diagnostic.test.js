@@ -39,6 +39,15 @@ test('exact per-element hashes distinguish same-length single-element changes', 
   assert.notEqual(left[0].sha256, right[0].sha256); assert.equal(left[1].sha256, right[1].sha256);
 });
 
+test('scalar literals expose only strict public module and export tokens', () => {
+  const [fields] = balancedTuples('I["ClientPageRoot","default","0123456789abcdef","","ordinary sentence here","https://example.com/?token=secret","api_key=secret-token"]');
+  assert.deepEqual(fields.slice(0, 3).map((field) => field.value), ['ClientPageRoot', 'default', '0123456789abcdef']);
+  for (const field of fields.slice(3)) {
+    assert.equal(field.value, undefined);
+    assert.match(field.sha256, /^[0-9a-f]{64}$/);
+  }
+});
+
 test('allows only strict public chunk literals and retains metadata otherwise', () => {
   const values = strictArrayMetadata('["deadbeef","static/chunks/app/page-abc.js","webpack-token_1",42,true,null,"not a chunk/path.txt"]');
   assert.deepEqual(values.slice(0, 3).map((x) => x.value), ['deadbeef', 'static/chunks/app/page-abc.js', 'webpack-token_1']);

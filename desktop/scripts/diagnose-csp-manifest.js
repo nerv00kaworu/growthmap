@@ -83,7 +83,7 @@ function fieldMetadata(value, index) {
   const result = { index, type: scalarType(value), bytes: Buffer.byteLength(text, 'utf8'), chars: text.length, sha256: digest(text) };
   if (Array.isArray(value)) result.elements = strictArrayMetadata(text);
   else if (typeof value === 'string' && value.trimStart().startsWith('[')) result.elements = strictArrayMetadata(value);
-  else if (typeof value === 'string' && value.length <= MAX_TOKEN && !value.includes('\\')) result.value = value;
+  else if (safeChunkLiteral(value)) result.value = value;
   else if (typeof value !== 'string') result.value = value;
   return result;
 }
