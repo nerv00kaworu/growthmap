@@ -197,20 +197,24 @@ function Invoke-ProductionPackageLayoutSelfTest {
     [IO.File]::WriteAllText($testPackage,'{"dependencies":{"safe-package":"1.0.0"}}')
     [IO.File]::WriteAllText($testLock,'{"lockfileVersion":3,"packages":{"":{"dependencies":{"safe-package":"1.0.0"}},"node_modules/safe-package":{"version":"1.0.0","resolved":"https://registry.invalid/safe-package.tgz","integrity":"sha512-test"}}}')
     $testProvenance=Join-Path $contentRoot 'provenance.json';$testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
-    $savedProvenance=$ProvenancePath;$savedDigest=$ProvenanceSha256
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Third-party inventory accepted a hidden node_modules payload' }
     catch { if ($_.Exception.Message -notmatch 'differs from lock-installed inventory') { throw } }
     # An extra package present in both installed and ASAR trees must still be rejected
-    # because the lock, not either mutable tree, is the trust inventory.
+    # because the lock, not either mutable tree, is the trust inventory. Refresh the
+    # synthetic frozen provenance after each deliberate fixture mutation so the test
+    # reaches the intended lock-inventory gate instead of failing at the earlier byte gate.
     foreach ($root in @($installed,(Join-Path $extracted 'node_modules'))) { New-Item -ItemType Directory (Join-Path $root 'smuggled') -Force|Out-Null;[IO.File]::WriteAllText((Join-Path $root 'smuggled/index.js'),'same') }
+    $testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Inventory accepted package smuggled into installed and packaged trees' }
     catch { if ($_.Exception.Message -notmatch 'Package root absent from lock') { throw } }
     Remove-Item (Join-Path $installed 'smuggled'),(Join-Path $extracted 'node_modules/smuggled') -Recurse -Force
     foreach ($root in @($installed,(Join-Path $extracted 'node_modules'))) { New-Item -ItemType Directory (Join-Path $root 'safe-package/node_modules/nested-smuggled') -Force|Out-Null;[IO.File]::WriteAllText((Join-Path $root 'safe-package/node_modules/nested-smuggled/index.js'),'same') }
+    $testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Inventory accepted nested package absent from lock' }
     catch { if ($_.Exception.Message -notmatch 'Package root absent from lock') { throw } }
     Remove-Item (Join-Path $installed 'safe-package/node_modules'),(Join-Path $extracted 'node_modules/safe-package/node_modules') -Recurse -Force
     [IO.File]::WriteAllText($testPackage,'{"dependencies":{"other":"1.0.0"}}')
+    $testDigest=& (Join-Path $PSScriptRoot 'new-node-provenance.ps1') -NodeModules $installed -LockPath $testLock -PackagePath $testPackage -OutputPath $testProvenance
     try { Assert-ThirdPartyInventory $extracted $installed $testLock $testPackage $testProvenance $testDigest;throw 'Inventory accepted lock/root dependency mismatch' }
     catch { if ($_.Exception.Message -notmatch 'dependencies differ') { throw } }
   } finally { Remove-Item $contentRoot -Recurse -Force }

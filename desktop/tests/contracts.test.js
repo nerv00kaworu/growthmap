@@ -74,6 +74,8 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.match(verifier, /\$lock\['packages'\]\[''\]/)
   assert.match(verifier, /\$rootDependencyNames = \(\(\$rootDeps\.Keys \| Sort-Object\) -join "`n"\)/)
   assert.match(verifier, /\$lockRootDependencyNames = \(\(\$lockRootDeps\.Keys \| Sort-Object\) -join "`n"\)/)
+  assert.ok((verifier.match(/\$testDigest=& \(Join-Path \$PSScriptRoot 'new-node-provenance\.ps1'\)/g)||[]).length >= 4)
+  assert.match(verifier, /Refresh the[\s\S]*synthetic frozen provenance after each deliberate fixture mutation/)
   assert.doesNotMatch(verifier, /\$lock\.packages/)
   assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
