@@ -1,8 +1,8 @@
 {
   "job_id": "growthmap-payments-v1-20260728",
-  "status": "candidate_all_local_security_qa_windows_audit_gates_pass_production_no_go_external_inputs",
+  "status": "candidate_local_security_qa_windows_audit_revocation_gates_pass_production_no_go_external_inputs",
   "baseline_documented": "3023e16",
-  "implemented_on_head": "4f381930d2849c87356de73ff655e3851784f1d9",
+  "implemented_on_head": "9e675bcb21e273566bfe7c0ec4d6a520323ded22",
   "live_db_accessed": false,
   "real_money_or_provider_writes": false,
   "commit_or_push": true,
@@ -59,12 +59,14 @@
     }
   ],
   "counts": {
-    "payment_tests": 26,
+    "payment_tests": 31,
     "backend_tests": 53,
-    "desktop_tests": 80,
+    "desktop_tests": 96,
     "desktop_audit_vulnerabilities": 0,
     "frontend_audit_high": 0,
-    "frontend_audit_total": 0
+    "frontend_audit_total": 0,
+    "backend_focused_tests": 12,
+    "payment_backend_full_tests": 87
   },
   "blockers": [
     "official x402/CDP facilitator SDK integration and multi-instance transaction review",
@@ -72,11 +74,11 @@
     "real HTTPS payment API and wallet portal",
     "PayPal merchant URL and reviewed manual operations",
     "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
-    "revocation check-in",
-    "production legal/config/Authenticode signing and updater publication inputs"
+    "production legal/config/Authenticode signing and updater publication inputs",
+    "external monotonic/HSM or authenticated online witness for coordinated whole-state rollback"
   ],
   "report": "reports/growthmap-payments-v1-20260728.md",
-  "schema_version": 6,
+  "schema_version": 7,
   "r5": {
     "status": "candidate-remediated-local",
     "production": "NO-GO",
@@ -127,12 +129,12 @@
     ]
   },
   "windows_candidate": {
-    "status": "pass_after_manifest_and_frontend_audit_remediation",
-    "sha": "4f381930d2849c87356de73ff655e3851784f1d9",
-    "run_id": 30421389694,
-    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30421389694",
-    "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary and ordinal manifest provenance",
-    "security_review": "targeted_PASS_manifest_deletion_and_case_rename_HIGH_closed",
+    "status": "pass_after_signed_revocation_checkin_and_four_round_security_remediation",
+    "sha": "9e675bcb21e273566bfe7c0ec4d6a520323ded22",
+    "run_id": 30425575435,
+    "url": "https://github.com/nerv00kaworu/growthmap/actions/runs/30425575435",
+    "scope": "unsigned noncommercial candidate/package/ASAR/E2E/adversarial-boundary, ordinal dependency provenance, signed revocation/check-in and protected-history gates",
+    "security_review": "fresh_final_PASS_after_R1_R4_targeted_reproducers",
     "publication_gate": "not_run_missing_production_signing_inputs",
     "product_release": "NO-GO"
   },
@@ -149,7 +151,6 @@
       "real HTTPS payment API and wallet portal",
       "PayPal merchant URL and reviewed manual operations",
       "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
-      "revocation check-in",
       "production legal/config/Authenticode signing and updater publication inputs"
     ]
   },
@@ -166,8 +167,34 @@
       "real HTTPS payment API and wallet portal",
       "PayPal merchant URL and reviewed manual operations",
       "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
-      "revocation check-in",
       "production legal/config/Authenticode signing and updater publication inputs"
+    ]
+  },
+  "r11": {
+    "status": "signed_revocation_checkin_local_candidate_pass_windows_and_fresh_security_review",
+    "schema_version": 7,
+    "candidate_sha": "9e675bcb21e273566bfe7c0ec4d6a520323ded22",
+    "controls": [
+      "domain-separated canonical Ed25519 revocation assertions with monotonic sequence and strict reason/time/type binding",
+      "immutable migration 007 in authenticated schema/issuance checkpoint closure",
+      "transactional idempotent revoke, revoked recovery suppression and 30-day signed freshness/check-in",
+      "legacy first-observation bootstrap and revocation-before-promotion",
+      "paid clock high-water and OS-protected revocation/freshness/history/presence/installation evidence",
+      "duplicate/casefold-collision strict JSON at all trust boundaries",
+      "fail-closed deletion/tamper/rollback/incoherence and required Windows ASAR module inventory"
+    ],
+    "review_history": "four fresh targeted review rounds; all reproduced candidate-local findings remediated; final Jian PASS",
+    "evidence": "payments+backend 87; desktop 96; frontend gates PASS; Windows run 30425575435 PASS at exact merged SHA",
+    "residual_limitation": "coordinated rollback of mutually consistent whole app+OS-protected state requires external monotonic/HSM or authenticated online witness",
+    "production": "NO-GO",
+    "blockers": [
+      "official x402/CDP facilitator SDK integration and multi-instance transaction review",
+      "production Base recipient and secure Ed25519 key provider",
+      "real HTTPS payment API and wallet portal",
+      "PayPal merchant URL and reviewed manual operations",
+      "production admin session/Argon2id/CSRF/rate limiting/recovery delivery",
+      "production legal/config/Authenticode signing and updater publication inputs",
+      "external monotonic/HSM or authenticated online witness for coordinated whole-state rollback"
     ]
   }
 }
