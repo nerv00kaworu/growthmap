@@ -477,6 +477,11 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         branch_id=data.branch_id, title=data.title, summary=data.summary,
         node_type=data.node_type, description=data.description, tags=data.tags,
         actor_type="human", created_by="human")
+    # GUI historically requires an exact branch value; unlike Agent Port it does
+    # not infer a branch when parent_id is supplied.
+    gui_parent = await db.get(Node, data.parent_id) if data.parent_id else None
+    if gui_parent and gui_parent.project_id == project_id and (gui_parent.branch_id or None) != (data.branch_id or None):
+        raise HTTPException(400, "Parent and child must belong to the same branch")
     try:
         validated = await validate_create_node(db, spec)
     except HTTPException as exc:

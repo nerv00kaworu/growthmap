@@ -58,8 +58,8 @@ def run_validation():
   p=project(c,'branch');root=c.get('/api/nodes/'+p['root_node_id']).json();bid=arun(add_branch(p['id']))
   async def put_parent():
    async with async_session() as db:n=await db.get(Node,root['id']);n.branch_id=bid;await db.commit()
-  arun(put_parent());h=grant(c,p['id'])
-  inherited=batch(c,h,p,'inherit-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':1,'title':'inherited'}]);assert inherited.status_code==200,inherited.text;assert c.get('/api/nodes/'+inherited.json()['results'][0]['id']).json()['branch_id']==bid
+  arun(put_parent());h=grant(c,p['id']);gui_omitted=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'title':'omitted'});assert gui_omitted.status_code==400,gui_omitted.text;gui_explicit=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'branch_id':bid,'title':'explicit'});assert gui_explicit.status_code==201,gui_explicit.text;p=c.get('/api/projects/'+p['id']).json();root=c.get('/api/nodes/'+root['id']).json()
+  inherited=batch(c,h,p,'inherit-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':root['revision'],'title':'inherited'}]);assert inherited.status_code==200,inherited.text;assert c.get('/api/nodes/'+inherited.json()['results'][0]['id']).json()['branch_id']==bid
   other=arun(add_branch(p['id']));cur=c.get('/api/projects/'+p['id']).json();parent=c.get('/api/nodes/'+root['id']).json()
   g=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'expected_parent_revision':parent['revision'],'parent_id':root['id'],'branch_id':other,'title':'bad'});assert g.status_code==400,g.text
   a=batch(c,h,cur,'mismatch-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':parent['revision'],'branch_id':other,'title':'bad'}]);assert a.status_code==422,a.text
@@ -73,9 +73,9 @@ def run_validation():
   collision=batch(c,h,cur,'collision-1',[{'op':'create_node','id':root['id'],'title':'collision'}]);assert collision.status_code==409,collision.text
   sp=project(c,'scoped');sroot=c.get('/api/nodes/'+sp['root_node_id']).json();scoped=grant(c,sp['id'],node_scope_id=sroot['id']);r=batch(c,scoped,sp,'scoped-child',[{'op':'create_node','parent_id':sroot['id'],'expected_parent_revision':sroot['revision'],'title':'scoped'}]);assert r.status_code==200,r.text
   # Forward parent: new parent revision remains 1, first-child mainline, root touched once.
-  p=project(c,'forward');root=c.get('/api/nodes/'+p['root_node_id']).json();h=grant(c,p['id']);a=str(uuid.uuid4());b=str(uuid.uuid4());r=batch(c,h,p,'forward-parent',[{'op':'create_node','id':b,'parent_id':a,'expected_parent_revision':1,'title':'b'},{'op':'create_node','id':a,'parent_id':root['id'],'expected_parent_revision':1,'title':'a'}]);assert r.status_code==200,r.text
-  st=arun(counts(p['id'],root['id']));na=c.get('/api/nodes/'+a).json();assert st[0]==2 and st[1]==(2,'rough') and na['revision']==1
-  edge=[e for e in st[3] if e.from_node_id==a and e.to_node_id==b][0];assert edge.is_mainline is True
+  p=project(c,'forward');root=c.get('/api/nodes/'+p['root_node_id']).json();h=grant(c,p['id']);a=str(uuid.uuid4());b=str(uuid.uuid4());d=str(uuid.uuid4());e=str(uuid.uuid4());ops=[{'op':'create_node','id':b,'parent_id':a,'expected_parent_revision':1,'title':'caller-first'},{'op':'create_node','id':d,'parent_id':a,'expected_parent_revision':1,'title':'caller-second'},{'op':'create_node','id':a,'parent_id':root['id'],'expected_parent_revision':1,'title':'parent'},{'op':'create_node','id':e,'parent_id':a,'expected_parent_revision':1,'title':'caller-third'}];r=batch(c,h,p,'forward-parent',ops);assert r.status_code==200,r.text
+  st=arun(counts(p['id'],root['id']));na=c.get('/api/nodes/'+a).json();assert st[0]==2 and st[1]==(2,'rough') and na['revision']==2 and r.json()['results'][2]['revision']==2
+  siblings=[x for x in st[3] if x.from_node_id==a];assert len(siblings)==3 and sum(bool(x.is_mainline) for x in siblings)==1;assert next(x for x in siblings if x.to_node_id==b).is_mainline is True
 
 def run_atomic_context():
  with TestClient(app) as c:
@@ -89,12 +89,13 @@ def run_atomic_context():
   with ThreadPoolExecutor(max_workers=2) as pool:rs=[pool.submit(writer,i) for i in range(2)];rs=[x.result() for x in rs]
   assert sorted(x.status_code for x in rs)==[200,409],[(x.status_code,x.text) for x in rs]
   # Context semantic canonicalization is equal despite actor/receipt/generated-id wire differences.
-  packets=[]
+  packets=[];raw_digests=[]
   for entry in ('gui','agent'):
    q=project(c,'context');rt=c.get('/api/nodes/'+q['root_node_id']).json();gh=grant(c,q['id'])
    if entry=='gui':r=c.post(f"/api/projects/{q['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':rt['id'],'title':'same'})
    else:r=batch(c,gh,q,'context-create',[{'op':'create_node','parent_id':rt['id'],'expected_parent_revision':1,'title':'same'}])
-   assert r.status_code in (200,201),r.text;packet=c.get(f"/agent/v1/context/{rt['id']}?objective=ship",headers=gh).json();assert len(packet['snapshot_digest'])==64;packets.append(arun(semantic_context(packet)))
+   assert r.status_code in (200,201),r.text;packet=c.get(f"/agent/v1/context/{rt['id']}?objective=ship",headers=gh).json();assert len(packet['snapshot_digest'])==64;raw_digests.append(packet['snapshot_digest']);packets.append(arun(semantic_context(packet)))
+  assert raw_digests[0]!=raw_digests[1]  # source attribution is intentionally digest-visible
   assert packets[0]==packets[1],(packets[0],packets[1]);digests=[hashlib.sha256(json.dumps(x,sort_keys=True,separators=(',',':')).encode()).hexdigest() for x in packets];assert digests[0]==digests[1]
 case=os.environ['CASE'];{'core':run_core,'validation':run_validation,'atomic_context':run_atomic_context}[case]()
 '''

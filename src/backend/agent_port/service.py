@@ -205,6 +205,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     if touched_node_ids:
         existing_touched=(await db.execute(select(Node).where(Node.id.in_(touched_node_ids)))).scalars().all()
     ordered_results=[None]*len(ops)
+    result_entities={}
     canonical_touched=TouchedEntities()
     for op_index in execution_order:
         op=ops[op_index];kind=op["op"]
@@ -212,13 +213,13 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             identity=actor or grant.agent_identity
             spec=CreateNodeInput(project_id=project.id,node_id=op["id"],parent_id=op.get("parent_id"),branch_id=op.get("branch_id"),title=op["title"],summary=op.get("summary",""),node_type=op.get("node_type","idea"),actor_type="human" if actor else "agent",actor_id=identity,created_by=identity,provenance={"entry":"agent_port"})
             validated=await validate_create_node(db,spec)
-            n=await apply_create_node(db,validated,touched=canonical_touched,parent_is_existing=bool(op.get("parent_id") in existing_node_ids))
-            ordered_results[op_index]={"op":kind,"id":n.id,"revision":1}
+            n=await apply_create_node(db,validated,touched=canonical_touched)
+            ordered_results[op_index]={"op":kind,"id":n.id,"revision":1};result_entities[op_index]=n
         elif kind=="update_node":
             n=await db.get(Node,op["node_id"])
             for k,v in op["fields"].items():
                 if v is not None:setattr(n,k,v)
-            n.last_edited_by=actor or grant.agent_identity;ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision+1}
+            n.last_edited_by=actor or grant.agent_identity;ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision};result_entities[op_index]=n
         elif kind=="create_edge":
             e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
@@ -229,6 +230,9 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     results=ordered_results
     canonical_touched.add(*existing_touched)
     canonical_touched.apply()
+    # Results are authoritative after union touch application. This matters when
+    # a node created earlier in the batch later becomes a parent or is updated.
+    for index, entity in result_entities.items(): ordered_results[index]["revision"]=entity.revision or 1
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))
@@ -251,6 +255,12 @@ async def apply_batch(db,grant,body,actor=None,commit=True,proposal=None):
     lock=idempotency_lock(grant.id,body["idempotency_key"])
     await asyncio.to_thread(lock.acquire)
     try:
-        return await _apply_batch_serialized(db,grant,body,actor=actor,commit=commit,proposal=proposal)
+        try:
+            return await _apply_batch_serialized(db,grant,body,actor=actor,commit=commit,proposal=proposal)
+        except Exception:
+            # Explicitly release every staged CAS/canonical write for both direct
+            # batches and proposal-owned commit=False transactions.
+            await db.rollback()
+            raise
     finally:
         lock.release()

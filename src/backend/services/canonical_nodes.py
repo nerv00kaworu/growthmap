@@ -59,7 +59,7 @@ async def validate_create_node(db: AsyncSession, data: CreateNodeInput) -> Valid
         raise HTTPException(422, {"code":"INACTIVE_BRANCH", "message":"Branch is not active"})
     return ValidatedCreateNode(data, project, parent, branch, branch_id)
 
-async def apply_create_node(db: AsyncSession, validated: ValidatedCreateNode, *, touched: TouchedEntities | None = None, parent_is_existing: bool = True) -> Node:
+async def apply_create_node(db: AsyncSession, validated: ValidatedCreateNode, *, touched: TouchedEntities | None = None) -> Node:
     d = validated.data
     touched = touched or TouchedEntities()
     node = Node(id=d.node_id, project_id=d.project_id, branch_id=validated.branch_id,
@@ -73,9 +73,10 @@ async def apply_create_node(db: AsyncSession, validated: ValidatedCreateNode, *,
         db.add(Edge(project_id=d.project_id, from_node_id=validated.parent.id,
                     to_node_id=node.id, relation_type="child_of", is_mainline=count == 0, revision=1))
         await db.flush()
-        maturity_touched = touched if parent_is_existing else TouchedEntities()
-        if parent_is_existing: touched.add(validated.parent)
-        await auto_advance_maturity(validated.parent.id, db, touched=maturity_touched)
+        # Creation itself leaves revision 1; only becoming a parent in this
+        # transaction marks a newly-created node as touched.
+        touched.add(validated.parent)
+        await auto_advance_maturity(validated.parent.id, db, touched=touched)
     payload={"title":node.title,"parent_id":validated.parent.id if validated.parent else None}
     if d.provenance: payload["provenance"] = d.provenance
     db.add(ActionLog(project_id=d.project_id,node_id=node.id,actor_type=d.actor_type,
