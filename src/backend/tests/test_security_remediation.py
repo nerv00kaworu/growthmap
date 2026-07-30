@@ -27,8 +27,8 @@ class SecurityRemediationTest(unittest.TestCase):
         asyncio.run(engine.dispose())
 
     def test_frontend_storage_contract_has_no_secret_or_direct_provider_call(self):
-        provider_source = (ROOT / "src/frontend/src/lib/llm-provider.ts").read_text()
-        api_source = (ROOT / "src/frontend/src/lib/api.ts").read_text()
+        provider_source = (ROOT / "src/frontend/src/lib/llm-provider.ts").read_text(encoding="utf-8")
+        api_source = (ROOT / "src/frontend/src/lib/api.ts").read_text(encoding="utf-8")
         self.assertNotIn("apiKey?:", provider_source)
         self.assertNotIn("baseUrl?:", provider_source)
         for forbidden in ("x-api-key", "dangerous-direct-browser-access", "generativelanguage.googleapis.com", "api.openai.com"):
