@@ -17,6 +17,18 @@ test('packaged E2E keeps import input outside the fresh profile and verifies tri
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
 });
 
+test('import polling tolerates only the sidecar replacement window',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ const start=source.indexOf("stageWait(run,'import'");
+ const end=source.indexOf("await run.page.getByTestId('desktop-settings-button').click()",start);
+ const block=source.slice(start,end);
+ assert.match(block,/if\(response\.ok\)\{await response\.json\(\);return false;\}/);
+ assert.match(block,/response\.status>=400&&response\.status<500/);
+ assert.match(block,/catch\{\}return false/);
+ assert.doesNotMatch(block,/projects fetch .*error|catch\(error\)\{return \{error/);
+ assert.match(block,/資料庫操作失敗|原有資料未變更/);
+});
+
 test('CDP version probe records HTTP response and connection errors',async()=>{
  const server=http.createServer((request,response)=>{assert.equal(request.url,'/json/version');response.writeHead(200,{'content-type':'application/json'});response.end('{"Browser":"test"}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
