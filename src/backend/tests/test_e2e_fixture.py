@@ -16,11 +16,41 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
         table = connection.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name='projects'"
         ).fetchone()
-        row = connection.execute(
-            "SELECT id, name, status FROM projects WHERE id='fixture'"
+        project = connection.execute(
+            "SELECT id, name, description, goal, root_node_id, status, settings, "
+            "created_at, updated_at, revision FROM projects"
         ).fetchone()
+        root = connection.execute(
+            "SELECT id, project_id, title, node_type, status, maturity, "
+            "workflow_status, file_paths, revision FROM nodes"
+        ).fetchone()
+    project_id = "11111111-1111-4111-8111-111111111111"
+    root_id = "22222222-2222-4222-8222-222222222222"
+    created_at = "2026-07-30T00:00:00+00:00"
     assert table == ("projects",)
-    assert row == ("fixture", "Desktop Fixture", "active")
+    assert project == (
+        project_id,
+        "Desktop Fixture",
+        "",
+        "",
+        root_id,
+        "active",
+        "{}",
+        created_at,
+        created_at,
+        1,
+    )
+    assert root == (
+        root_id,
+        project_id,
+        "Desktop Fixture Root",
+        "root",
+        "active",
+        "seed",
+        "draft",
+        "[]",
+        1,
+    )
 
 
 def test_e2e_fixture_refuses_live_looking_path():
