@@ -14,7 +14,7 @@ REQUIRED={
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
 READBACK_CORE={"id":("VARCHAR(36)",True,None,1),"grant_id":("VARCHAR(36)",True,None,0),"project_id":("VARCHAR(36)",True,None,0),"target_node_id":("VARCHAR(36)",False,None,0),"commit_refs":("JSON",True,None,0),"files":("JSON",True,None,0),"tests":("JSON",True,None,0),"decisions":("JSON",True,None,0),"risks":("JSON",True,None,0),"todos":("JSON",True,None,0),"evidence":("JSON",True,None,0),"summary":("TEXT",False,None,0),"created_at":("DATETIME",False,None,0)}
 READBACK_V2={"based_on_project_revision":("INTEGER",True,"1",0),"context_snapshot_digest":("VARCHAR(64)",True,"",0),"objective":("TEXT",True,"",0),"current_project_revision":("INTEGER",True,"1",0),"context_stale":("BOOLEAN",True,"1",0)}
-READBACK_FKS={("grant_id","agent_grants","id","CASCADE"),("project_id","projects","id","CASCADE"),("target_node_id","nodes","id","SET NULL")}
+READBACK_FKS={("grant_id","agent_grants","id","NO ACTION","CASCADE","NONE"),("project_id","projects","id","NO ACTION","CASCADE","NONE"),("target_node_id","nodes","id","NO ACTION","SET NULL","NONE")}
 READBACK_INDEXES={"ix_agent_readbacks_grant_id":"grant_id","ix_agent_readbacks_project_id":"project_id"}
 
 def _literal_default(value):
@@ -36,9 +36,11 @@ def _readback_drift(connection,include_v2=True):
  expected={**READBACK_CORE,**(READBACK_V2 if include_v2 else {})}
  for name,spec in expected.items():
   if info.get(name)!=spec:reasons.append(f"column:agent_readbacks.{name}")
- fks={(r[3],r[2],r[4],str(r[6]).upper()) for r in connection.execute('PRAGMA foreign_key_list("agent_readbacks")')}
+ fks={(r[3],r[2],r[4],str(r[5]).upper(),str(r[6]).upper(),str(r[7]).upper()) for r in connection.execute('PRAGMA foreign_key_list("agent_readbacks")')}
  if fks!=READBACK_FKS:reasons.append("foreign_keys:agent_readbacks")
  indexes={r[1]:r for r in connection.execute('PRAGMA index_list("agent_readbacks")')}
+ named={name for name,row in indexes.items() if row[3]=='c'}
+ if named!=set(READBACK_INDEXES) or any(row[3] not in {'c','pk'} or (row[3]=='pk' and (not bool(row[2]) or bool(row[4]))) for row in indexes.values()) or sum(1 for row in indexes.values() if row[3]=='pk')>1:reasons.append("indexes:agent_readbacks")
  for name,column in READBACK_INDEXES.items():
   idx=indexes.get(name)
   if not idx or bool(idx[2]) or bool(idx[4]):reasons.append(f"index:{name}");continue

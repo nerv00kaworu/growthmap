@@ -76,3 +76,9 @@ def test_v2_primary_key_attacks_fail_closed(tmp_path,definition):
  import subprocess,sys
  p=tmp_path/f'fixture-pk-{abs(hash(definition))}.db';creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute('alter table agent_readbacks rename to old_readbacks');c.execute(f"CREATE TABLE agent_readbacks({definition},project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),based_on_project_revision INTEGER NOT NULL DEFAULT '1',context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT '',objective TEXT NOT NULL DEFAULT '',current_project_revision INTEGER NOT NULL DEFAULT '1',context_stale BOOLEAN NOT NULL DEFAULT '1',commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME)");c.execute('drop table old_readbacks');c.commit();c.close()
  with pytest.raises(ValueError,match='contract'):dm.validate(p)
+
+@pytest.mark.parametrize('sql',["CREATE UNIQUE INDEX ux_attack ON agent_readbacks(grant_id)","CREATE INDEX ix_attack ON agent_readbacks(summary)"])
+def test_v2_extra_indexes_fail_closed(tmp_path,sql):
+ import subprocess,sys
+ p=tmp_path/f'fixture-extra-{abs(hash(sql))}.db';creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute(sql);c.commit();c.close()
+ with pytest.raises(ValueError,match='contract|unapproved'):dm.validate(p)

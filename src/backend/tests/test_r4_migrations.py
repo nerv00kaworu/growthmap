@@ -123,3 +123,14 @@ def test_legacy_primary_key_attacks_fail_closed(tmp_path,definition):
   async with engine.connect() as conn:assert (await conn.execute(text('pragma user_version'))).scalar()==1
   await engine.dispose()
  asyncio.run(run())
+
+@pytest.mark.parametrize('extra',["CREATE UNIQUE INDEX ux_attack ON agent_readbacks(grant_id)","CREATE INDEX ix_attack ON agent_readbacks(summary)"])
+def test_legacy_extra_indexes_fail_closed(tmp_path,extra):
+ async def run():
+  legacy=OLD+"CREATE TABLE agent_readbacks(id VARCHAR(36) NOT NULL PRIMARY KEY,grant_id VARCHAR(36) NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,target_node_id VARCHAR(36) REFERENCES nodes(id) ON DELETE SET NULL,commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);"+extra+";PRAGMA user_version=1;"
+  engine=await db(tmp_path,legacy)
+  with pytest.raises(RuntimeError,match='index'):
+   async with engine.begin() as c:await migrate_sqlite(c)
+  async with engine.connect() as c:assert (await c.execute(text('pragma user_version'))).scalar()==1
+  await engine.dispose()
+ asyncio.run(run())

@@ -46,7 +46,7 @@ READBACK_INDEXES = {
  "ix_agent_readbacks_grant_id":"grant_id",
  "ix_agent_readbacks_project_id":"project_id",
 }
-READBACK_FKS = {("grant_id","agent_grants","id","CASCADE"),("project_id","projects","id","CASCADE"),("target_node_id","nodes","id","SET NULL")}
+READBACK_FKS = {("grant_id","agent_grants","id","NO ACTION","CASCADE","NONE"),("project_id","projects","id","NO ACTION","CASCADE","NONE"),("target_node_id","nodes","id","NO ACTION","SET NULL","NONE")}
 READBACK_COLUMNS = (
     ("agent_readbacks", "based_on_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN based_on_project_revision INTEGER NOT NULL DEFAULT 1"),
     ("agent_readbacks", "context_snapshot_digest", "VARCHAR(64)", True, "", "ALTER TABLE agent_readbacks ADD COLUMN context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT ''"),
@@ -75,7 +75,7 @@ async def _validate_column(conn, table, name, expected_type, not_null, default, 
     return True
 
 async def _validate_readback_fks(conn):
-    actual={(r[3],r[2],r[4],str(r[6]).upper()) for r in (await conn.execute(text("PRAGMA foreign_key_list(agent_readbacks)"))).all()}
+    actual={(r[3],r[2],r[4],str(r[5]).upper(),str(r[6]).upper(),str(r[7]).upper()) for r in (await conn.execute(text("PRAGMA foreign_key_list(agent_readbacks)"))).all()}
     if actual!=READBACK_FKS:raise RuntimeError("incompatible agent_readbacks foreign keys")
 
 async def _validate_readback_index(conn,name,column):
@@ -85,6 +85,11 @@ async def _validate_readback_index(conn,name,column):
     keys=[r for r in (await conn.execute(text(f'PRAGMA index_xinfo("{name}")'))).all() if r[5]]
     if len(keys)!=1 or keys[0][2]!=column or keys[0][1]<0:raise RuntimeError(f"incompatible migration index {name}")
     return True
+
+async def _validate_readback_index_set(conn,allow_missing_named=False):
+    rows=(await conn.execute(text("PRAGMA index_list(agent_readbacks)"))).all();named={r[1] for r in rows if r[3]=='c'};expected=set(READBACK_INDEXES)
+    if named-expected or (not allow_missing_named and named!=expected):raise RuntimeError("incompatible agent_readbacks index set")
+    if any(r[3] not in {'c','pk'} or (r[3]=='pk' and (not bool(r[2]) or bool(r[4]))) for r in rows) or sum(1 for r in rows if r[3]=='pk')>1:raise RuntimeError("incompatible agent_readbacks implicit index")
 
 async def migrate_sqlite(conn):
     version = int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
@@ -116,6 +121,7 @@ async def migrate_sqlite(conn):
                 for spec in READBACK_CORE_COLUMNS:
                     if not await _validate_column(conn,*spec):raise RuntimeError(f"incomplete legacy readback core: {spec[1]}")
                 await _validate_readback_fks(conn)
+                await _validate_readback_index_set(conn,True)
             for spec in READBACK_COLUMNS:
                 if not await _validate_column(conn, *spec[:5]): await conn.execute(text(spec[5]))
             for spec in (*READBACK_CORE_COLUMNS,*[x[:5] for x in READBACK_COLUMNS]): assert await _validate_column(conn,*spec)
@@ -124,6 +130,7 @@ async def migrate_sqlite(conn):
                 if not await _validate_readback_index(conn,name,column):await conn.execute(text(f"CREATE INDEX {name} ON agent_readbacks ({column})"))
                 assert await _validate_readback_index(conn,name,column)
                 if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_V2_AFTER")==str(ordinal):raise RuntimeError("injected v2 migration failure")
+            await _validate_readback_index_set(conn)
             await conn.execute(text("PRAGMA user_version=2"))
             await conn.execute(text("RELEASE SAVEPOINT growthmap_v2"))
         except Exception:
