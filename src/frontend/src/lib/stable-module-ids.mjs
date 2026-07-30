@@ -78,27 +78,6 @@ export function assignStableModuleIds(modules, root, access = {}) {
   }
 }
 
-function chunkKey(chunk) {
-  return [chunk.name || "", chunk.id == null ? "" : String(chunk.id)].join("\u0000");
-}
-export function compareChunks(a, b) { return compareTotal(chunkKey(a), chunkKey(b)); }
-export function stabilizeChunkGroups(chunkGroups) {
-  for (const group of chunkGroups) group.chunks.sort(compareChunks);
-}
-
-export function stabilizeChunkTraversal(compilation) {
-  // Next reads entrypoint chunk/file iterables while creating its client-reference
-  // manifest at PROCESS_ASSETS_STAGE_ANALYSE. Normalize those public iterables at
-  // the immediately preceding stage, after webpack has assigned chunk names/files.
-  stabilizeChunkGroups(compilation.chunkGroups);
-  stabilizeChunkGroups(compilation.entrypoints.values());
-  for (const chunk of compilation.chunks) {
-    const files = [...chunk.files].sort(compareTotal);
-    chunk.files.clear();
-    for (const file of files) chunk.files.add(file);
-  }
-}
-
 export class StableModuleIdsPlugin {
   constructor(root) { this.root = root; }
   apply(compiler) {
@@ -115,10 +94,6 @@ export class StableModuleIdsPlugin {
             .sort(compareTotal).join("\u0000"),
         });
       });
-      compilation.hooks.processAssets.tap(
-        { name: "GrowthMapStableChunkTraversal", stage: compiler.webpack.Compilation.PROCESS_ASSETS_STAGE_ANALYSE - 1 },
-        () => stabilizeChunkTraversal(compilation),
-      );
     });
   }
 }
