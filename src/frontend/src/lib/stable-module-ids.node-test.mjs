@@ -237,3 +237,52 @@ test("structural token strings are allowlisted and bounded in refusal reports",(
  assert.deepEqual(report.fields[0].request.structure.queryKeys,["other"]);
  assert.doesNotMatch(payload,/secret|privateKey|custom/i);
 });
+
+test("Next flight entry schema canonicalizes Windows and POSIX requests identically", async()=>{
+ const { canonicalizeNextFlightEntryIdentifier }=await import("./stable-module-ids.mjs");
+ const posixRoot="/home/runner/work/growthmap/src/frontend",winRoot="D:/a/growthmap/src/frontend";
+ const make=(root,request,order=false)=>{
+  const moduleOption=encodeURIComponent(JSON.stringify({request,ids:["default","*"]}));
+  const query=order?`server=false&modules=${moduleOption}`:`modules=${moduleOption}&server=false`;
+  return `javascript/auto|${root}/node_modules/next/dist/build/webpack/loaders/next-flight-client-entry-loader.js?${query}!|app-pages-browser`;
+ };
+ const posix=make(posixRoot,`${posixRoot}/src/app/page.tsx`);
+ const windows=make("D:\\a\\growthmap\\src\\frontend","D:\\a\\growthmap\\src\\frontend\\src\\app\\page.tsx",true);
+ const canonical=normalizeModuleIdentifier(posix,posixRoot);
+ assert.equal(canonical,normalizeModuleIdentifier(windows,winRoot));
+ assert.match(canonical,/modules=%7B%22request%22%3A%22%3CPROJECT_ROOT%3E%2Fsrc%2Fapp%2Fpage\.tsx%22%2C%22ids%22%3A%5B%22default%22%2C%22\*%22%5D%7D&server=false!/);
+ assert.equal(canonicalizeNextFlightEntryIdentifier("unrelated-loader.js?modules=x&server=false!",posixRoot),"unrelated-loader.js?modules=x&server=false!");
+ const rows=[{key:"posix",identifier(){return posix}},{key:"windows",identifier(){return windows}}];
+ assignStableModuleIds([rows[0]],posixRoot);assignStableModuleIds([rows[1]],winRoot);
+ assert.equal(rows[0].id,rows[1].id);
+ assert.equal(rows[0].id,crypto.createHash("sha256").update(canonical).digest("hex").slice(0,16));
+});
+
+test("Next flight canonicalization is ordered, closed-schema, and fail-closed", async()=>{
+ const { canonicalizeNextFlightEntryIdentifier, moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ const project="C:/Work/App",item=JSON.stringify({ids:["*"],request:"C:\\Work\\App\\src\\a.ts"});
+ const encoded=encodeURIComponent(item),loader="next-flight-client-entry-loader.js";
+ const expected=`${loader}?modules=${encodeURIComponent(JSON.stringify({request:"<PROJECT_ROOT>/src/a.ts",ids:["*"]}))}&server=true!`;
+ const report=moduleIdentityReport({identifier(){return expected}},project);
+ assert.deepEqual(report.identifier.structure.queryKeys,["modules","server"]);
+ for(const query of [`modules=${encoded}&server=true`,`server=true&modules=${encoded}`])
+  assert.equal(canonicalizeNextFlightEntryIdentifier(`${loader}?${query}!`,project),expected);
+ const unchanged=[
+  `${loader}?modules=${encoded}&server=true&unknown=x!`,
+  `${loader}?modules=${encodeURIComponent(encoded)}&server=true!`,
+  `${loader}?modules=%7B%22request%22%3A%ZZ&server=true!`,
+  `${loader}?modules=${encodeURIComponent(JSON.stringify({request:"C:/Work/Application/a.ts",ids:[]}))}&server=true!`,
+  `${loader}?modules=${encodeURIComponent(JSON.stringify({request:"C:/Work/App2/a.ts",ids:[]}))}&server=true!`,
+  `${loader}?modules=${encodeURIComponent(JSON.stringify({request:"C%3A%2FWork%2FApp%2Fa.ts",ids:[]}))}&server=true!`,
+ ];
+ for(const value of unchanged) assert.equal(canonicalizeNextFlightEntryIdentifier(value,project),value);
+});
+
+test("raw Next flight option requests use the same safe canonical query", async()=>{
+ const { canonicalizeNextFlightEntryIdentifier }=await import("./stable-module-ids.mjs");
+ const project="D:/a/growthmap/src/frontend";
+ const item=encodeURIComponent(JSON.stringify({request:"D:\\a\\growthmap\\src\\frontend\\src\\app\\page.tsx",ids:[]}));
+ const raw=`modules=${item}&server=false!`,normalized=canonicalizeNextFlightEntryIdentifier(raw,project);
+ assert.match(normalized,/^modules=.*%3CPROJECT_ROOT%3E%2Fsrc%2Fapp%2Fpage\.tsx.*&server=false!$/);
+ assert.doesNotMatch(normalized,/%5c|growthmap|D%3A/i);
+});

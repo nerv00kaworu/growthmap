@@ -31,9 +31,74 @@ function replaceRoot(value, root) {
   }
   return out;
 }
+function decodeQueryComponentOnce(value) {
+  if (/%(?![0-9a-f]{2})/i.test(value)) return null;
+  try { return decodeURIComponent(value.replaceAll("+", " ")); } catch { return null; }
+}
+function encodeQueryComponent(value) { return encodeURIComponent(value); }
+function rootRelativePath(value, root) {
+  const candidate = slash(value), normalizedRoot = slash(root).replace(/\/+$/, "") || "/";
+  const insensitive = windowsRoot(normalizedRoot);
+  const left = insensitive ? candidate.toLowerCase() : candidate;
+  const right = insensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (left === right) return "";
+  if (!left.startsWith(`${right}/`)) return null;
+  return candidate.slice(normalizedRoot.length + 1);
+}
+function canonicalModuleOption(value, root) {
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return null; }
+  if (!parsed || Object.getPrototypeOf(parsed) !== Object.prototype
+    || Object.keys(parsed).some((key) => key !== "request" && key !== "ids")
+    || typeof parsed.request !== "string" || !Array.isArray(parsed.ids)
+    || parsed.ids.some((id) => typeof id !== "string")) return null;
+  const relative = rootRelativePath(parsed.request, root);
+  if (relative !== null) parsed.request = `<PROJECT_ROOT>${relative ? `/${relative}` : ""}`;
+  return JSON.stringify({ request: parsed.request, ids: parsed.ids });
+}
+function canonicalFlightQuery(query, root) {
+  if (!query || query.includes("#")) return null;
+  const entries = [];
+  for (const pair of query.split("&")) {
+    const separator = pair.indexOf("=");
+    if (separator < 1) return null;
+    const key = decodeQueryComponentOnce(pair.slice(0, separator));
+    const value = decodeQueryComponentOnce(pair.slice(separator + 1));
+    if (key === null || value === null || (key !== "modules" && key !== "server")) return null;
+    entries.push([key, value]);
+  }
+  const modules = entries.filter(([key]) => key === "modules");
+  const servers = entries.filter(([key]) => key === "server");
+  if (!modules.length || servers.length !== 1 || !/^(?:true|false)$/.test(servers[0][1])) return null;
+  const canonicalModules = modules.map(([, value]) => canonicalModuleOption(value, root));
+  if (canonicalModules.some((value) => value === null)) return null;
+  return [...canonicalModules.map((value) => `modules=${encodeQueryComponent(value)}`),
+    `server=${servers[0][1]}`].join("&");
+}
+/** Canonicalize only Next 15.5's exact flight client entry loader option schema. */
+export function canonicalizeNextFlightEntryIdentifier(identifier, root) {
+  const input = String(identifier);
+  const loader = /(^|[!|])((?:[^?!|]*[\\/])?next-flight-client-entry-loader\.js)\?([^!|]+)(?=!)/gi;
+  let found = false, failed = false;
+  const output = input.replace(loader, (whole, boundary, loaderPath, query) => {
+    found = true;
+    const canonical = canonicalFlightQuery(query, root);
+    if (canonical === null) { failed = true; return whole; }
+    return `${boundary}${loaderPath}?${canonical}`;
+  });
+  if (failed) return input;
+  if (found) return output;
+  // webpack's rawRequest omits the loader basename, but retains its complete,
+  // loader-terminated options request. Accept only that exact closed schema.
+  const bare = /^(?:\?|)([^!|]+)!$/.exec(input);
+  if (!bare) return input;
+  const canonical = canonicalFlightQuery(bare[1], root);
+  return canonical === null ? input : `${canonical}!`;
+}
 export function normalizeModuleIdentifier(identifier, root) {
   const normalizedRoot = slash(root).replace(/\/+$/, "") || "/";
-  return normalizedRoot === "/" ? replaceFilesystemRoot(identifier) : replaceRoot(identifier, normalizedRoot);
+  const structured = canonicalizeNextFlightEntryIdentifier(identifier, normalizedRoot);
+  return normalizedRoot === "/" ? replaceFilesystemRoot(structured) : replaceRoot(structured, normalizedRoot);
 }
 function sha(value) { return crypto.createHash("sha256").update(String(value)).digest("hex"); }
 function stableTie(module, normalized, root) {
@@ -42,7 +107,7 @@ function stableTie(module, normalized, root) {
   return values.map((value) => normalizeModuleIdentifier(value, root)).join("\u0000");
 }
 const SAFE_LOADERS = new Set(["entry-loader.js", "next-flight-client-entry-loader.js"]);
-const SAFE_QUERY_KEYS = new Set(["modules"]);
+const SAFE_QUERY_KEYS = new Set(["modules", "server"]);
 function boundedTokens(values, allowlist) {
   const safe = values.slice(0, 16).map((value) => allowlist.has(value.toLowerCase()) ? value.toLowerCase() : "other");
   return { values: [...new Set(safe)], count: values.length, truncated: values.length > 16 };
