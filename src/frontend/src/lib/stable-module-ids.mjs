@@ -63,8 +63,11 @@ function assertRedacted(normalized, root, field) {
   // Product and package names are valid module metadata. Privacy is a path
   // property, so reject exact roots and absolute-path forms rather than any
   // occurrence of the word "growthmap".
-  if (rootVariants.some((value) => value && lower.includes(value)) || denied.some((pattern) => pattern.test(normalized))) {
-    throw new Error(`GrowthMap module identity diagnostic refused: ${field} normalized value retained a private root marker`);
+  const rootVariant = rootVariants.findIndex((value) => value && lower.includes(value));
+  const deniedPattern = denied.findIndex((pattern) => pattern.test(normalized));
+  if (rootVariant !== -1 || deniedPattern !== -1) {
+    const reason = rootVariant !== -1 ? `root-variant-${rootVariant}` : `absolute-path-${deniedPattern}`;
+    throw new Error(`GrowthMap module identity diagnostic refused: ${field} normalized value retained a private root marker (${reason})`);
   }
 }
 export function moduleIdentityReport(module, root, chunkIdentity = "") {
