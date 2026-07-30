@@ -28,6 +28,8 @@ jobs:
           if ($cspStatus -ne 0) {
             node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
             $diagnosticStatus = $LASTEXITCODE
+            node desktop/scripts/analyze-flight-script.js --html src/frontend/out/index.html --script-index 9 --baseline desktop/generated/csp-flight-script-9-diagnostic.json
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::Flight byte diagnostic failed closed"; $diagnosticStatus = $LASTEXITCODE }
             if ($diagnosticStatus -ne 0) { Write-Host "::error::CSP diagnostic failed closed with status $diagnosticStatus" }
             exit $cspStatus
           }
