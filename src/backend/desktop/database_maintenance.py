@@ -32,8 +32,10 @@ def _literal_default(value):
 def _readback_drift(connection,include_v2=True):
  reasons=[];row=connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()
  if row!=("table",):return ["table:agent_readbacks"]
- info={r[1]:(str(r[2]).upper(),bool(r[3]),_literal_default(r[4]),int(r[5])) for r in connection.execute('PRAGMA table_info("agent_readbacks")')}
+ rows=list(connection.execute('PRAGMA table_info("agent_readbacks")'));info={r[1]:(str(r[2]).upper(),bool(r[3]),_literal_default(r[4]),int(r[5])) for r in rows}
  expected={**READBACK_CORE,**(READBACK_V2 if include_v2 else {})}
+ if set(info)!=set(expected):reasons.append("columns:agent_readbacks")
+ if [(r[1],int(r[5])) for r in rows if int(r[5])>0]!=[("id",1)]:reasons.append("primary_key:agent_readbacks")
  for name,spec in expected.items():
   if info.get(name)!=spec:reasons.append(f"column:agent_readbacks.{name}")
  fks={(r[3],r[2],r[4],str(r[5]).upper(),str(r[6]).upper(),str(r[7]).upper()) for r in connection.execute('PRAGMA foreign_key_list("agent_readbacks")')}
@@ -44,8 +46,8 @@ def _readback_drift(connection,include_v2=True):
  for name,column in READBACK_INDEXES.items():
   idx=indexes.get(name)
   if not idx or bool(idx[2]) or bool(idx[4]):reasons.append(f"index:{name}");continue
-  keys=[r for r in connection.execute(f'PRAGMA index_xinfo("{name}")') if r[5]]
-  if len(keys)!=1 or keys[0][2]!=column or keys[0][1]<0:reasons.append(f"index:{name}")
+  xinfo=list(connection.execute(f'PRAGMA index_xinfo("{name}")'));keys=[r for r in xinfo if r[5]]
+  if len(keys)!=1 or tuple(keys[0][:6])!=(0,keys[0][1],column,0,"BINARY",1) or keys[0][1]<0 or [tuple(r[:6]) for r in xinfo if not r[5]]!=[(1,-1,None,0,"BINARY",0)]:reasons.append(f"index:{name}")
  return reasons
 
 def _attributes(path):

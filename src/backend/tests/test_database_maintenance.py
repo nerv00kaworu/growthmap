@@ -82,3 +82,9 @@ def test_v2_extra_indexes_fail_closed(tmp_path,sql):
  import subprocess,sys
  p=tmp_path/f'fixture-extra-{abs(hash(sql))}.db';creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute(sql);c.commit();c.close()
  with pytest.raises(ValueError,match='contract|unapproved'):dm.validate(p)
+
+@pytest.mark.parametrize('sql',["CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id DESC)","CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id COLLATE NOCASE)"])
+def test_v2_index_sort_and_collation_drift_fail_closed(tmp_path,sql):
+ import subprocess,sys
+ p=tmp_path/f'fixture-index-sem-{abs(hash(sql))}.db';creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute('drop index ix_agent_readbacks_grant_id');c.execute(sql);c.commit();c.close()
+ with pytest.raises(ValueError):dm.validate(p)

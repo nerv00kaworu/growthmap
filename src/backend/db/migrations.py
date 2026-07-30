@@ -74,6 +74,11 @@ async def _validate_column(conn, table, name, expected_type, not_null, default, 
         raise RuntimeError(f"incompatible migration column {table}.{name}")
     return True
 
+async def _validate_readback_column_set(conn,include_v2):
+    rows=(await conn.execute(text("PRAGMA table_info(agent_readbacks)"))).mappings().all();expected={s[1] for s in READBACK_CORE_COLUMNS}|({s[1] for s in READBACK_COLUMNS} if include_v2 else set())
+    if {r["name"] for r in rows}!=expected:raise RuntimeError("incompatible agent_readbacks column set")
+    if [(r["name"],int(r["pk"])) for r in rows if int(r["pk"])>0]!=[("id",1)]:raise RuntimeError("incompatible agent_readbacks primary key")
+
 async def _validate_readback_fks(conn):
     actual={(r[3],r[2],r[4],str(r[5]).upper(),str(r[6]).upper(),str(r[7]).upper()) for r in (await conn.execute(text("PRAGMA foreign_key_list(agent_readbacks)"))).all()}
     if actual!=READBACK_FKS:raise RuntimeError("incompatible agent_readbacks foreign keys")
@@ -82,8 +87,9 @@ async def _validate_readback_index(conn,name,column):
     rows=(await conn.execute(text("PRAGMA index_list(agent_readbacks)"))).all();row=next((r for r in rows if r[1]==name),None)
     if not row:return False
     if bool(row[2]) or bool(row[4]):raise RuntimeError(f"incompatible migration index {name}")
-    keys=[r for r in (await conn.execute(text(f'PRAGMA index_xinfo("{name}")'))).all() if r[5]]
-    if len(keys)!=1 or keys[0][2]!=column or keys[0][1]<0:raise RuntimeError(f"incompatible migration index {name}")
+    xinfo=(await conn.execute(text(f'PRAGMA index_xinfo("{name}")'))).all();keys=[r for r in xinfo if r[5]]
+    if len(keys)!=1 or tuple(keys[0][:6])!=(0,keys[0][1],column,0,"BINARY",1) or keys[0][1]<0:raise RuntimeError(f"incompatible migration index {name}")
+    if [tuple(r[:6]) for r in xinfo if not r[5]]!=[(1,-1,None,0,"BINARY",0)]:raise RuntimeError(f"incompatible migration index auxiliary {name}")
     return True
 
 async def _validate_readback_index_set(conn,allow_missing_named=False):
@@ -118,12 +124,16 @@ async def migrate_sqlite(conn):
             created="agent_readbacks" not in tables
             if created: await conn.execute(text(READBACK_CREATE_SQL))
             else:
+                existing_names={r[1] for r in (await conn.execute(text("PRAGMA table_info(agent_readbacks)"))).all()}
+                has_v2={s[1] for s in READBACK_COLUMNS}<=existing_names
+                await _validate_readback_column_set(conn,has_v2)
                 for spec in READBACK_CORE_COLUMNS:
                     if not await _validate_column(conn,*spec):raise RuntimeError(f"incomplete legacy readback core: {spec[1]}")
                 await _validate_readback_fks(conn)
                 await _validate_readback_index_set(conn,True)
             for spec in READBACK_COLUMNS:
                 if not await _validate_column(conn, *spec[:5]): await conn.execute(text(spec[5]))
+            await _validate_readback_column_set(conn,True)
             for spec in (*READBACK_CORE_COLUMNS,*[x[:5] for x in READBACK_COLUMNS]): assert await _validate_column(conn,*spec)
             await _validate_readback_fks(conn)
             for ordinal,(name,column) in enumerate(READBACK_INDEXES.items(),1):

@@ -134,3 +134,14 @@ def test_legacy_extra_indexes_fail_closed(tmp_path,extra):
   async with engine.connect() as c:assert (await c.execute(text('pragma user_version'))).scalar()==1
   await engine.dispose()
  asyncio.run(run())
+
+@pytest.mark.parametrize('extra',["extra TEXT","extra TEXT, PRIMARY KEY(id,extra)"])
+def test_legacy_extra_columns_and_composite_pk_fail_closed(tmp_path,extra):
+ async def run():
+  definition=f"id VARCHAR(36) NOT NULL,grant_id VARCHAR(36) NOT NULL,project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME,{extra}"+("" if 'PRIMARY KEY' in extra else ",PRIMARY KEY(id)")
+  engine=await db(tmp_path,OLD+f"CREATE TABLE agent_readbacks({definition});PRAGMA user_version=1;")
+  with pytest.raises(RuntimeError):
+   async with engine.begin() as c:await migrate_sqlite(c)
+  async with engine.connect() as c:assert (await c.execute(text('pragma user_version'))).scalar()==1
+  await engine.dispose()
+ asyncio.run(run())
