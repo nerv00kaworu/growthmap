@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
-import { api } from "@/lib/api";
+import { api, persistSequentialBlockReorder } from "@/lib/api";
 import type { GNode, NodeEditDraft, NodeFormalFieldKey } from "@/lib/types";
 import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
 import { useStore } from "@/stores/useStore";
@@ -264,13 +264,18 @@ export function NodeContent({
     setBlocks(nextBlocks.map((block, order_index) => ({ ...block, order_index })));
 
     try {
-      // Both blocks share project/node CAS. Apply sequentially so the first
-      // authoritative response advances the cache used by the second request.
-      await api.updateBlock(current.id, { order_index: nextIndex });
-      await api.updateBlock(target.id, { order_index: index });
+      await persistSequentialBlockReorder({
+        nodeId: selectedNode.id,
+        currentId: current.id,
+        currentOrder: nextIndex,
+        targetId: target.id,
+        targetOrder: index,
+        updateBlock: (blockId, orderIndex) => api.updateBlock(blockId, { order_index: orderIndex }),
+        getBlocks: api.getBlocks,
+        applyAuthoritativeBlocks: (rows) => setBlocks(rows as ContentBlockItem[]),
+      });
       await refreshTree();
     } catch (error) {
-      setBlocks(blocks);
       alert(`調整內容區塊順序失敗：${error instanceof Error ? error.message : "未知錯誤"}`);
     }
   };

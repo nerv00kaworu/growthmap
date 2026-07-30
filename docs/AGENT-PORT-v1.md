@@ -95,5 +95,6 @@ status, maturity, priority, confidence, formal text fields, tags, workflow statu
 and file paths. Omitted fields remain unchanged; explicit null and an empty fields
 object are validation errors; empty lists clear tags/file paths. Maturity uses only
 `seed`, `rough`, `developing`, `stable`, and `finalized`. GUI-only node type and
-canvas position remain outside Agent Port. Create-edge and create-content-block are shared;
-update/delete edge/block and full graph/context read services remain deferred.
+canvas position remain outside Agent Port. Create-edge, create-content-block, and
+update-content-block are shared; update/delete edge, delete-content-block, and full
+graph/context read services remain deferred.

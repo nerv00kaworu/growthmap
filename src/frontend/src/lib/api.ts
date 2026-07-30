@@ -60,6 +60,39 @@ export class ApiError extends Error {
   }
 }
 
+export class ContentBlockReorderError extends Error {
+  constructor(message: string, public readonly partialSuccess: boolean, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ContentBlockReorderError";
+  }
+}
+
+export async function persistSequentialBlockReorder<T>({
+  nodeId, currentId, currentOrder, targetId, targetOrder, updateBlock, getBlocks, applyAuthoritativeBlocks,
+}: {
+  nodeId: string; currentId: string; currentOrder: number; targetId: string; targetOrder: number;
+  updateBlock: (blockId: string, orderIndex: number) => Promise<unknown>;
+  getBlocks: (nodeId: string) => Promise<T[]>;
+  applyAuthoritativeBlocks: (blocks: T[]) => void;
+}): Promise<void> {
+  let firstCommitted = false;
+  try {
+    await updateBlock(currentId, currentOrder);
+    firstCommitted = true;
+    await updateBlock(targetId, targetOrder);
+  } catch (cause) {
+    // Two PATCHes cannot be atomic. Never pretend to roll both back after the
+    // first commit: read the server truth and render that partial state.
+    const authoritative = await getBlocks(nodeId);
+    applyAuthoritativeBlocks(authoritative);
+    throw new ContentBlockReorderError(
+      firstCommitted ? "排序只完成部分，已重新載入伺服器狀態" : "排序未完成，已重新載入伺服器狀態",
+      firstCommitted,
+      { cause },
+    );
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
