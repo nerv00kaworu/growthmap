@@ -26,6 +26,9 @@ from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
     validate_update_node, apply_update_node)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
     apply_create_edge)
+from services.canonical_content_blocks import (CreateContentBlockInput,
+    validate_create_content_block, apply_create_content_block,
+    finalize_content_block_maturity)
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -1047,17 +1050,30 @@ async def list_blocks(node_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/nodes/{node_id}/blocks", response_model=ContentBlockOut, status_code=201)
 async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession = Depends(get_db)):
+    # Canonical/reference and adapter bounds are fully validated before claiming
+    # the project CAS, preserving the route's missing-owner 404 contract.
+    spec = CreateContentBlockInput(
+        project_id="", node_id=node_id, block_id=None,
+        block_type=data.block_type, content=data.content,
+        order_index=data.order_index, actor_type="human", actor_id=None,
+        created_by="human", provenance={"entry": "gui_rest"},
+    )
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    spec = CreateContentBlockInput(**{**spec.__dict__, "project_id": node.project_id})
+    validated = await validate_create_content_block(db, spec)
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    block = ContentBlock(node_id=node_id, **data.model_dump(exclude={"expected_project_revision", "expected_node_revision"}))
-    db.add(block)
-    bump_existing(node)
-    await auto_advance_maturity(node_id, db)
+    project = await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    touched = TouchedEntities()
+    block = await apply_create_content_block(db, validated, touched=touched)
+    await finalize_content_block_maturity(db, {node_id}, touched=touched)
+    touched.apply()
     await db.commit()
     await db.refresh(block)
+    block.authoritative_project_revision = project.revision
+    block.authoritative_node_revision = node.revision
+    block.authoritative_block_revision = block.revision
     return block
 
 

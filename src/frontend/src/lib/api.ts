@@ -37,6 +37,13 @@ function remember(value: unknown): void {
       const cached = revisionCache.nodes.get(row.to_node_id);
       if (cached) revisionCache.nodes.set(row.to_node_id, { ...cached, revision: row.authoritative_to_revision });
     }
+    if (typeof row.node_id === "string" && typeof row.block_type === "string") {
+      const owner = revisionCache.nodes.get(row.node_id);
+      if (owner && typeof row.authoritative_project_revision === "number")
+        revisionCache.projects.set(owner.projectId, row.authoritative_project_revision);
+      if (owner && typeof row.authoritative_node_revision === "number")
+        revisionCache.nodes.set(row.node_id, { ...owner, revision: row.authoritative_node_revision });
+    }
     if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
     else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
     else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
@@ -204,9 +211,9 @@ export const api = {
   // Content blocks
   getBlocks: (nodeId: string) =>
     request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number }[]>(`/nodes/${nodeId}/blocks`),
-  createBlock: (nodeId: string, data: { expected_project_revision?: number; expected_node_revision?: number; block_type: string; content: Record<string, string> }) => {
+  createBlock: (nodeId: string, data: { block_type: string; content: Record<string, string>; order_index?: number }) => {
     const node = nodeExpected(nodeId);
-    return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision, ...data }) });
+    return request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number; authoritative_project_revision?: number; authoritative_node_revision?: number; authoritative_block_revision?: number }>(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ ...data, expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision }) });
   },
   updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) =>
     request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...blockExpected(blockId), ...data }) }),

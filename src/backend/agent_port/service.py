@@ -11,6 +11,9 @@ from services.canonical_node_updates import (UpdateNodeInput, validate_update_no
     apply_update_node, finalize_update_maturity)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
     apply_create_edge)
+from services.canonical_content_blocks import (CreateContentBlockInput,
+    validate_create_content_block, apply_create_content_block,
+    finalize_content_block_maturity)
 from services.revisions import TouchedEntities
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
@@ -225,6 +228,8 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     update_node_ids={op["node_id"] for op in ops if op["op"] == "update_node"}
     manual_maturity_node_ids={op["node_id"] for op in ops
                               if op["op"] == "update_node" and "maturity" in op["fields"]}
+    content_block_owner_ids={op["node_id"] for op in ops
+                             if op["op"] == "create_content_block"}
     for op_index in execution_order:
         op=ops[op_index];kind=op["op"]
         if kind=="create_node":
@@ -255,13 +260,25 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
                 touch_endpoint_ids=existing_node_ids)
             ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
-            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
+            identity=actor or grant.agent_identity
+            spec=CreateContentBlockInput(project_id=project.id,node_id=op["node_id"],
+                block_id=op["id"],block_type=op["block_type"],content=op["content"],
+                order_index=op["order_index"],actor_type="human" if actor else "agent",
+                actor_id=identity,created_by=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_create_content_block(db,spec)
+            # Unlike relationship-only endpoint references, a block mutates its
+            # owner even when that owner was created earlier in this batch.
+            b=await apply_create_content_block(db,validated,touched=canonical_touched)
+            ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
         else:
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
     results=ordered_results
     await finalize_update_maturity(db,update_node_ids,
         manual_maturity_node_ids=manual_maturity_node_ids,touched=canonical_touched)
+    await finalize_content_block_maturity(db,
+        content_block_owner_ids - manual_maturity_node_ids,touched=canonical_touched)
     canonical_touched.add(*existing_touched)
     canonical_touched.apply()
     # Results are authoritative after union touch application. This matters when
