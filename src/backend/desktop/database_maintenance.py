@@ -12,7 +12,19 @@ REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
-READBACK_V2={"based_on_project_revision":("INTEGER",True),"context_snapshot_digest":("VARCHAR(64)",True),"objective":("TEXT",True),"current_project_revision":("INTEGER",True),"context_stale":("BOOLEAN",True)}
+READBACK_V2={"based_on_project_revision":("INTEGER",True,"1"),"context_snapshot_digest":("VARCHAR(64)",True,""),"objective":("TEXT",True,""),"current_project_revision":("INTEGER",True,"1"),"context_stale":("BOOLEAN",True,"1")}
+
+def _literal_default(value):
+ if value is None:return None
+ raw=str(value).strip()
+ while len(raw)>=2 and raw[0]=='(' and raw[-1]==')':raw=raw[1:-1].strip()
+ if raw.upper()=='NULL':return None
+ if raw.startswith("'") and raw.endswith("'"):
+  inner=raw[1:-1]
+  if "'" in inner.replace("''",""):raise ValueError("nonliteral column default")
+  return inner.replace("''", "'")
+ if raw in {'0','1'} or (raw.startswith('-') and raw[1:].isdigit()) or raw.isdigit():return raw
+ raise ValueError("nonliteral column default")
 
 def _attributes(path):
  if os.name!="nt": return 0
@@ -71,7 +83,7 @@ def _validate_connection(connection,source):
   if columns-actual: raise ValueError("required columns are missing")
  if version>=2:
   if connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()!=("table",): raise ValueError("current agent_readbacks table is missing")
-  info={row[1]:(str(row[2]).upper(),bool(row[3])) for row in connection.execute('PRAGMA table_info("agent_readbacks")')}
+  info={row[1]:(str(row[2]).upper(),bool(row[3]),_literal_default(row[4])) for row in connection.execute('PRAGMA table_info("agent_readbacks")')}
   if any(info.get(name)!=expected for name,expected in READBACK_V2.items()): raise ValueError("current agent_readbacks columns are incompatible")
  # SQLite foreign keys do not express edge.project_id == endpoint.project_id.
  if connection.execute("SELECT 1 FROM edges e LEFT JOIN nodes f ON f.id=e.from_node_id LEFT JOIN nodes t ON t.id=e.to_node_id WHERE f.id IS NULL OR t.id IS NULL OR e.project_id!=f.project_id OR e.project_id!=t.project_id LIMIT 1").fetchone(): raise ValueError("edge crosses project boundary")

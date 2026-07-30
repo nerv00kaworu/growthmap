@@ -58,11 +58,13 @@ def test_incompatible_column_and_index_fail_closed(tmp_path): asyncio.run(_incom
 def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch): asyncio.run(_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch))
 
 async def _v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):
- sql=OLD+"CREATE TABLE agent_readbacks(id TEXT PRIMARY KEY);PRAGMA user_version=1;"
+ sql=OLD+"CREATE TABLE agent_readbacks(id VARCHAR(36) PRIMARY KEY,grant_id VARCHAR(36) NOT NULL,project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);PRAGMA user_version=1;"
  engine=await db(tmp_path,sql)
  async with engine.begin() as conn:await migrate_sqlite(conn)
  async with engine.connect() as conn:
   info={r[1]:(r[2],bool(r[3]),str(r[4]).strip("'")) for r in (await conn.execute(text("pragma table_info(agent_readbacks)"))).all()}
+  indexes={r[1] for r in (await conn.execute(text("pragma index_list(agent_readbacks)"))).all()}
+  assert {"ix_agent_readbacks_grant_id","ix_agent_readbacks_project_id"}<=indexes
   assert info["based_on_project_revision"]==("INTEGER",True,"1")
   assert info["context_snapshot_digest"]==("VARCHAR(64)",True,"")
   assert info["objective"]==("TEXT",True,"")
@@ -72,3 +74,20 @@ async def _v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):
  await engine.dispose()
 
 def test_v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):asyncio.run(_v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path))
+
+async def _v1_without_readback_table_creates_canonical_v2_and_retries_failure(tmp_path,monkeypatch):
+ engine=await db(tmp_path,OLD+"PRAGMA user_version=1;")
+ monkeypatch.setenv("GROWTHMAP_TEST_FAIL_MIGRATION_V2_AFTER","1")
+ with pytest.raises(RuntimeError,match="injected v2"):
+  async with engine.begin() as conn:await migrate_sqlite(conn)
+ async with engine.connect() as conn:
+  assert (await conn.execute(text("pragma user_version"))).scalar()==1
+  # Transaction rollback owns table/index/version as one unit.
+  assert (await conn.execute(text("select count(*) from sqlite_schema where name='agent_readbacks'"))).scalar()==0
+ monkeypatch.delenv("GROWTHMAP_TEST_FAIL_MIGRATION_V2_AFTER")
+ async with engine.begin() as conn:await migrate_sqlite(conn)
+ async with engine.connect() as conn:
+  assert (await conn.execute(text("pragma user_version"))).scalar()==2
+  assert (await conn.execute(text("select count(*) from sqlite_schema where name='agent_readbacks'"))).scalar()==1
+ await engine.dispose()
+def test_v1_without_readback_table_creates_canonical_v2_and_retries_failure(tmp_path,monkeypatch):asyncio.run(_v1_without_readback_table_creates_canonical_v2_and_retries_failure(tmp_path,monkeypatch))

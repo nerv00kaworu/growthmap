@@ -27,11 +27,12 @@ def token(args):
  if not value or len(value)>MAX_TOKEN:raise ValueError("invalid token length")
  return value
 def main():
- p=argparse.ArgumentParser(prog="growthmap-agent");p.add_argument("command",choices=COMMANDS);p.add_argument("--base-url",default=os.getenv("GROWTHMAP_AGENT_BASE_URL","http://127.0.0.1:8100/agent/v1"));p.add_argument("--token-file");p.add_argument("--token-stdin",action="store_true");p.add_argument("--target");p.add_argument("--input",default="-");a=p.parse_args()
+ p=argparse.ArgumentParser(prog="growthmap-agent");p.add_argument("command",choices=COMMANDS);p.add_argument("--base-url",default=os.getenv("GROWTHMAP_AGENT_BASE_URL","http://127.0.0.1:8100/agent/v1"));p.add_argument("--token-file");p.add_argument("--token-stdin",action="store_true");p.add_argument("--target");p.add_argument("--objective",default="");p.add_argument("--input",default="-");a=p.parse_args()
  base=base_url(a.base_url);secret=token(a);method,path=COMMANDS[a.command];body=None
  if "{target}" in path:
   if not a.target:raise ValueError("--target required")
-  path=path.replace("{target}",urllib.parse.quote(a.target,safe=""))
+  if len(a.objective)>2000:raise ValueError("--objective exceeds 2000 characters")
+  path=path.replace("{target}",urllib.parse.quote(a.target,safe=""))+"?"+urllib.parse.urlencode({"objective":a.objective})
  if method=="POST":body=(sys.stdin.read() if a.input=="-" else open(a.input,encoding="utf8").read()).encode()
  req=urllib.request.Request(base+path,data=body,method=method,headers={"Authorization":"Bearer "+secret,"Content-Type":"application/json"})
  try:

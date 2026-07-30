@@ -14,7 +14,7 @@ TOOLS={
  "capabilities":("GET","/capabilities",{"type":"object","additionalProperties":False}),
  "read_project":("GET","/project",{"type":"object","additionalProperties":False}),
  "read_graph":("GET","/graph",{"type":"object","additionalProperties":False}),
- "get_context":("GET","/context/{target_id}",{"type":"object","properties":{"target_id":{"type":"string","format":"uuid"}},"required":["target_id"],"additionalProperties":False}),
+ "get_context":("GET","/context/{target_id}",{"type":"object","properties":{"target_id":{"type":"string","format":"uuid"},"objective":{"type":"string","maxLength":2000}},"required":["target_id"],"additionalProperties":False}),
  "propose":("POST","/proposals",_STRICT["propose"]),
  "apply_batch":("POST","/batch",_STRICT["apply_batch"]),
  "report_event":("POST","/events",_STRICT["report_event"]),
@@ -42,6 +42,10 @@ def call(name,args):
  if "{target_id}" in path:
   if "target_id" not in args:raise ValueError("target_id required")
   path=path.replace("{target_id}",urllib.parse.quote(str(args.pop("target_id")),safe=""))
+  objective=args.pop("objective","")
+  if not isinstance(objective,str) or len(objective)>2000:raise ValueError("objective must be a string of at most 2000 characters")
+  path+="?"+urllib.parse.urlencode({"objective":objective})
+ if method=="GET" and args:raise ValueError("unknown GET arguments")
  data=json.dumps(args,separators=(",",":")).encode() if method=="POST" else None
  secret=os.environ.get("GROWTHMAP_AGENT_TOKEN","")
  if not secret:raise ValueError("agent token required")

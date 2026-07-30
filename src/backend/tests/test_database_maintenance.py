@@ -42,6 +42,15 @@ def test_v2_schema_status_validates_readback_provenance_and_fails_closed(tmp_pat
  c=sqlite3.connect(p);c.execute('PRAGMA writable_schema=ON');sql=c.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='agent_readbacks'").fetchone()[0];c.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='agent_readbacks'",(sql.replace("\n\tobjective TEXT DEFAULT '' NOT NULL, ",""),));c.execute('PRAGMA writable_schema=OFF');c.commit();c.close()
  with pytest.raises(ValueError,match='agent_readbacks'):dm.validate(p)
 
+def test_v2_readback_defaults_types_and_nullability_fail_closed(tmp_path):
+ import subprocess,sys
+ creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py'
+ for column,replacement in [('based_on_project_revision','DEFAULT 2'),('context_snapshot_digest',"DEFAULT 'wrong'"),('objective',"DEFAULT 'wrong'"),('current_project_revision','DEFAULT 2'),('context_stale','DEFAULT 0')]:
+  p=tmp_path/f'fixture-{column}.db';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);sql=c.execute("select sql from sqlite_schema where name='agent_readbacks'").fetchone()[0];needle={r[1]:str(r[4]) for r in c.execute('pragma table_info(agent_readbacks)')}[column];c.execute('pragma writable_schema=on');c.execute("update sqlite_schema set sql=? where name='agent_readbacks'",(sql.replace(f'DEFAULT {needle}',replacement,1),));c.execute('pragma writable_schema=off');c.commit();c.close()
+  with pytest.raises(ValueError,match='agent_readbacks'):dm.validate(p)
+ p=tmp_path/'fixture-expression.db';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);sql=c.execute("select sql from sqlite_schema where name='agent_readbacks'").fetchone()[0];c.execute('pragma writable_schema=on');c.execute("update sqlite_schema set sql=? where name='agent_readbacks'",(sql.replace("objective TEXT NOT NULL DEFAULT ''","objective TEXT NOT NULL DEFAULT (lower(''))"),));c.execute('pragma writable_schema=off');c.commit();c.close()
+ with pytest.raises(ValueError,match='nonliteral'):dm.validate(p)
+
 def test_rejects_cross_project_edge_even_when_foreign_keys_are_satisfied(tmp_path):
  p=tmp_path/'cross.db';fixture(p);c=sqlite3.connect(p);c.execute("insert into projects values('q','q','active','','')");c.executemany("insert into nodes values(?,?,?,?,?,?)",[('a','p','a','idea','active','seed'),('b','q','b','idea','active','seed')]);c.execute("insert into edges values('e','p','a','b','child_of')");c.commit();c.close()
  with pytest.raises(ValueError,match='crosses project'):dm.validate(p)

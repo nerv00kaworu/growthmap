@@ -60,8 +60,12 @@ async def test_official_client_session_live_uvicorn():
                         for tool in listed.tools:
                             if tool.name in strict: assert tool.inputSchema == strict[tool.name].model_json_schema()
                             assert tool.inputSchema.get("additionalProperties") is False
+                        context_schema=next(t.inputSchema for t in listed.tools if t.name=="get_context")
+                        assert context_schema["properties"]["objective"]["maxLength"]==2000
                         ok=await session.call_tool("read_project",{})
                         assert not ok.isError and project["id"] in ok.content[0].text
+                        objective="發布 空格 & 驗證";context=await session.call_tool("get_context",{"target_id":project["root_node_id"],"objective":objective});assert not context.isError and json.loads(context.content[0].text)["objective"]==objective
+                        too_long=await session.call_tool("get_context",{"target_id":project["root_node_id"],"objective":"x"*2001});assert too_long.isError
                         rest_error=await session.call_tool("apply_batch",{})
                         assert rest_error.isError and "detail" in rest_error.content[0].text
                         unknown=await session.call_tool("does_not_exist",{})

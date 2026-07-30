@@ -1,5 +1,5 @@
 "use client";
-import {useCallback,useEffect,useState} from "react";
+import React,{useCallback,useEffect,useState} from "react";
 import {api} from "@/lib/api";
 import type {AgentPortActivity,AgentPortReadback} from "@/lib/api";
 import {readbackViewModel} from "@/lib/agent-port-control";
@@ -20,7 +20,7 @@ export function AgentPortPanel({projectId,rootNode,onClose,onSelectNode}:{projec
  <h3 className="mt-5 text-sm font-medium">Events / implementation readback</h3>{activity.events.map(e=><div key={String(e.id)} className="text-xs text-gray-400">{String(e.event_type)} · {String(e.message)}</div>)}{activity.readbacks.map(r=><ReadbackCard key={r.id} readback={r} fallbackNodeId={rootNode.id} onSelectNode={onSelectNode}/>)}</div></div>
 }
 
-function ReadbackCard({readback:r,fallbackNodeId,onSelectNode}:{readback:AgentPortReadback;fallbackNodeId:string;onSelectNode?:(nodeId:string)=>void}){
+export function ReadbackCard({readback:r,fallbackNodeId,onSelectNode}:{readback:AgentPortReadback;fallbackNodeId:string;onSelectNode?:(nodeId:string)=>void}){
  const view=readbackViewModel(r,fallbackNodeId);
  return <article data-testid="agent-readback-card" className="mt-2 rounded border border-gray-800 p-3 text-xs"><header className="flex flex-wrap items-center gap-2"><b>{r.summary||"Implementation readback"}</b><span>{view.revisionLabel}</span><span className={r.context_stale?"rounded bg-amber-900 px-2 py-0.5 text-amber-200":"rounded bg-emerald-900 px-2 py-0.5 text-emerald-200"}>{view.stateLabel}</span><code title={r.context_snapshot_digest||"Digest unavailable"}>{view.digestLabel}</code></header><div className="mt-1 text-gray-500">{view.objectiveLabel} · target {onSelectNode?<button type="button" className="underline" onClick={()=>onSelectNode(view.targetId)}>{view.targetId}</button>:view.targetId}</div><section aria-label="Implementation evidence" className="mt-2 max-h-56 space-y-1 overflow-y-auto text-gray-300">{view.sections.map(section=><div key={section.label}><span className="text-gray-400">{section.label}:</span> {section.items.length?JSON.stringify(section.items):"—"}</div>)}</section></article>;
 }
