@@ -22,6 +22,8 @@ from desktop.secrets import desktop_mode, put as put_memory_secret
 from services.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
 from services.maturity import auto_advance_maturity
 from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
+from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
+    validate_update_node, apply_update_node)
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -516,27 +518,20 @@ async def get_node(node_id: str, db: AsyncSession = Depends(get_db)):
 @router.patch("/nodes/{node_id}", response_model=NodeOut)
 async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends(get_db)):
     node = await db.get(Node, node_id)
-    if not node:
-        raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    if not node: raise HTTPException(404, "Node not found")
+    all_changes = data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_revision"})
+    gui_changes = {key: all_changes.pop(key) for key in tuple(all_changes) if key in GUI_UPDATE_FIELDS}
+    validated = await validate_update_node(db, UpdateNodeInput(
+        project_id=node.project_id, node_id=node_id, changes=all_changes,
+        adapter_changes=gui_changes, actor_type="human", actor_id=None,
+        last_edited_by="human", provenance={"entry": "gui_rest"}))
     check_entity_revision(node, data.expected_revision, kind="node")
-    changes = data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_revision"})
-    for k, v in changes.items():
-        setattr(node, k, v)
-    node.last_edited_by = "human"
-    bump_existing(node)
-    # Auto-advance maturity based on content richness
-    await auto_advance_maturity(node_id, db)
-
-    db.add(ActionLog(
-        project_id=node.project_id,
-        node_id=node.id,
-        actor_type="human",
-        action_type="update_node",
-        payload=changes,
-    ))
-    await db.commit()
-    await db.refresh(node)
+    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    touched = TouchedEntities()
+    await apply_update_node(db, validated, touched=touched)
+    touched.apply()
+    await db.commit(); await db.refresh(node)
+    node.authoritative_project_revision = data.expected_project_revision + 1
     return node
 
 

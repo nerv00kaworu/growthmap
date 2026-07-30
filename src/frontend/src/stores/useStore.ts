@@ -213,7 +213,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const saved = await api.updateNode(nodeId, { ...data, expected_project_revision: currentProject.revision, expected_revision: existing.revision });
     if (!rootNode) return;
     const updated = patchNode(rootNode, nodeId, saved);
-    advanceProjectRevision(set, currentProject);
+    // Canonical responses are authoritative; +1 remains only for legacy servers.
+    advanceProjectRevision(set, currentProject, saved.authoritative_project_revision);
     set({ rootNode: updated });
     const { selectedNodeId } = get();
     if (selectedNodeId) {

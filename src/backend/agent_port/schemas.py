@@ -13,13 +13,22 @@ class Strict(BaseModel):
     model_config=ConfigDict(extra="forbid", strict=True)
 
 class NodeFields(Strict):
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_and_empty(cls, value):
+        if isinstance(value, dict):
+            if not value: raise ValueError("update_node fields cannot be empty")
+            nulls = sorted(key for key, item in value.items() if item is None)
+            if nulls: raise ValueError(f"explicit null is not allowed: {', '.join(nulls)}")
+        return value
+
     title: Annotated[str,Field(min_length=1,max_length=500)]|None=None
     summary: Short|None=None; description: Text|None=None; rules_text: Text|None=None
     constraints_text: Text|None=None; examples_text: Text|None=None; questions_text: Text|None=None
     decision_notes: Text|None=None
     tags: Annotated[list[Annotated[str,Field(max_length=100)]],Field(max_length=50)]|None=None
     status: Literal["active","archived","completed"]|None=None
-    maturity: Literal["seed","sprout","growing","mature"]|None=None
+    maturity: Literal["seed","rough","developing","stable","finalized"]|None=None
     priority: Annotated[int,Field(ge=-100,le=100)]|None=None
     confidence: Annotated[float,Field(ge=0,le=1)]|None=None
     workflow_status: Literal["draft","review","approved","archived"]|None=None

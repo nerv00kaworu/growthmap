@@ -87,3 +87,13 @@ Deferred: readbacks without a target cannot reconstruct a target context and are
 
 
 Shared-truth status: `create_node` and `create_branch` now use shared canonical primitives. `update_node`, explicit edge/block mutations, and full graph/context read services remain deferred to later slices.
+
+### Shared canonical update intersection
+
+`update_node` shares its canonical mutation service with GUI REST for title, summary,
+status, maturity, priority, confidence, formal text fields, tags, workflow status,
+and file paths. Omitted fields remain unchanged; explicit null and an empty fields
+object are validation errors; empty lists clear tags/file paths. Maturity uses only
+`seed`, `rough`, `developing`, `stable`, and `finalized`. GUI-only node type and
+canvas position remain outside Agent Port. Edge, block, and context shared services
+remain deferred.

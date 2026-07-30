@@ -7,6 +7,8 @@ from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 from api.branching import deep_copy_branch
 from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
+from services.canonical_node_updates import (UpdateNodeInput, validate_update_node,
+    apply_update_node, finalize_update_maturity)
 from services.revisions import TouchedEntities
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
@@ -68,6 +70,11 @@ async def validate_operations(db,grant,operations):
     normalized=[]
     for model in operations:
         op=model.model_dump(exclude_none=True) if hasattr(model,"model_dump") else dict(model)
+        # Proposal persistence from older builds materialized omitted optional
+        # NodeFields as null. Wire-level explicit null is rejected by Pydantic;
+        # discard only this trusted legacy representation here.
+        if op.get("op") == "update_node" and isinstance(op.get("fields"), dict):
+            op["fields"] = {key: value for key, value in op["fields"].items() if value is not None}
         if op["op"].startswith("create_"):
             oid=op.get("id") or str(uuid.uuid4());op["id"]=oid
             try: uuid.UUID(oid)
@@ -207,6 +214,9 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     ordered_results=[None]*len(ops)
     result_entities={}
     canonical_touched=TouchedEntities()
+    update_node_ids={op["node_id"] for op in ops if op["op"] == "update_node"}
+    manual_maturity_node_ids={op["node_id"] for op in ops
+                              if op["op"] == "update_node" and "maturity" in op["fields"]}
     for op_index in execution_order:
         op=ops[op_index];kind=op["op"]
         if kind=="create_node":
@@ -216,10 +226,14 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             n=await apply_create_node(db,validated,touched=canonical_touched)
             ordered_results[op_index]={"op":kind,"id":n.id,"revision":1};result_entities[op_index]=n
         elif kind=="update_node":
-            n=await db.get(Node,op["node_id"])
-            for k,v in op["fields"].items():
-                if v is not None:setattr(n,k,v)
-            n.last_edited_by=actor or grant.agent_identity;ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision};result_entities[op_index]=n
+            identity=actor or grant.agent_identity
+            spec=UpdateNodeInput(project_id=project.id,node_id=op["node_id"],
+                changes=op["fields"],actor_type="human" if actor else "agent",
+                actor_id=identity,last_edited_by=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_update_node(db,spec)
+            n=await apply_update_node(db,validated,touched=canonical_touched,defer_maturity=True)
+            ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision};result_entities[op_index]=n
         elif kind=="create_edge":
             e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
@@ -228,6 +242,8 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
     results=ordered_results
+    await finalize_update_maturity(db,update_node_ids,
+        manual_maturity_node_ids=manual_maturity_node_ids,touched=canonical_touched)
     canonical_touched.add(*existing_touched)
     canonical_touched.apply()
     # Results are authoritative after union touch application. This matters when

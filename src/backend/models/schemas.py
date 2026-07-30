@@ -2,8 +2,8 @@ import re
 """Pydantic schemas for API request/response"""
 import uuid
 from datetime import datetime
-from typing import Optional, Any
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Annotated, Literal, Optional, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # === Project ===
@@ -70,26 +70,39 @@ class NodeCreate(BaseModel):
 
 
 class NodeUpdate(BaseModel):
-    expected_project_revision: int
-    expected_revision: int
-    title: Optional[str] = None
-    summary: Optional[str] = None
-    node_type: Optional[str] = None
-    status: Optional[str] = None
-    maturity: Optional[str] = None
-    priority: Optional[int] = None
-    confidence: Optional[float] = None
-    description: Optional[str] = None
-    rules_text: Optional[str] = None
-    constraints_text: Optional[str] = None
-    examples_text: Optional[str] = None
-    questions_text: Optional[str] = None
-    decision_notes: Optional[str] = None
-    tags: Optional[list[str]] = None
-    workflow_status: Optional[str] = None
-    file_paths: Optional[list[str]] = None
-    position_x: Optional[float] = None
-    position_y: Optional[float] = None
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_and_empty(cls, value):
+        if isinstance(value, dict):
+            changes = {key: item for key, item in value.items()
+                       if key not in {"expected_project_revision", "expected_revision"}}
+            if not changes: raise ValueError("update_node fields cannot be empty")
+            nulls = sorted(key for key, item in changes.items() if item is None)
+            if nulls: raise ValueError(f"explicit null is not allowed: {', '.join(nulls)}")
+        return value
+
+    expected_project_revision: Annotated[int, Field(ge=1)]
+    expected_revision: Annotated[int, Field(ge=1)]
+    title: Annotated[str, Field(min_length=1, max_length=500)] | None = None
+    summary: Annotated[str, Field(max_length=500)] | None = None
+    node_type: Literal["idea","concept","task","question","decision","risk","resource","note","module","spec"] | None = None
+    status: Literal["active","paused","archived","completed"] | None = None
+    maturity: Literal["seed","rough","developing","stable","finalized"] | None = None
+    priority: Annotated[int, Field(ge=-100, le=100)] | None = None
+    confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    description: Annotated[str, Field(max_length=16_384)] | None = None
+    rules_text: Annotated[str, Field(max_length=16_384)] | None = None
+    constraints_text: Annotated[str, Field(max_length=16_384)] | None = None
+    examples_text: Annotated[str, Field(max_length=16_384)] | None = None
+    questions_text: Annotated[str, Field(max_length=16_384)] | None = None
+    decision_notes: Annotated[str, Field(max_length=16_384)] | None = None
+    tags: Annotated[list[Annotated[str, Field(max_length=100)]], Field(max_length=50)] | None = None
+    workflow_status: Literal["draft","review","approved","archived"] | None = None
+    file_paths: Annotated[list[Annotated[str, Field(max_length=1024)]], Field(max_length=100)] | None = None
+    position_x: float | None = None
+    position_y: float | None = None
 
 
 class NodeOut(BaseModel):
