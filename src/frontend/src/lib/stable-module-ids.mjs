@@ -88,12 +88,14 @@ export function canonicalizeNextFlightEntryIdentifier(identifier, root) {
   });
   if (failed) return input;
   if (found) return output;
-  // webpack's rawRequest omits the loader basename, but retains its complete,
-  // loader-terminated options request. Accept only that exact closed schema.
-  const bare = /^(?:\?|)([^!|]+)!$/.exec(input);
-  if (!bare) return input;
-  const canonical = canonicalFlightQuery(bare[1], root);
-  return canonical === null ? input : `${canonical}!`;
+  // Next 15.5.21 injects the extensionless loader request. webpack preserves
+  // that exact user-written prefix in NormalModule.rawRequest while resolving
+  // request/userRequest to the loader's .js path. Do not accept arbitrary
+  // extensionless loaders merely because their query resembles this schema.
+  const raw = /^next-flight-client-entry-loader\?([^!|]+)!$/.exec(input);
+  if (!raw) return input;
+  const canonical = canonicalFlightQuery(raw[1], root);
+  return canonical === null ? input : `next-flight-client-entry-loader?${canonical}!`;
 }
 export function normalizeModuleIdentifier(identifier, root) {
   const normalizedRoot = slash(root).replace(/\/+$/, "") || "/";

@@ -278,11 +278,39 @@ test("Next flight canonicalization is ordered, closed-schema, and fail-closed", 
  for(const value of unchanged) assert.equal(canonicalizeNextFlightEntryIdentifier(value,project),value);
 });
 
-test("raw Next flight option requests use the same safe canonical query", async()=>{
- const { canonicalizeNextFlightEntryIdentifier }=await import("./stable-module-ids.mjs");
- const project="D:/a/growthmap/src/frontend";
- const item=encodeURIComponent(JSON.stringify({request:"D:\\a\\growthmap\\src\\frontend\\src\\app\\page.tsx",ids:[]}));
- const raw=`modules=${item}&server=false!`,normalized=canonicalizeNextFlightEntryIdentifier(raw,project);
- assert.match(normalized,/^modules=.*%3CPROJECT_ROOT%3E%2Fsrc%2Fapp%2Fpage\.tsx.*&server=false!$/);
+test("exact Next 15.5.21 rawRequest prefix canonicalizes Windows and POSIX identically", async()=>{
+ const { canonicalizeNextFlightEntryIdentifier, moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ const posixRoot="/home/runner/work/growthmap/src/frontend",winRoot="D:/a/growthmap/src/frontend";
+ const option=(request)=>encodeURIComponent(JSON.stringify({request,ids:[]}));
+ const posix=`next-flight-client-entry-loader?modules=${option(`${posixRoot}/src/app/page.tsx`)}&server=false!`;
+ const windows=`next-flight-client-entry-loader?server=false&modules=${option("D:\\a\\growthmap\\src\\frontend\\src\\app\\page.tsx")}!`;
+ const normalized=canonicalizeNextFlightEntryIdentifier(posix,posixRoot);
+ assert.equal(normalized,canonicalizeNextFlightEntryIdentifier(windows,winRoot));
+ assert.match(normalized,/^next-flight-client-entry-loader\?modules=.*%3CPROJECT_ROOT%3E%2Fsrc%2Fapp%2Fpage\.tsx.*&server=false!$/);
  assert.doesNotMatch(normalized,/%5c|growthmap|D%3A/i);
+ for(const [raw,root] of [[posix,posixRoot],[windows,winRoot]]){
+  const report=moduleIdentityReport({identifier(){return normalized},rawRequest:raw},root);
+  assert.equal(report.rawRequest.normalizedSha256,report.identifier.normalizedSha256);
+  assert.deepEqual(report.rawRequest.structure.loaderBasenames,[]);
+  assert.deepEqual(report.rawRequest.structure.queryKeys,["modules","server"]);
+ }
+});
+
+test("rawRequest canonicalization requires exact prefix and closed query schema", async()=>{
+ const { canonicalizeNextFlightEntryIdentifier }=await import("./stable-module-ids.mjs");
+ const project="C:/Work/App",encoded=encodeURIComponent(JSON.stringify({request:"C:\\Work\\App\\src\\a.ts",ids:["*"]}));
+ const valid=`next-flight-client-entry-loader?modules=${encoded}&server=true!`;
+ assert.notEqual(canonicalizeNextFlightEntryIdentifier(valid,project),valid);
+ const unchanged=[
+  `modules=${encoded}&server=true!`,
+  `?modules=${encoded}&server=true!`,
+  `other-flight-client-entry-loader?modules=${encoded}&server=true!`,
+  `next-flight-client-entry-loader-x?modules=${encoded}&server=true!`,
+  `next-flight-client-entry-loader?modules=${encoded}!`,
+  `next-flight-client-entry-loader?modules=${encoded}&server=true&server=false!`,
+  `next-flight-client-entry-loader?modules=${encoded}&server=true&unknown=x!`,
+  `next-flight-client-entry-loader?modules=${encodeURIComponent(encoded)}&server=true!`,
+  `next-flight-client-entry-loader?modules=%7B%22request%22%3A%ZZ&server=true!`,
+ ];
+ for(const value of unchanged) assert.equal(canonicalizeNextFlightEntryIdentifier(value,project),value);
 });
