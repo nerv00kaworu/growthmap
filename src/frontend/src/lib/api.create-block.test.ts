@@ -1,6 +1,9 @@
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { api, resetRevisionCacheForTests } from "./api";
+
+const originalFetch = globalThis.fetch;
+afterEach(() => { globalThis.fetch = originalFetch; });
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 const project = (revision: number) => ({ id: "block-p", revision, root_node_id: "owner" });
@@ -37,4 +40,15 @@ test("createBlock 409 never pollutes revision cache", async () => {
   await assert.rejects(api.createBlock("owner", { block_type: "paragraph", content: {} }), /stale/);
   await api.createBlock("owner", { block_type: "paragraph", content: {} });
   assert.deepEqual(bodies.map(x => [x.expected_project_revision, x.expected_node_revision]), [[9,6],[9,6]]);
+});
+
+test("consumer create paths rely on api-owned CAS and document fields remain canonical", async () => {
+  const fs = await import("node:fs");
+  const content = fs.readFileSync(new URL("../components/NodePanel/NodeContent.tsx", import.meta.url), "utf8");
+  const store = fs.readFileSync(new URL("../stores/useStore.ts", import.meta.url), "utf8");
+  assert.match(content, /handleAddDoc[\s\S]*api\.createBlock\(selectedNode\.id,[\s\S]*block_type: "resource"[\s\S]*title:[\s\S]*url:[\s\S]*summary:/);
+  assert.match(content, /handleCreateBlock[\s\S]*api\.createBlock\(selectedNode\.id,[\s\S]*block_type: newBlockType/);
+  const deepen = store.slice(store.indexOf("acceptDeepenBlock: async"), store.indexOf("ignoreDeepenBlock: async"));
+  assert.match(deepen, /api\.createBlock\(targetId/);
+  assert.doesNotMatch(deepen, /expected_(project|node)_revision/);
 });

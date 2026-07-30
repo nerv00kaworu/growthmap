@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import null
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.models import ActionLog, ContentBlock, Node
@@ -25,7 +24,7 @@ class CreateContentBlockInput:
     node_id: str
     block_id: str | None
     block_type: str
-    content: dict[str, Any]
+    content: Any
     order_index: int
     actor_type: str
     actor_id: str | None
@@ -84,14 +83,23 @@ async def apply_create_content_block(
         "node_id": block.node_id,
         "block_type": block.block_type,
         "order_index": block.order_index,
-        "content_key_count": len(d.content),
     }
+    if isinstance(d.content, dict):
+        payload["content_shape"] = "object"
+        payload["content_key_count"] = len(d.content)
+    elif isinstance(d.content, list):
+        payload["content_shape"] = "array"
+        payload["content_item_count"] = len(d.content)
+    elif d.content is None:
+        payload["content_shape"] = "null"
+    else:
+        payload["content_shape"] = type(d.content).__name__
     provenance = _safe_provenance(d.provenance)
     if provenance:
         payload["provenance"] = provenance
     db.add(ActionLog(
         project_id=d.project_id, node_id=d.node_id, actor_type=d.actor_type,
-        actor_id=d.actor_id if d.actor_id is not None else null(),
+        actor_id=d.actor_id,
         action_type="create_content_block", payload=payload,
     ))
     await db.flush()

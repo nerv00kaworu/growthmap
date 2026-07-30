@@ -238,16 +238,9 @@ class EdgeOut(BaseModel):
 class ContentBlockCreate(BaseModel):
     expected_project_revision: int
     expected_node_revision: int
-    block_type: str = Field(default="paragraph", min_length=1, max_length=30)
-    content: dict[str, Any] = Field(default_factory=dict, max_length=100)
-    order_index: int = Field(default=0, ge=0, le=100000)
-
-    @field_validator("content")
-    @classmethod
-    def validate_content_bounds(cls, value):
-        if any(not isinstance(key, str) or len(key) > 100 for key in value):
-            raise ValueError("content keys must be strings of at most 100 characters")
-        return value
+    block_type: str = "paragraph"
+    content: Any = {}
+    order_index: int = 0
 
 
 class ContentBlockUpdate(BaseModel):
