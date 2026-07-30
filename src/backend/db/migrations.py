@@ -19,22 +19,34 @@ COLUMNS = (
     ("content_blocks", "revision", "INTEGER", True, "1", "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
 )
+READBACK_CORE_COLUMNS = (
+    ("agent_readbacks","id","VARCHAR(36)",True,None),
+    ("agent_readbacks","grant_id","VARCHAR(36)",True,None),
+    ("agent_readbacks","project_id","VARCHAR(36)",True,None),
+    ("agent_readbacks","target_node_id","VARCHAR(36)",False,None),
+    ("agent_readbacks","commit_refs","JSON",True,None),("agent_readbacks","files","JSON",True,None),
+    ("agent_readbacks","tests","JSON",True,None),("agent_readbacks","decisions","JSON",True,None),
+    ("agent_readbacks","risks","JSON",True,None),("agent_readbacks","todos","JSON",True,None),
+    ("agent_readbacks","evidence","JSON",True,None),("agent_readbacks","summary","TEXT",False,None),
+    ("agent_readbacks","created_at","DATETIME",False,None),
+)
 READBACK_CREATE_SQL = """CREATE TABLE agent_readbacks (
  id VARCHAR(36) NOT NULL PRIMARY KEY,
  grant_id VARCHAR(36) NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,
  project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  target_node_id VARCHAR(36) REFERENCES nodes(id) ON DELETE SET NULL,
- based_on_project_revision INTEGER NOT NULL DEFAULT 1,
+ based_on_project_revision INTEGER NOT NULL DEFAULT '1',
  context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT '',
- objective TEXT NOT NULL DEFAULT '', current_project_revision INTEGER NOT NULL DEFAULT 1,
- context_stale BOOLEAN NOT NULL DEFAULT 1,
+ objective TEXT NOT NULL DEFAULT '', current_project_revision INTEGER NOT NULL DEFAULT '1',
+ context_stale BOOLEAN NOT NULL DEFAULT '1',
  commit_refs JSON NOT NULL, files JSON NOT NULL, tests JSON NOT NULL, decisions JSON NOT NULL,
  risks JSON NOT NULL, todos JSON NOT NULL, evidence JSON NOT NULL, summary TEXT, created_at DATETIME
 )"""
 READBACK_INDEXES = {
- "ix_agent_readbacks_grant_id":"CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id)",
- "ix_agent_readbacks_project_id":"CREATE INDEX ix_agent_readbacks_project_id ON agent_readbacks(project_id)",
+ "ix_agent_readbacks_grant_id":"grant_id",
+ "ix_agent_readbacks_project_id":"project_id",
 }
+READBACK_FKS = {("grant_id","agent_grants","id","CASCADE"),("project_id","projects","id","CASCADE"),("target_node_id","nodes","id","SET NULL")}
 READBACK_COLUMNS = (
     ("agent_readbacks", "based_on_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN based_on_project_revision INTEGER NOT NULL DEFAULT 1"),
     ("agent_readbacks", "context_snapshot_digest", "VARCHAR(64)", True, "", "ALTER TABLE agent_readbacks ADD COLUMN context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT ''"),
@@ -42,6 +54,7 @@ READBACK_COLUMNS = (
     ("agent_readbacks", "current_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN current_project_revision INTEGER NOT NULL DEFAULT 1"),
     ("agent_readbacks", "context_stale", "BOOLEAN", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN context_stale BOOLEAN NOT NULL DEFAULT 1"),
 )
+
 INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"
 TRIGGERS = {
 "trg_edges_one_mainline_insert": """CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1); END""",
@@ -59,6 +72,18 @@ async def _validate_column(conn, table, name, expected_type, not_null, default):
     if not row: return False
     if str(row["type"]).upper() != expected_type or bool(row["notnull"]) != not_null or _default(row["dflt_value"]) != default:
         raise RuntimeError(f"incompatible migration column {table}.{name}")
+    return True
+
+async def _validate_readback_fks(conn):
+    actual={(r[3],r[2],r[4],str(r[6]).upper()) for r in (await conn.execute(text("PRAGMA foreign_key_list(agent_readbacks)"))).all()}
+    if actual!=READBACK_FKS:raise RuntimeError("incompatible agent_readbacks foreign keys")
+
+async def _validate_readback_index(conn,name,column):
+    rows=(await conn.execute(text("PRAGMA index_list(agent_readbacks)"))).all();row=next((r for r in rows if r[1]==name),None)
+    if not row:return False
+    if bool(row[2]) or bool(row[4]):raise RuntimeError(f"incompatible migration index {name}")
+    keys=[r for r in (await conn.execute(text(f'PRAGMA index_xinfo("{name}")'))).all() if r[5]]
+    if len(keys)!=1 or keys[0][2]!=column or keys[0][1]<0:raise RuntimeError(f"incompatible migration index {name}")
     return True
 
 async def migrate_sqlite(conn):
@@ -85,14 +110,19 @@ async def migrate_sqlite(conn):
         await conn.execute(text("SAVEPOINT growthmap_v2"))
         try:
             tables = {r[0] for r in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
-            if "agent_readbacks" not in tables: await conn.execute(text(READBACK_CREATE_SQL))
+            created="agent_readbacks" not in tables
+            if created: await conn.execute(text(READBACK_CREATE_SQL))
+            else:
+                for spec in READBACK_CORE_COLUMNS:
+                    if not await _validate_column(conn,*spec):raise RuntimeError(f"incomplete legacy readback core: {spec[1]}")
+                await _validate_readback_fks(conn)
             for spec in READBACK_COLUMNS:
                 if not await _validate_column(conn, *spec[:5]): await conn.execute(text(spec[5]))
-            for spec in READBACK_COLUMNS: assert await _validate_column(conn, *spec[:5])
-            for ordinal,(name,sql) in enumerate(READBACK_INDEXES.items(),1):
-                existing=(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='index' AND name=:name"),{"name":name})).scalar()
-                if existing is None:await conn.execute(text(sql))
-                elif [r[2] for r in (await conn.execute(text(f'PRAGMA index_info("{name}")'))).all()]!=["grant_id" if name.endswith("grant_id") else "project_id"]:raise RuntimeError(f"incompatible migration index {name}")
+            for spec in (*READBACK_CORE_COLUMNS,*[x[:5] for x in READBACK_COLUMNS]): assert await _validate_column(conn,*spec)
+            await _validate_readback_fks(conn)
+            for ordinal,(name,column) in enumerate(READBACK_INDEXES.items(),1):
+                if not await _validate_readback_index(conn,name,column):await conn.execute(text(f"CREATE INDEX {name} ON agent_readbacks ({column})"))
+                assert await _validate_readback_index(conn,name,column)
                 if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_V2_AFTER")==str(ordinal):raise RuntimeError("injected v2 migration failure")
             await conn.execute(text("PRAGMA user_version=2"))
             await conn.execute(text("RELEASE SAVEPOINT growthmap_v2"))

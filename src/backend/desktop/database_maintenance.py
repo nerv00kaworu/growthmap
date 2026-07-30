@@ -12,7 +12,10 @@ REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
+READBACK_CORE={"id":("VARCHAR(36)",True,None),"grant_id":("VARCHAR(36)",True,None),"project_id":("VARCHAR(36)",True,None),"target_node_id":("VARCHAR(36)",False,None),"commit_refs":("JSON",True,None),"files":("JSON",True,None),"tests":("JSON",True,None),"decisions":("JSON",True,None),"risks":("JSON",True,None),"todos":("JSON",True,None),"evidence":("JSON",True,None),"summary":("TEXT",False,None),"created_at":("DATETIME",False,None)}
 READBACK_V2={"based_on_project_revision":("INTEGER",True,"1"),"context_snapshot_digest":("VARCHAR(64)",True,""),"objective":("TEXT",True,""),"current_project_revision":("INTEGER",True,"1"),"context_stale":("BOOLEAN",True,"1")}
+READBACK_FKS={("grant_id","agent_grants","id","CASCADE"),("project_id","projects","id","CASCADE"),("target_node_id","nodes","id","SET NULL")}
+READBACK_INDEXES={"ix_agent_readbacks_grant_id":"grant_id","ix_agent_readbacks_project_id":"project_id"}
 
 def _literal_default(value):
  if value is None:return None
@@ -25,6 +28,23 @@ def _literal_default(value):
   return inner.replace("''", "'")
  if raw in {'0','1'} or (raw.startswith('-') and raw[1:].isdigit()) or raw.isdigit():return raw
  raise ValueError("nonliteral column default")
+
+def _readback_drift(connection,include_v2=True):
+ reasons=[];row=connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()
+ if row!=("table",):return ["table:agent_readbacks"]
+ info={r[1]:(str(r[2]).upper(),bool(r[3]),_literal_default(r[4])) for r in connection.execute('PRAGMA table_info("agent_readbacks")')}
+ expected={**READBACK_CORE,**(READBACK_V2 if include_v2 else {})}
+ for name,spec in expected.items():
+  if info.get(name)!=spec:reasons.append(f"column:agent_readbacks.{name}")
+ fks={(r[3],r[2],r[4],str(r[6]).upper()) for r in connection.execute('PRAGMA foreign_key_list("agent_readbacks")')}
+ if fks!=READBACK_FKS:reasons.append("foreign_keys:agent_readbacks")
+ indexes={r[1]:r for r in connection.execute('PRAGMA index_list("agent_readbacks")')}
+ for name,column in READBACK_INDEXES.items():
+  idx=indexes.get(name)
+  if not idx or bool(idx[2]) or bool(idx[4]):reasons.append(f"index:{name}");continue
+  keys=[r for r in connection.execute(f'PRAGMA index_xinfo("{name}")') if r[5]]
+  if len(keys)!=1 or keys[0][2]!=column or keys[0][1]<0:reasons.append(f"index:{name}")
+ return reasons
 
 def _attributes(path):
  if os.name!="nt": return 0
@@ -81,10 +101,8 @@ def _validate_connection(connection,source):
   if row!=("table",): raise ValueError("required table is missing")
   actual={item[1] for item in connection.execute(f'PRAGMA table_info("{table}")')}
   if columns-actual: raise ValueError("required columns are missing")
- if version>=2:
-  if connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()!=("table",): raise ValueError("current agent_readbacks table is missing")
-  info={row[1]:(str(row[2]).upper(),bool(row[3]),_literal_default(row[4])) for row in connection.execute('PRAGMA table_info("agent_readbacks")')}
-  if any(info.get(name)!=expected for name,expected in READBACK_V2.items()): raise ValueError("current agent_readbacks columns are incompatible")
+ if version>=2 and _readback_drift(connection):raise ValueError("current agent_readbacks contract is incompatible")
+ if version==1 and connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_readbacks'").fetchone() and _readback_drift(connection,False):raise ValueError("legacy agent_readbacks core is incompatible")
  # SQLite foreign keys do not express edge.project_id == endpoint.project_id.
  if connection.execute("SELECT 1 FROM edges e LEFT JOIN nodes f ON f.id=e.from_node_id LEFT JOIN nodes t ON t.id=e.to_node_id WHERE f.id IS NULL OR t.id IS NULL OR e.project_id!=f.project_id OR e.project_id!=t.project_id LIMIT 1").fetchone(): raise ValueError("edge crosses project boundary")
  counts={}
@@ -126,10 +144,7 @@ def schema_status(path):
   reasons=[]
   for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),("edges","revision"),("content_blocks","revision"),("branches","revision")):
    if column not in columns[table]: reasons.append(f"column:{table}.{column}")
-  if "agent_readbacks" not in columns: reasons.append("table:agent_readbacks")
-  else:
-   for column in READBACK_V2:
-    if column not in columns["agent_readbacks"]: reasons.append(f"column:agent_readbacks.{column}")
+  reasons.extend(_readback_drift(connection,True))
   for name in ("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"):
    if name not in objects: reasons.append(f"object:{name}")
   return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}

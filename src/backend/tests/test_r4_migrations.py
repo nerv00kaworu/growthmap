@@ -58,7 +58,7 @@ def test_incompatible_column_and_index_fail_closed(tmp_path): asyncio.run(_incom
 def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch): asyncio.run(_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch))
 
 async def _v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):
- sql=OLD+"CREATE TABLE agent_readbacks(id VARCHAR(36) PRIMARY KEY,grant_id VARCHAR(36) NOT NULL,project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);PRAGMA user_version=1;"
+ sql=OLD+"CREATE TABLE agent_readbacks(id VARCHAR(36) NOT NULL PRIMARY KEY,grant_id VARCHAR(36) NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,target_node_id VARCHAR(36) REFERENCES nodes(id) ON DELETE SET NULL,commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);PRAGMA user_version=1;"
  engine=await db(tmp_path,sql)
  async with engine.begin() as conn:await migrate_sqlite(conn)
  async with engine.connect() as conn:
@@ -91,3 +91,24 @@ async def _v1_without_readback_table_creates_canonical_v2_and_retries_failure(tm
   assert (await conn.execute(text("select count(*) from sqlite_schema where name='agent_readbacks'"))).scalar()==1
  await engine.dispose()
 def test_v1_without_readback_table_creates_canonical_v2_and_retries_failure(tmp_path,monkeypatch):asyncio.run(_v1_without_readback_table_creates_canonical_v2_and_retries_failure(tmp_path,monkeypatch))
+
+async def _readback_create_sql_matches_orm_contract(tmp_path):
+ from db.database import Base
+ import models.models
+ from db.migrations import READBACK_CREATE_SQL,READBACK_INDEXES
+ paths=[tmp_path/'orm.db',tmp_path/'sql.db'];engines=[]
+ for path in paths:
+  e=create_async_engine(f'sqlite+aiosqlite:///{path}');engines.append(e)
+ async with engines[0].begin() as c:await c.run_sync(Base.metadata.create_all)
+ async with engines[1].begin() as c:
+  await c.execute(text('CREATE TABLE projects(id VARCHAR(36) PRIMARY KEY)'));await c.execute(text('CREATE TABLE nodes(id VARCHAR(36) PRIMARY KEY)'));await c.execute(text('CREATE TABLE agent_grants(id VARCHAR(36) PRIMARY KEY)'));await c.execute(text(READBACK_CREATE_SQL))
+  for name,column in READBACK_INDEXES.items():await c.execute(text(f'CREATE INDEX {name} ON agent_readbacks ({column})'))
+ async def contract(e):
+  async with e.connect() as c:
+   cols=[tuple(r[1:5]) for r in (await c.execute(text('pragma table_info(agent_readbacks)'))).all()]
+   fks={(r[3],r[2],r[4],r[6]) for r in (await c.execute(text('pragma foreign_key_list(agent_readbacks)'))).all()}
+   indexes={n:[r[2] for r in (await c.execute(text(f'pragma index_info({n})'))).all()] for n in READBACK_INDEXES}
+   return cols,fks,indexes
+ assert await contract(engines[0])==await contract(engines[1])
+ for e in engines:await e.dispose()
+def test_readback_create_sql_matches_orm_contract(tmp_path):asyncio.run(_readback_create_sql_matches_orm_contract(tmp_path))

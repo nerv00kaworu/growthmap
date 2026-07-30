@@ -58,3 +58,14 @@ def test_rejects_cross_project_edge_even_when_foreign_keys_are_satisfied(tmp_pat
 def test_validated_snapshot_rejects_hardlink_and_uses_combined_validation(tmp_path):
  p=tmp_path/'a.db';fixture(p);hard=tmp_path/'hard.db';os.link(p,hard)
  with pytest.raises(ValueError,match='single-link'):dm.validated_snapshot(hard,tmp_path/'out.db')
+
+def test_readback_index_and_fk_contract_fail_closed(tmp_path):
+ import subprocess,sys
+ creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py'
+ variants=["CREATE UNIQUE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id)","CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id) WHERE grant_id!=''","CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id,project_id)","CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(lower(grant_id))"]
+ for i,sql in enumerate(variants):
+  p=tmp_path/f'fixture-index-{i}.db';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute('drop index ix_agent_readbacks_grant_id');c.execute(sql);c.commit();c.close()
+  with pytest.raises(ValueError,match='contract'):dm.validate(p)
+ for i,(old,new) in enumerate([('ON DELETE SET NULL','ON DELETE CASCADE'),('REFERENCES nodes(id) ON DELETE SET NULL','')]):
+  p=tmp_path/f'fixture-fk-{i}.db';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);sql=c.execute("select sql from sqlite_schema where name='agent_readbacks'").fetchone()[0];assert old in sql;c.execute('pragma writable_schema=on');c.execute("update sqlite_schema set sql=? where name='agent_readbacks'",(sql.replace(old,new,1),));c.execute('pragma writable_schema=off');c.commit();c.close()
+  with pytest.raises(ValueError,match='contract'):dm.validate(p)
