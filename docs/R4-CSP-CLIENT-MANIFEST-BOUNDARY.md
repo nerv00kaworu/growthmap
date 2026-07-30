@@ -1,47 +1,56 @@
-# R4 CSP client-reference manifest boundary
+# R4 CSP client-reference render boundary
 
 ## Pinned upstream provenance
 
 The frontend lockfile pins `next@15.5.21` from `next-15.5.21.tgz` with npm integrity
 `sha512-/TsdBtkWLhkl+NVL3Uqws2UphNd6IPzOtzSk1fHaf+0P7GQKLZDUytyhns/Ykbzdy9+YRjwG7ONvrHaaTDdFqQ==`.
-The following statements were traced against that installed source.
+`postinstall` additionally requires the pristine target source SHA-256
+`0ba3db12307085b9eb3f942b2f5eadad9dca46fb98516d28cbfe2d561cf9240b` and the exact
+patched SHA-256. Version, registry integrity, source, anchor, and output therefore fail
+closed on upstream drift.
 
-## Producer and consumer
+## Complete producer-to-serializer dataflow
 
-* `next/dist/build/webpack-config.js` installs `ClientReferenceManifestPlugin` only when
-  `isClient` is true. This is the **client webpack compiler**, not the server or edge
-  compiler.
-* `next/dist/build/webpack/plugins/flight-manifest-plugin.js` creates each manifest at
-  `PROCESS_ASSETS_STAGE_ANALYSE` and emits
-  `server/app/<route>_client-reference-manifest.js`. The resulting durable path is
-  `.next/server/app/<route>_client-reference-manifest.js`, despite being produced by
-  the client compiler.
-* `next/dist/server/load-components.js` loads exactly that path with
-  `evalManifestWithRetries`, selects `globalThis.__RSC_MANIFEST[entryName]`, and passes
-  it as `clientReferenceManifest` to app rendering. Static generation/export then
-  serializes React Flight references from this value into inline RSC bootstrap data in
-  `out/*.html`.
+1. `next/dist/build/webpack/plugins/flight-manifest-plugin.js` installs
+   `ClientReferenceManifestPlugin` on the client compiler at
+   `PROCESS_ASSETS_STAGE_ANALYSE`.
+2. `createAsset()` calls `getAppPathRequiredChunks(entrypoint, rootMainFiles)`. This is
+   where the complete alternating `[chunkId, emittedFile, ...]` array is formed in
+   memory. The same `requiredChunks` array is assigned to each client module recorded
+   for that entrypoint. Group manifests are merged and immediately `JSON.stringify`'d,
+   then emitted as `server/app/<page>_client-reference-manifest.js`.
+3. `next/dist/server/load-components.js` calls `evalManifestWithRetries()` on that file,
+   selects `context.__RSC_MANIFEST[entryName]`, and returns it as
+   `clientReferenceManifest` before app rendering.
+4. Static generation passes this object to React's Flight renderer. When it serializes a
+   client reference, React reads that module entry's `chunks` array and emits the
+   `I[<module id>,<complete chunks>,<export>]` row. Next writes those Flight rows through
+   `self.__next_f.push(...)` bootstrap scripts in `out/index.html` (the target page row is
+   in script #9 in this pinned build).
 
-The earlier attempts changed webpack chunk/group iteration or rewrote an in-memory
-asset at another `processAssets` stage. They did not establish or verify control of the
-post-emit file that `load-components.js` evaluates. In particular, the filesystem path
-looks like server output even though ownership is the client compiler, so applying the
-same plugin indiscriminately to all compiler callbacks obscured which compilation was
-relevant. Build output proved those changes could produce a different ordering while
-remaining platform-divergent.
+The previous after-emit contract was invalid: rewriting the durable file does not prove
+that no renderer had already loaded or retained the object created from the original
+asset. Finding any tuple in HTML was also weak evidence because most tuples were shared
+between both orders.
 
-## Owned boundary and contract
+## Fix at the actual producer boundary
 
-`ClientReferenceManifestBoundaryPlugin` is attached only to the client compiler. At
-`afterEmit` it normalizes complete chunk-id/file pairs in the emitted manifest using
-ordinal string ordering, writes the durable artifact, and records each artifact hash in
-`.next/growthmap-client-reference-boundary.json`.
+The version-pinned npm patch sorts pairs inside `getAppPathRequiredChunks()` before
+`requiredChunks` is attached to manifest entries, before `JSON.stringify`, before load
+or cache, and before Flight serialization. It never postprocesses exported HTML.
 
-The build contract then:
+Ordering is ordinal by **emitted file first**, then chunk id as a total-order tie-breaker.
+Pairs remain intact. Webpack can expose a chunk whose `id` string is empty while its
+`static/chunks/app/page-*.js` file is non-empty. Sorting by file explains and fixes the
+required position: `static/chunks/1a258343-*` sorts first, the empty-id
+`static/chunks/app/page-*` pair second, and `static/chunks/vendors-*` third. Empty id is
+not treated as a missing pair and cannot become detached from its file. This comparison
+uses JavaScript ordinal string operators and is independent of locale and path separator.
 
-1. verifies every recorded hash still matches the durable file after Next finishes;
-2. parses `.next/server/app/page_client-reference-manifest.js`; and
-3. proves `out/index.html` contains a byte-for-byte chunk tuple from that manifest.
+## Strong contract
 
-This proves the correction hits the artifact consumed by static export, rather than
-only exercising a normalization helper. Exported HTML is never postprocessed.
+`verify-client-reference-boundary.js` evaluates the normalized page manifest, selects the
+single client module with id `c546470e5ca77f8d`, parses script #9 Flight `I` rows, selects
+that module's `default` export, and requires its **entire chunks array** to equal the
+normalized manifest entry. Its test includes a stale-cache simulation where one tuple
+still matches but full ordering differs; that case must fail.

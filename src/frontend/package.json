@@ -6,10 +6,11 @@
     "dev": "next dev --port 3100",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit --pretty false",
-    "test": "tsx --test src/**/*.test.ts && node --test src/lib/*.node-test.mjs",
+    "test": "tsx --test src/**/*.test.ts && node --test src/lib/*.node-test.mjs scripts/*.test.js",
     "build": "next build && node ../../desktop/scripts/verify-client-reference-boundary.js && node ../../desktop/scripts/generate-csp-manifest.js",
     "start": "next start --port 3100",
-    "test:deterministic-build": "node ../../desktop/scripts/test-deterministic-frontend-build.js"
+    "test:deterministic-build": "node ../../desktop/scripts/test-deterministic-frontend-build.js",
+    "postinstall": "node scripts/patch-next-flight-manifest.js"
   },
   "dependencies": {
     "@xyflow/react": "^12.6.0",
