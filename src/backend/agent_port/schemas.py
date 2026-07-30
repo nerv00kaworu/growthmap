@@ -7,6 +7,7 @@ Id = Annotated[str, Field(min_length=36, max_length=36, pattern=r"^[0-9a-fA-F-]{
 Short = Annotated[str, Field(max_length=500)]
 Text = Annotated[str, Field(max_length=16_384)]
 Key = Annotated[str, Field(min_length=8,max_length=80,pattern=r"^[A-Za-z0-9._:-]+$")]
+Digest = Annotated[str, Field(min_length=64,max_length=64,pattern=r"^[0-9a-f]{64}$")]
 
 class Strict(BaseModel):
     model_config=ConfigDict(extra="forbid", strict=True)
@@ -70,7 +71,10 @@ class EventIn(Strict):
 class Record(Strict):
     name: Annotated[str,Field(min_length=1,max_length=200)]; status: Annotated[str,Field(max_length=100)]=""; detail: Annotated[str,Field(max_length=4000)]=""
 class ReadbackIn(Strict):
-    idempotency_key: Key; target_node_id: Id|None=None; summary: Annotated[str,Field(max_length=8000)]=""
+    idempotency_key: Key; target_node_id: Id|None=None
+    based_on_project_revision: Annotated[int,Field(ge=1)]
+    context_snapshot_digest: Digest
+    summary: Annotated[str,Field(max_length=8000)]=""
     commit_refs: Annotated[list[Annotated[str,Field(max_length=200)]],Field(max_length=100)]=[]
     files: Annotated[list[Annotated[str,Field(max_length=1024)]],Field(max_length=500)]=[]
     tests: Annotated[list[Record],Field(max_length=200)]=[]

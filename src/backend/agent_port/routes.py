@@ -82,28 +82,46 @@ async def capabilities(): return {"protocol":"growthmap-agent-port","version":"1
 async def project_read(grant=Depends(auth),db:AsyncSession=Depends(get_db)):
     p=await db.get(Project,grant.project_id); return {"id":p.id,"name":p.name,"description":p.description,"goal":p.goal,"status":p.status,"root_node_id":p.root_node_id,"revision":p.revision,"updated_at":iso(p.updated_at)}
 
+def node_wire(n):
+    return {"id":n.id,"project_id":n.project_id,"title":n.title,"summary":n.summary,"node_type":n.node_type,
+            "status":n.status,"maturity":n.maturity,"description":n.description,"rules_text":n.rules_text,
+            "constraints_text":n.constraints_text,"examples_text":n.examples_text,"questions_text":n.questions_text,
+            "decision_notes":n.decision_notes,"tags":n.tags or [],"priority":n.priority,"confidence":n.confidence,
+            "workflow_status":n.workflow_status,"file_paths":n.file_paths or [],"branch_id":n.branch_id,
+            "created_by":n.created_by,"last_edited_by":n.last_edited_by,"revision":n.revision,"updated_at":iso(n.updated_at)}
+
+def block_wire(b):
+    return {"id":b.id,"node_id":b.node_id,"block_type":b.block_type,"content":b.content,
+            "order_index":b.order_index,"revision":b.revision,"source":{"created_by":b.created_by}}
+
 async def graph_data(db,grant):
-    ids=await allowed_nodes(db,grant); nodes=(await db.execute(select(Node).where(Node.id.in_(ids)).order_by(Node.created_at))).scalars().all(); edges=(await db.execute(select(Edge).where(Edge.project_id==grant.project_id,Edge.from_node_id.in_(ids),Edge.to_node_id.in_(ids)))).scalars().all(); blocks=(await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(ids)))).scalars().all()
-    return {"project_id":grant.project_id,"nodes":[{"id":n.id,"title":n.title,"summary":n.summary,"node_type":n.node_type,"status":n.status,"maturity":n.maturity,"description":n.description,"constraints_text":n.constraints_text,"decision_notes":n.decision_notes,"tags":n.tags or [],"branch_id":n.branch_id,"revision":n.revision,"updated_at":iso(n.updated_at)} for n in nodes],"edges":[{"id":e.id,"from_node_id":e.from_node_id,"to_node_id":e.to_node_id,"relation_type":e.relation_type,"note":e.note,"revision":e.revision} for e in edges],"content_blocks":[{"id":b.id,"node_id":b.node_id,"block_type":b.block_type,"content":b.content,"order_index":b.order_index,"revision":b.revision} for b in blocks]}
+    ids=await allowed_nodes(db,grant)
+    nodes=(await db.execute(select(Node).where(Node.id.in_(ids)).order_by(Node.created_at,Node.id))).scalars().all()
+    edges=(await db.execute(select(Edge).where(Edge.project_id==grant.project_id,Edge.from_node_id.in_(ids),Edge.to_node_id.in_(ids)).order_by(Edge.from_node_id,Edge.to_node_id,Edge.relation_type,Edge.id))).scalars().all()
+    blocks=(await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(ids)).order_by(ContentBlock.node_id,ContentBlock.order_index,ContentBlock.id))).scalars().all()
+    return {"project_id":grant.project_id,"nodes":[node_wire(n) for n in nodes],"edges":[{"id":e.id,"from_node_id":e.from_node_id,"to_node_id":e.to_node_id,"relation_type":e.relation_type,"weight":e.weight if e.weight is not None else 1.0,"note":e.note or "","is_mainline":e.is_mainline,"revision":e.revision} for e in edges],"content_blocks":[block_wire(b) for b in blocks]}
 @router.get("/graph")
 async def graph_read(grant=Depends(auth),db:AsyncSession=Depends(get_db)): return await graph_data(db,grant)
 
-@router.get("/context/{target_id}")
-async def context(target_id:str,objective:str="",grant=Depends(auth),db:AsyncSession=Depends(get_db)):
-    target_id=uuid_value(target_id); await validate_scope(db,grant,[target_id]); target=await db.get(Node,target_id)
+async def context_packet(db,grant,target_id,objective=""):
+    await validate_scope(db,grant,[target_id]); target=await db.get(Node,target_id)
     if not target or target.project_id!=grant.project_id: raise HTTPException(404,"Node not found")
-    graph=await graph_data(db,grant); by={n["id"]:n for n in graph["nodes"]}; parents={e["to_node_id"]:e["from_node_id"] for e in graph["edges"] if e["relation_type"]=="child_of"}; ancestors=[];cur=target_id
+    graph=await graph_data(db,grant); by={n["id"]:n for n in graph["nodes"]}
+    parents={e["to_node_id"]:e["from_node_id"] for e in graph["edges"] if e["relation_type"]=="child_of"}
+    ancestors=[];cur=target_id
     while cur in parents and parents[cur] in by: cur=parents[cur];ancestors.append(by[cur])
     children=[by[e["to_node_id"]] for e in graph["edges"] if e["from_node_id"]==target_id and e["to_node_id"] in by][:500]
     relevant=[n for n in graph["nodes"] if n["id"]!=target_id and (n["node_type"] in {"decision","risk"} or n["constraints_text"] or n["decision_notes"])][:200]
     p=await db.get(Project,grant.project_id)
-    # Digest exactly the complete canonical packet consumed by the agent. No
-    # volatile timestamps or transport fields are excluded implicitly.
-    packet={"objective":objective[:2000],"project":{"id":p.id,"name":p.name,"description":p.description,
-            "goal":p.goal,"status":p.status,"revision":p.revision},"target_revision":target.revision,
-            "target":by[target_id],"ancestors":ancestors,"children":children,"relevant":relevant,
-            "relations":graph["edges"][:2000]}
+    packet={"objective":objective[:2000],"project_revision":p.revision,
+            "project":{"id":p.id,"name":p.name,"description":p.description,"goal":p.goal,"status":p.status,"revision":p.revision},
+            "target_revision":target.revision,"target":by[target_id],"ancestors":ancestors,"children":children,
+            "relevant":relevant,"relations":graph["edges"][:2000],"content_blocks":graph["content_blocks"]}
     return {**packet,"snapshot_digest":digest(packet)}
+
+@router.get("/context/{target_id}")
+async def context(target_id:str,objective:str="",grant=Depends(auth),db:AsyncSession=Depends(get_db)):
+    return await context_packet(db,grant,uuid_value(target_id),objective)
 
 async def store_once(db,grant,key,payload,kind,create):
     import asyncio
@@ -150,7 +168,10 @@ async def readback(data:ReadbackIn,grant=Depends(auth),db:AsyncSession=Depends(g
     require(grant,"propose");await validate_scope(db,grant,[data.target_node_id] if data.target_node_id else []);payload=data.model_dump(mode="json")
     if len(canonical(payload))>262144: raise HTTPException(413,"Readback exceeds 256 KiB")
     async def create():
-        vals=data.model_dump(exclude={"idempotency_key"});row=AgentReadback(grant_id=grant.id,project_id=grant.project_id,**vals);db.add(row);await db.flush();db.add(ActionLog(project_id=grant.project_id,node_id=data.target_node_id,actor_type="agent",actor_id=grant.agent_identity,action_type="agent_readback",payload={"readback_id":row.id,"summary":data.summary[:500]}));return {"readback_id":row.id,"status":"recorded"}
+        p=await db.get(Project,grant.project_id)
+        current_digest=(await context_packet(db,grant,data.target_node_id))["snapshot_digest"] if data.target_node_id else ""
+        stale=data.based_on_project_revision!=p.revision or not hmac.compare_digest(data.context_snapshot_digest,current_digest)
+        vals=data.model_dump(exclude={"idempotency_key"});row=AgentReadback(grant_id=grant.id,project_id=grant.project_id,current_project_revision=p.revision,context_stale=stale,**vals);db.add(row);await db.flush();db.add(ActionLog(project_id=grant.project_id,node_id=data.target_node_id,actor_type="agent",actor_id=grant.agent_identity,action_type="agent_readback",payload={"readback_id":row.id,"summary":data.summary[:500],"based_on_project_revision":data.based_on_project_revision,"context_snapshot_digest":data.context_snapshot_digest,"current_project_revision":p.revision,"context_stale":stale}));return {"readback_id":row.id,"status":"recorded","based_on_project_revision":data.based_on_project_revision,"context_snapshot_digest":data.context_snapshot_digest,"current_project_revision":p.revision,"context_stale":stale}
     return await store_once(db,grant,data.idempotency_key,payload,"readback",create)
 
 @human_router.post("/agent-port/grants",status_code=201)
@@ -181,7 +202,7 @@ async def revoke(grant_id:str,db:AsyncSession=Depends(get_db)):
 @human_router.get("/agent-port/activity")
 async def activity(project_id:str,db:AsyncSession=Depends(get_db)):
     pid=uuid_value(project_id); proposals=(await db.execute(select(AgentProposal).where(AgentProposal.project_id==pid).order_by(AgentProposal.created_at.desc()))).scalars().all();events=(await db.execute(select(AgentEvent).where(AgentEvent.project_id==pid).order_by(AgentEvent.created_at.desc()).limit(100))).scalars().all();readbacks=(await db.execute(select(AgentReadback).where(AgentReadback.project_id==pid).order_by(AgentReadback.created_at.desc()).limit(100))).scalars().all()
-    return {"proposals":[{"id":x.id,"title":x.title,"rationale":x.rationale,"operations":x.operations,"status":x.status,"target_node_id":x.target_node_id,"expected_project_revision":x.expected_project_revision,"review_note":x.review_note,"created_at":iso(x.created_at)} for x in proposals],"events":[{"id":x.id,"event_type":x.event_type,"message":x.message,"target_node_id":x.target_node_id,"payload":x.payload,"created_at":iso(x.created_at)} for x in events],"readbacks":[{"id":x.id,"target_node_id":x.target_node_id,"summary":x.summary,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)} for x in readbacks]}
+    return {"proposals":[{"id":x.id,"title":x.title,"rationale":x.rationale,"operations":x.operations,"status":x.status,"target_node_id":x.target_node_id,"expected_project_revision":x.expected_project_revision,"review_note":x.review_note,"created_at":iso(x.created_at)} for x in proposals],"events":[{"id":x.id,"event_type":x.event_type,"message":x.message,"target_node_id":x.target_node_id,"payload":x.payload,"created_at":iso(x.created_at)} for x in events],"readbacks":[{"id":x.id,"target_node_id":x.target_node_id,"summary":x.summary,"based_on_project_revision":x.based_on_project_revision,"context_snapshot_digest":x.context_snapshot_digest,"current_project_revision":x.current_project_revision,"context_stale":x.context_stale,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)} for x in readbacks]}
 @human_router.post("/agent-port/proposals/{proposal_id}/{decision}")
 async def review(proposal_id:str,decision:Literal["approve","reject"],body:ReviewIn,request:Request,db:AsyncSession=Depends(get_db)):
     row=await db.get(AgentProposal,uuid_value(proposal_id));

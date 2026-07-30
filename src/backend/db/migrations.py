@@ -7,7 +7,7 @@ all columns and objects validate.
 import os, re
 from sqlalchemy import text
 
-CURRENT_USER_VERSION = 1
+CURRENT_USER_VERSION = 2
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
     ("nodes", "workflow_status", "VARCHAR(20)", True, "draft", "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'"),
@@ -18,6 +18,12 @@ COLUMNS = (
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("content_blocks", "revision", "INTEGER", True, "1", "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
+)
+READBACK_COLUMNS = (
+    ("agent_readbacks", "based_on_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN based_on_project_revision INTEGER NOT NULL DEFAULT 1"),
+    ("agent_readbacks", "context_snapshot_digest", "VARCHAR(64)", True, "", "ALTER TABLE agent_readbacks ADD COLUMN context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("agent_readbacks", "current_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN current_project_revision INTEGER NOT NULL DEFAULT 1"),
+    ("agent_readbacks", "context_stale", "BOOLEAN", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN context_stale BOOLEAN NOT NULL DEFAULT 1"),
 )
 INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"
 TRIGGERS = {
@@ -55,6 +61,14 @@ async def migrate_sqlite(conn):
             if existing is None: await conn.execute(text(sql))
             elif _norm(existing) != _norm(sql): raise RuntimeError(f"incompatible migration trigger {name}")
         for spec in COLUMNS: assert await _validate_column(conn, *spec[:5])
-        await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
+        await conn.execute(text("PRAGMA user_version=1"))
+        version = 1
+    if version < 2:
+        tables = {r[0] for r in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
+        if "agent_readbacks" in tables:
+            for spec in READBACK_COLUMNS:
+                if not await _validate_column(conn, *spec[:5]): await conn.execute(text(spec[5]))
+            for spec in READBACK_COLUMNS: assert await _validate_column(conn, *spec[:5])
+        await conn.execute(text("PRAGMA user_version=2"))
     final = int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
     if final != CURRENT_USER_VERSION: raise RuntimeError("migration version did not validate")

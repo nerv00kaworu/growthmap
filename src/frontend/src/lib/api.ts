@@ -89,6 +89,10 @@ function blockExpected(blockId: string) {
 
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
 import type { Entitlement } from "./entitlement";
+
+export type AgentPortRecord={name:string;status:string;detail:string};
+export type AgentPortReadback={id:string;target_node_id:string|null;summary:string;based_on_project_revision:number;context_snapshot_digest:string;current_project_revision:number;context_stale:boolean;commit_refs:string[];files:string[];tests:AgentPortRecord[];decisions:string[];risks:string[];todos:string[];evidence:AgentPortRecord[];created_at:string};
+export type AgentPortActivity={proposals:Record<string,unknown>[];events:Record<string,unknown>[];readbacks:AgentPortReadback[]};
 import { loadLLMConfig } from "./llm-provider";
 
 function getProviderId(): string | undefined {
@@ -99,7 +103,7 @@ export const api = {
   listAgentGrants: (projectId: string) => request<Record<string, unknown>[]>(`/agent-port/grants?project_id=${encodeURIComponent(projectId)}`),
   createAgentGrant: (data: Record<string, unknown>) => request<Record<string, unknown>>("/agent-port/grants", {method:"POST",body:JSON.stringify(data)}),
   revokeAgentGrant: (id: string) => request<Record<string, unknown>>(`/agent-port/grants/${id}/revoke`, {method:"POST"}),
-  getAgentPortActivity: (projectId: string) => request<{proposals:Record<string, unknown>[];events:Record<string, unknown>[];readbacks:Record<string, unknown>[]}>(`/agent-port/activity?project_id=${encodeURIComponent(projectId)}`),
+  getAgentPortActivity: (projectId: string) => request<AgentPortActivity>(`/agent-port/activity?project_id=${encodeURIComponent(projectId)}`),
   reviewAgentProposal: (id:string, decision:"approve"|"reject", review_note="") => request<Record<string, unknown>>(`/agent-port/proposals/${id}/${decision}`, {method:"POST",body:JSON.stringify({review_note})}),
   // Server-side provider profiles. API keys remain in local environment variables.
   listProviders: () => request<ProviderConfig[]>("/providers"),
