@@ -54,18 +54,41 @@ class CreateEdge(Strict):
     expected_to_revision: Annotated[int,Field(ge=1)]
     relation_type: Literal["child_of","extends","depends_on","supports","alternative_to","refines","references","conflicts_with"]="child_of"
     weight: Annotated[float,Field(ge=-1000,le=1000)]=1.0; note: Short=""
+AgentBlockType = Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"]
+AgentBlockContent = dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=16384)]]
+
 class CreateBlock(Strict):
     op: Literal["create_content_block"]; id: Id|None=None; node_id: Id
     expected_node_revision: Annotated[int,Field(ge=1)]
-    block_type: Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"]="paragraph"
-    content: dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=16384)]]=Field(default_factory=dict,max_length=100)
+    block_type: AgentBlockType="paragraph"
+    content: AgentBlockContent=Field(default_factory=dict,max_length=100)
     order_index: Annotated[int,Field(ge=0,le=100000)]=0
+
+class BlockFields(Strict):
+    @model_validator(mode="before")
+    @classmethod
+    def reject_null_and_empty(cls, value):
+        if isinstance(value, dict):
+            if not value: raise ValueError("update_content_block fields cannot be empty")
+            nulls=sorted(key for key,item in value.items() if item is None)
+            if nulls: raise ValueError(f"explicit null is not allowed: {', '.join(nulls)}")
+        return value
+    block_type: AgentBlockType|None=None
+    content: AgentBlockContent|None=Field(default=None,max_length=100)
+    order_index: Annotated[int,Field(ge=0,le=100000)]|None=None
+
+class UpdateBlock(Strict):
+    op: Literal["update_content_block"]
+    block_id: Id
+    expected_revision: Annotated[int,Field(ge=1)]
+    expected_node_revision: Annotated[int,Field(ge=1)]
+    fields: BlockFields
 class CreateBranch(Strict):
     op: Literal["create_branch"]; id: Id|None=None; source_node_id: Id
     expected_source_revision: Annotated[int,Field(ge=1)]
     name: Annotated[str,Field(min_length=1,max_length=255)]; description: Annotated[str,Field(max_length=4000)]=""
 
-Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,CreateBranch],Field(discriminator="op")]
+Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,UpdateBlock,CreateBranch],Field(discriminator="op")]
 OperationList=Annotated[list[Operation],Field(min_length=1,max_length=50)]
 
 class Batch(Strict):

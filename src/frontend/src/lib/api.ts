@@ -83,7 +83,11 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   const value = await res.json() as T;
-  remember(value);
+  const row = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  const isBlockPatch = options?.method === "PATCH" && path.startsWith("/blocks/");
+  if (!isBlockPatch || (typeof row?.authoritative_project_revision === "number" &&
+      typeof row?.authoritative_node_revision === "number" &&
+      typeof row?.authoritative_block_revision === "number")) remember(value);
   return value;
 }
 
@@ -215,8 +219,8 @@ export const api = {
     const node = nodeExpected(nodeId);
     return request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number; authoritative_project_revision?: number; authoritative_node_revision?: number; authoritative_block_revision?: number }>(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ ...data, expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision }) });
   },
-  updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) =>
-    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...blockExpected(blockId), ...data }) }),
+  updateBlock: (blockId: string, data: { content?: unknown; block_type?: string; order_index?: number }) =>
+    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...data, ...blockExpected(blockId) }) }),
   deleteBlock: (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
     const expected = blockExpected(blockId);
     return request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify({ ...expected, expected_project_revision: expectedProjectRevision ?? expected.expected_project_revision, expected_node_revision: expectedNodeRevision ?? expected.expected_node_revision, expected_revision: expectedRevision ?? expected.expected_revision }) });

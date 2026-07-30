@@ -28,7 +28,8 @@ from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
     apply_create_edge)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
-    finalize_content_block_maturity)
+    UpdateContentBlockInput, validate_update_content_block,
+    apply_update_content_block, finalize_content_block_maturity)
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -1079,19 +1080,31 @@ async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession 
 
 @router.patch("/blocks/{block_id}", response_model=ContentBlockOut)
 async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession = Depends(get_db)):
+    changes = data.model_dump(exclude_unset=True, exclude={
+        "expected_project_revision", "expected_node_revision", "expected_revision"})
+    # GUI intentionally retains its legacy values, including explicit null content.
+    spec = UpdateContentBlockInput(project_id="", block_id=block_id, changes=changes,
+        actor_type="human", actor_id=None, provenance={"entry": "gui_rest"})
     block = await db.get(ContentBlock, block_id)
     if not block:
         raise HTTPException(404, "Block not found")
     node = await db.get(Node, block.node_id)
-    if not node: raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    spec = UpdateContentBlockInput(**{**spec.__dict__, "project_id": node.project_id})
+    validated = await validate_update_content_block(db, spec)
     check_entity_revision(block, data.expected_revision, kind="block")
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    for k, v in data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_node_revision", "expected_revision"}).items():
-        setattr(block, k, v)
-    bump_existing(block, node)
+    project = await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    touched = TouchedEntities()
+    block = await apply_update_content_block(db, validated, touched=touched)
+    await finalize_content_block_maturity(db, {node.id}, touched=touched)
+    touched.apply()
     await db.commit()
     await db.refresh(block)
+    block.authoritative_project_revision = project.revision
+    block.authoritative_node_revision = node.revision
+    block.authoritative_block_revision = block.revision
     return block
 
 
