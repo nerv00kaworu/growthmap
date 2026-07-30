@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import crypto from "node:crypto";
-import { assignStableModuleIds, normalizeModuleIdentifier, stabilizeChunkGroups } from "./stable-module-ids.mjs";
+import { assignStableModuleIds, normalizeClientReferenceManifestAsset, normalizeManifestChunkPairs, normalizeModuleIdentifier } from "./stable-module-ids.mjs";
 const root="C:/Work/Growth Map";
 const normalized="loader!<PROJECT_ROOT>/src/a.ts";
 const base=crypto.createHash("sha256").update(normalized).digest("hex").slice(0,16);
@@ -142,17 +142,20 @@ test("malformed and double-encoded text is never broadly decoded into a root",()
  assert.notEqual(normalizeModuleIdentifier(malformed,root),normalized);
  assert.notEqual(normalizeModuleIdentifier(doubled,root),normalized);
 });
-test("chunk groups normalize filesystem-dependent discovery order",()=>{
- const chunks=[
-  {name:"vendors-z",id:"vendors-z"},
-  {name:"app/page",id:"app/page"},
-  {name:"a",id:"a"},
-  {name:"a",id:"a-2"},
- ];
- const expected=["a:a","a:a-2","app/page:app/page","vendors-z:vendors-z"];
- const groups=[{chunks:chunks.slice().reverse()},{chunks:[chunks[2],chunks[0],chunks[3],chunks[1]]}];
- stabilizeChunkGroups(groups);
- for(const group of groups) assert.deepEqual(group.chunks.map((chunk)=>`${chunk.name}:${chunk.id}`),expected);
+test("client-reference manifest chunk pairs normalize Linux and Windows insertion order",()=>{
+ const vendors=["vendors-z","static/chunks/vendors-z.js"];
+ const shared=["1a258343","static/chunks/1a258343.js"];
+ const page=["app/page","static/chunks/app/page.js"];
+ const linux=[...vendors,...shared,...page];
+ const windows=[...shared,...vendors,...page];
+ assert.deepEqual(normalizeManifestChunkPairs(linux),normalizeManifestChunkPairs(windows));
+ const wrap=(chunks)=>`globalThis.__RSC_MANIFEST=(globalThis.__RSC_MANIFEST||{});globalThis.__RSC_MANIFEST["/page"]=${JSON.stringify({clientModules:{x:{id:"x",name:"*",chunks}},ssrModuleMapping:{x:{"*":{id:"server",name:"*",chunks:[]}}}})}`;
+ assert.equal(normalizeClientReferenceManifestAsset(wrap(linux)),normalizeClientReferenceManifestAsset(wrap(windows)));
+});
+test("manifest normalization keeps chunk id and file pairs intact and rejects malformed tuples",()=>{
+ assert.deepEqual(normalizeManifestChunkPairs(["z","z.js","a","a.js"]),["a","a.js","z","z.js"]);
+ assert.throws(()=>normalizeManifestChunkPairs(["a","a.js","orphan"]),/chunk-id\/file pairs/);
+ assert.throws(()=>normalizeManifestChunkPairs(["a",7]),/chunk-id\/file pairs/);
 });
 test("total ordering includes every metadata field and chunk identity",()=>{
  const fields=["type","layer","resource","userRequest","request","rawRequest"];

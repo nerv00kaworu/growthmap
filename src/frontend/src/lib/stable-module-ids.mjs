@@ -78,12 +78,35 @@ export function assignStableModuleIds(modules, root, access = {}) {
   }
 }
 
-function chunkKey(chunk) {
-  return [chunk.name || "", chunk.id == null ? "" : String(chunk.id)].join("\u0000");
+function compareChunkPairs(a, b) {
+  return compareTotal(a[0], b[0]) || compareTotal(a[1], b[1]);
 }
-export function compareChunks(a, b) { return compareTotal(chunkKey(a), chunkKey(b)); }
-export function stabilizeChunkGroups(chunkGroups) {
-  for (const group of chunkGroups) group.chunks.sort(compareChunks);
+export function normalizeManifestChunkPairs(chunks) {
+  if (!Array.isArray(chunks) || chunks.length % 2 !== 0 || chunks.some((value) => typeof value !== "string")) {
+    throw new Error("GrowthMap deterministic manifest: chunks must contain chunk-id/file pairs");
+  }
+  const pairs = [];
+  for (let index = 0; index < chunks.length; index += 2) pairs.push([chunks[index], chunks[index + 1]]);
+  return pairs.sort(compareChunkPairs).flat();
+}
+function normalizeManifestChunks(value) {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    for (const item of value) normalizeManifestChunks(item);
+    return;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "chunks") value[key] = normalizeManifestChunkPairs(child);
+    else normalizeManifestChunks(child);
+  }
+}
+export function normalizeClientReferenceManifestAsset(source) {
+  const marker = "]=", start = source.indexOf(marker);
+  if (start < 0) throw new Error("GrowthMap deterministic manifest: assignment marker not found");
+  const jsonStart = start + marker.length;
+  const manifest = JSON.parse(source.slice(jsonStart));
+  normalizeManifestChunks(manifest);
+  return source.slice(0, jsonStart) + JSON.stringify(manifest);
 }
 
 export class StableModuleIdsPlugin {
@@ -102,13 +125,21 @@ export class StableModuleIdsPlugin {
             .sort(compareTotal).join("\u0000"),
         });
       });
-      // Next's client-reference manifest serializes an entrypoint's chunks in
-      // iteration order. Webpack can discover those in a different order on
-      // Windows, so make its supported ordering hook total before chunks are
-      // materialized; mutating chunk groups during processAssets is too late.
-      compilation.hooks.afterChunks.tap("GrowthMapStableChunkOrder", () => {
-        stabilizeChunkGroups(compilation.chunkGroups);
-      });
+      // Next's ClientReferenceManifestPlugin builds chunk tuples from
+      // entrypoint.chunks/chunk.files at PROCESS_ASSETS_STAGE_ANALYSE. Normalize
+      // its emitted manifest immediately afterward, before static export reads
+      // it and embeds the RSC payload in HTML. This is the owned generation
+      // boundary: pairs stay intact and no exported HTML is rewritten.
+      compilation.hooks.processAssets.tap(
+        { name: "GrowthMapStableClientReferenceManifest", stage: compiler.webpack.Compilation.PROCESS_ASSETS_STAGE_ANALYSE + 1 },
+        () => {
+          for (const asset of compilation.getAssets()) {
+            if (!asset.name.endsWith("_client-reference-manifest.js")) continue;
+            const normalized = normalizeClientReferenceManifestAsset(asset.source.source().toString());
+            compilation.updateAsset(asset.name, new compiler.webpack.sources.RawSource(normalized));
+          }
+        },
+      );
     });
   }
 }
