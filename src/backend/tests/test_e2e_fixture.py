@@ -12,15 +12,16 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
 
     subprocess.run([sys.executable, str(SCRIPT), str(fixture)], check=True)
 
+    expected_project_id = "11111111-1111-4111-8111-111111111111"
     with sqlite3.connect(fixture) as connection:
         table = connection.execute(
             "SELECT name FROM sqlite_schema WHERE type='table' AND name='projects'"
         ).fetchone()
         row = connection.execute(
-            "SELECT id, name, status FROM projects WHERE id='fixture'"
+            "SELECT id, name, status FROM projects WHERE id=?", (expected_project_id,)
         ).fetchone()
     assert table == ("projects",)
-    assert row == ("fixture", "Desktop Fixture", "active")
+    assert row == (expected_project_id, "Desktop Fixture", "active")
 
 
 def test_e2e_fixture_refuses_live_looking_path():
