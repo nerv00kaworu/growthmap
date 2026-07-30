@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import crypto from "node:crypto";
-import { assignStableModuleIds, normalizeModuleIdentifier, stabilizeChunkGroups } from "./stable-module-ids.mjs";
+import { assignStableModuleIds, normalizeModuleIdentifier, stabilizeChunkGroups, stabilizeChunkTraversal } from "./stable-module-ids.mjs";
 const root="C:/Work/Growth Map";
 const normalized="loader!<PROJECT_ROOT>/src/a.ts";
 const base=crypto.createHash("sha256").update(normalized).digest("hex").slice(0,16);
@@ -153,6 +153,17 @@ test("chunk groups normalize filesystem-dependent discovery order",()=>{
  const groups=[{chunks:chunks.slice().reverse()},{chunks:[chunks[2],chunks[0],chunks[3],chunks[1]]}];
  stabilizeChunkGroups(groups);
  for(const group of groups) assert.deepEqual(group.chunks.map((chunk)=>`${chunk.name}:${chunk.id}`),expected);
+});
+test("entrypoint and chunk files normalize filesystem-dependent traversal order",()=>{
+ const chunks=[
+  {name:"vendors-z",id:"vendors-z",files:new Set(["z.js","a.js"])},
+  {name:"app/page",id:"app/page",files:new Set(["page-z.js","page-a.js"])},
+ ];
+ const entrypoint={chunks:chunks.slice().reverse()};
+ stabilizeChunkTraversal({chunkGroups:[],entrypoints:new Map([["app/page",entrypoint]]),chunks:new Set(chunks)});
+ assert.deepEqual(entrypoint.chunks.map((chunk)=>chunk.name),["app/page","vendors-z"]);
+ assert.deepEqual([...chunks[0].files],["a.js","z.js"]);
+ assert.deepEqual([...chunks[1].files],["page-a.js","page-z.js"]);
 });
 test("total ordering includes every metadata field and chunk identity",()=>{
  const fields=["type","layer","resource","userRequest","request","rawRequest"];
