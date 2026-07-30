@@ -3,6 +3,11 @@
 import argparse,json,os,stat,sys,urllib.error,urllib.parse,urllib.request
 COMMANDS={"capabilities":("GET","/capabilities"),"project":("GET","/project"),"graph":("GET","/graph"),"context":("GET","/context/{target}"),"propose":("POST","/proposals"),"apply-batch":("POST","/batch"),"report-event":("POST","/events"),"submit-readback":("POST","/readbacks")}
 MAX_TOKEN=4096
+def write_utf8(stream,text):
+ data=text.encode("utf-8")
+ binary=getattr(stream,"buffer",None)
+ if binary is not None:binary.write(data);binary.flush()
+ else:stream.write(text);stream.flush()
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**k):return None
 def base_url(raw):
@@ -36,10 +41,10 @@ def main():
  if method=="POST":body=(sys.stdin.read() if a.input=="-" else open(a.input,encoding="utf8").read()).encode()
  req=urllib.request.Request(base+path,data=body,method=method,headers={"Authorization":"Bearer "+secret,"Content-Type":"application/json"})
  try:
-  with urllib.request.build_opener(NoRedirect).open(req,timeout=30) as r:print(r.read().decode());return 0
+  with urllib.request.build_opener(NoRedirect).open(req,timeout=30) as r:write_utf8(sys.stdout,r.read().decode("utf-8")+"\n");return 0
  except urllib.error.HTTPError as e:
-  data=e.read(262144).decode(errors="replace");sys.stderr.write(data+"\n");return 10 if e.code==409 else 4 if e.code in (401,403) else 3
- except Exception as e:sys.stderr.write(json.dumps({"error":type(e).__name__})+"\n");return 2
+  data=e.read(262144).decode("utf-8",errors="replace");write_utf8(sys.stderr,data+"\n");return 10 if e.code==409 else 4 if e.code in (401,403) else 3
+ except Exception as e:write_utf8(sys.stderr,json.dumps({"error":type(e).__name__})+"\n");return 2
 if __name__=="__main__":
  try:raise SystemExit(main())
- except (ValueError,OSError) as e:sys.stderr.write(json.dumps({"error":str(e)})+"\n");raise SystemExit(2)
+ except (ValueError,OSError) as e:write_utf8(sys.stderr,json.dumps({"error":str(e)},ensure_ascii=False)+"\n");raise SystemExit(2)
