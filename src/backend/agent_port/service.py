@@ -77,6 +77,17 @@ async def validate_operations(db,grant,operations):
             if op["op"]=="create_node":new_nodes[oid]=op
             if op["op"]=="create_branch":new_branches[oid]=op
         normalized.append(op)
+    # Resolve containment authorization as a fixed point so caller order does not
+    # affect scope validation for forward-created parent chains.
+    if not (grant.node_scope_id or grant.branch_root_id):
+        allowed.update(new_nodes)
+    else:
+        changed=True
+        while changed:
+            changed=False
+            for nid, candidate in new_nodes.items():
+                if nid not in allowed and candidate.get("parent_id") in allowed:
+                    allowed.add(nid);changed=True
     def node_ref(nid):
         if nid in known:return known[nid]
         if nid in new_nodes:return new_nodes[nid]
@@ -106,8 +117,6 @@ async def validate_operations(db,grant,operations):
                 if isinstance(b,Branch) and b.status!="active":raise HTTPException(422,{"code":"INACTIVE_BRANCH","message":"Branch is not active"})
                 # Branch scoped grants may only use the branch containing their root.
                 if grant.branch_root_id and bid!=node_branch(known.get(grant.branch_root_id)):raise HTTPException(403,{"code":"SCOPE_DENIED","message":"Branch outside grant"})
-            # Newly created nodes become allowed only through an allowed/newly-contained parent.
-            if parent and (parent in allowed or parent in new_nodes):allowed.add(op["id"])
         elif kind=="update_node":
             n=node_ref(op["node_id"]);refs.append(op["node_id"])
             if not isinstance(n,Node):raise HTTPException(422,"Cannot update a not-yet-created node")
