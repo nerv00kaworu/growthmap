@@ -120,3 +120,10 @@ test('Windows workflow uploads only staged JSON when a diagnostic refusal also f
  assert.doesNotMatch(upload,/continue-on-error|\.next|out\/|bundle|chunk/);
  assert.doesNotMatch(workflow,/hashFiles\([^)]*runner\.temp/);
 });
+
+test('authoritative database readiness receives an explicit safe basename',()=>{
+ assert.match(main,/authoritativeDatabaseReadiness\(expected,databaseBasename\)/);
+ assert.match(main,/path\.basename\(databaseBasename\)!==databaseBasename/);
+ assert.match(main,/authoritativeReadiness:expected=>authoritativeDatabaseReadiness\(expected,path\.basename\(databasePath\)\)/);
+ assert.doesNotMatch(main,/path\.basename\(databasePath\).*managed=/);
+});
