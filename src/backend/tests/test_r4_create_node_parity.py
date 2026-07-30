@@ -17,8 +17,8 @@ HH={'Authorization':'Bearer isolated-human'}
 def arun(x):return asyncio.run(x)
 def project(c,name):
  r=c.post('/api/projects',json={'name':name});assert r.status_code==201,r.text;return r.json()
-def grant(c,p,**extra):
- r=c.post('/api/agent-port/grants',headers=HH,json={'project_id':p,'permission':'write','expires_at':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),'label':'parity','agent_identity':'agent-parity',**extra});assert r.status_code==201,r.text;body=r.json();assert body.get('token'),body;return {'Authorization':'Bearer '+body['token']}
+def grant(c,p,permission='write',**extra):
+ r=c.post('/api/agent-port/grants',headers=HH,json={'project_id':p,'permission':permission,'expires_at':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),'label':'parity','agent_identity':'agent-parity',**extra});assert r.status_code==201,r.text;body=r.json();assert body.get('token'),body;return {'Authorization':'Bearer '+body['token']}
 def batch(c,h,p,key,ops):return c.post('/agent/v1/batch',headers=h,json={'expected_project_revision':p['revision'],'idempotency_key':key,'operations':ops})
 async def counts(pid,parent=None):
  async with async_session() as db:
@@ -66,7 +66,7 @@ def run_validation():
   p=project(c,'branch');root=c.get('/api/nodes/'+p['root_node_id']).json();bid=arun(add_branch(p['id']))
   async def put_parent():
    async with async_session() as db:n=await db.get(Node,root['id']);n.branch_id=bid;await db.commit()
-  arun(put_parent());h=grant(c,p['id']);gui_omitted=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'title':'omitted'});assert gui_omitted.status_code==400,gui_omitted.text;gui_explicit=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'branch_id':bid,'title':'explicit'});assert gui_explicit.status_code==201,gui_explicit.text;p=c.get('/api/projects/'+p['id']).json();root=c.get('/api/nodes/'+root['id']).json()
+  arun(put_parent());h=grant(c,p['id']);gui_omitted=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'title':'omitted'});assert gui_omitted.status_code==400 and gui_omitted.json()['detail']=='Parent and child must belong to the same branch',gui_omitted.text;gui_explicit=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'branch_id':bid,'title':'explicit'});assert gui_explicit.status_code==201,gui_explicit.text;p=c.get('/api/projects/'+p['id']).json();root=c.get('/api/nodes/'+root['id']).json()
   inherited=batch(c,h,p,'inherit-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':root['revision'],'title':'inherited'}]);assert inherited.status_code==200,inherited.text;assert c.get('/api/nodes/'+inherited.json()['results'][0]['id']).json()['branch_id']==bid
   other=arun(add_branch(p['id']));cur=c.get('/api/projects/'+p['id']).json();parent=c.get('/api/nodes/'+root['id']).json()
   g=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'expected_parent_revision':parent['revision'],'parent_id':root['id'],'branch_id':other,'title':'bad'});assert g.status_code==400 and g.json()['detail']=='Parent and child must belong to the same branch',g.text
@@ -83,12 +83,32 @@ def run_validation():
   # Forward parent: new parent revision remains 1, first-child mainline, root touched once.
   p=project(c,'forward');root=c.get('/api/nodes/'+p['root_node_id']).json();h=grant(c,p['id']);a=str(uuid.uuid4());b=str(uuid.uuid4());d=str(uuid.uuid4());e=str(uuid.uuid4());ops=[{'op':'create_node','id':b,'parent_id':a,'expected_parent_revision':1,'title':'caller-first'},{'op':'create_node','id':d,'parent_id':a,'expected_parent_revision':1,'title':'caller-second'},{'op':'create_node','id':a,'parent_id':root['id'],'expected_parent_revision':1,'title':'parent'},{'op':'create_node','id':e,'parent_id':a,'expected_parent_revision':1,'title':'caller-third'}];r=batch(c,h,p,'forward-parent',ops);assert r.status_code==200,r.text
   st=arun(counts(p['id'],root['id']));na=c.get('/api/nodes/'+a).json();assert st[0]==2 and st[1]==(2,'rough') and na['revision']==2 and r.json()['results'][2]['revision']==2
-  siblings=[x for x in st[3] if x.from_node_id==a];assert len(siblings)==3 and sum(bool(x.is_mainline) for x in siblings)==1;assert next(x for x in siblings if x.to_node_id==b).is_mainline is True
+  siblings=[x for x in st[3] if x.from_node_id==a];assert len(siblings)==3 and sum(bool(x.is_mainline) for x in siblings)==1;flags={x.to_node_id:bool(x.is_mainline) for x in siblings};assert flags=={b:True,d:False,e:False},flags;assert [x['revision'] for x in r.json()['results']]==[1,1,2,1],r.json()['results'];assert c.get('/api/nodes/'+b).json()['revision']==1
 
 def run_atomic_context():
  with TestClient(app) as c:
-  # Late validation rollback leaves graph/history/maturity/revisions untouched.
+  # Prevalidation failure leaves graph/history/maturity/revisions untouched.
   p=project(c,'rollback');root=c.get('/api/nodes/'+p['root_node_id']).json();h=grant(c,p['id']);bad=batch(c,h,p,'late-fail',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':1,'title':'must rollback'},{'op':'create_content_block','node_id':root['id'],'expected_node_revision':99,'content':{'body':'x'}}]);assert bad.status_code==409,bad.text
+  st=arun(counts(p['id'],root['id']));assert st[0]==1 and st[1]==(1,'seed') and len(st[2])==1 and not st[3] and not [x for x in st[4] if x.action_type in ('create_node','maturity_advance','agent_batch_applied')]
+  # True post-CAS/apply failure through proposal approval rolls back first create,
+  # project claim, canonical logs/maturity and the staged proposal review state.
+  import agent_port.service as service
+  proposal_grant=grant(c,p['id'],permission='propose');token=proposal_grant['Authorization'].removeprefix('Bearer ')
+  made=c.post('/agent/v1/proposals',headers=proposal_grant,json={'idempotency_key':'proposal-late-failure','expected_project_revision':1,'title':'rollback proposal','operations':[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':1,'title':'first staged'},{'op':'create_node','title':'second fails'}]});assert made.status_code==201,made.text
+  original_apply=service.apply_create_node;calls=0
+  async def fail_second(*args,**kwargs):
+   nonlocal calls
+   calls+=1
+   if calls==2:raise __import__('fastapi').HTTPException(409,{'code':'INJECTED_LATE_FAILURE','message':'forced after first canonical write'})
+   return await original_apply(*args,**kwargs)
+  service.apply_create_node=fail_second
+  try:failed=c.post(f"/api/agent-port/proposals/{made.json()['proposal_id']}/approve",headers=HH,json={'review_note':'must rollback'})
+  finally:service.apply_create_node=original_apply
+  assert failed.status_code==409,failed.text
+  async def proposal_state(proposal_id):
+   from models.models import AgentProposal
+   async with async_session() as db:return await db.get(AgentProposal,proposal_id)
+  row=arun(proposal_state(made.json()['proposal_id']));assert row.status=='pending' and row.review_note=='' and row.reviewed_at is None
   st=arun(counts(p['id'],root['id']));assert st[0]==1 and st[1]==(1,'seed') and len(st[2])==1 and not st[3] and not [x for x in st[4] if x.action_type in ('create_node','maturity_advance','agent_batch_applied')]
   # Same expected project/parent race: exactly one winner, loser 409.
   from threading import Barrier
