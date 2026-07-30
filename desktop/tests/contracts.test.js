@@ -107,3 +107,16 @@ test('Windows CSP workflow uses explicit diff output instead of continue-on-erro
  assert.doesNotMatch(workflow,/continue-on-error:\s*true/);assert.doesNotMatch(workflow,/steps\.csp-gate\.outcome/);
  assert.match(workflow,/GROWTHMAP_MODULE_IDENTITY_REPORT/);assert.match(workflow,/module-identity\.json/);
 });
+test('Windows workflow uploads only staged JSON when a diagnostic refusal also failed the job',()=>{
+ const workflow=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/desktop-windows.yml'),'utf8');
+ assert.match(workflow,/name: Stage safe module identity refusal report[\s\S]*if: \$\{\{ always\(\) \}\}/);
+ assert.match(workflow,/Test-Path -LiteralPath \$source -PathType Leaf/);
+ assert.match(workflow,/\$report\.schema -ne 2 -or \$report\.status -ne 'refused'/);
+ assert.match(workflow,/present=true.*GITHUB_OUTPUT/);
+ assert.match(workflow,/name: Upload safe module identity refusal JSON only[\s\S]*if: \$\{\{ failure\(\) && steps\.identity-refusal\.outputs\.present == 'true' \}\}/);
+ assert.match(workflow,/path: \$\{\{ runner\.temp \}\}\/growthmap-safe-diagnostic-upload\/module-identity-refusal\.json/);
+ assert.match(workflow,/retention-days: 3/);
+ const upload=workflow.slice(workflow.indexOf('name: Upload safe module identity refusal JSON only'),workflow.indexOf('name: Record tracked CSP manifest comparison status'));
+ assert.doesNotMatch(upload,/continue-on-error|\.next|out\/|bundle|chunk/);
+ assert.doesNotMatch(workflow,/hashFiles\([^)]*runner\.temp/);
+});

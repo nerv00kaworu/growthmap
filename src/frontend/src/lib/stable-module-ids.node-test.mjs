@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { assignStableModuleIds, normalizeModuleIdentifier } from "./stable-module-ids.mjs";
 const root="C:/Work/Growth Map";
 const normalized="loader!<PROJECT_ROOT>/src/a.ts";
@@ -184,5 +187,53 @@ test("actual Next entry fixture reports every identity field without private val
 });
 test("identity report fails closed when normalization retains an unrecognized private path", async()=>{
  const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
- assert.throws(()=>moduleIdentityReport({identifier(){return "/home/other/private.ts"}},"/safe/root"),/refused/);
+ let error;try{moduleIdentityReport({identifier(){return "/home/other/private.ts"}},"/safe/root")}catch(caught){error=caught}
+ assert.ok(error instanceof Error);assert.match(error.message,/refused/);assert.match(error.message,/"field":"identifier"/);assert.match(error.message,/"denialReason":"raw-root"/);
+ assert.match(error.message,/rawSha256/);assert.match(error.message,/normalizedSha256/);assert.match(error.message,/rootRedactionCount/);assert.match(error.message,/structure/);
+ assert.doesNotMatch(error.message,/private\.ts|other/);
+});
+test("readable identifier uses the root-aware shortening callback", async()=>{
+ const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ const project="C:/private/source";
+ const report=moduleIdentityReport({identifier(){return "relative.js"},readableIdentifier({shorten}){return shorten(`${project}/src/a.js`) }},project);
+ assert.equal(report.readableIdentifier.rootRedactionCount,1);
+});
+test("successful write diagnostic retains the normal schema 1 contract",()=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"identity-success-")),destination=path.join(directory,"report.json");
+ const identifier="next-flight-client-entry-loader.js?modules=x!relative-entry.js";
+ assignStableModuleIds([{identifier(){return identifier}}],"/safe/root",{identity:()=>"app/page",diagnosticPath:destination});
+ const report=JSON.parse(fs.readFileSync(destination,"utf8"));
+ assert.equal(report.schema,1);assert.equal(report.status,undefined);assert.equal(report.modules.length,1);
+ assert.match(report.modules[0].identifier.rawSha256,/^[a-f0-9]{64}$/);
+});
+test("diagnostic refusal writes only bounded schema 2 metadata for every denial reason",()=>{
+ const cases=[
+  ["drive","D:/vault/file.ts"],
+  ["raw-root","/home/person/file.ts"],
+  ["encoded-root","%2FUsers%2Fperson%2Ffile.ts"],
+  ["project-marker","private-project-marker.ts".replace("private-project-marker","growthmap")],
+ ];
+ for(const [reason,value] of cases){
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"identity-refusal-"));
+  const destination=path.join(directory,"report.json");
+  const identifier="next-flight-client-entry-loader.js?modules=x!relative-entry.js";
+  const fixture={resource:value,identifier(){return identifier}};
+  assert.throws(()=>assignStableModuleIds([fixture],"/safe/root",{identity:()=>"app/page",diagnosticPath:destination}),new RegExp(`denialReason.*${reason}`));
+  const payload=fs.readFileSync(destination,"utf8"),report=JSON.parse(payload);
+  assert.equal(report.schema,2);assert.equal(report.status,"refused");assert.deepEqual(report.denials,[{moduleIndex:0,field:"resource",denialReason:reason}]);
+  assert.match(report.fields[0].resource.rawSha256,/^[a-f0-9]{64}$/);assert.equal(typeof report.fields[0].resource.rawLength,"number");
+  assert.equal(typeof report.fields[0].resource.structure.separators.encodedSlash,"number");
+  assert.doesNotMatch(payload,/\/home|Users|runner|D:|growthmap/i);
+  assert.doesNotMatch(payload,/vault|person|file\.ts/);
+ }
+});
+test("structural token strings are allowlisted and bounded in refusal reports",()=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),"identity-tokens-")),destination=path.join(directory,"report.json");
+ const identifier="next-flight-client-entry-loader.js?modules=x!relative-entry.js";
+ const fixture={resource:"D:/secret/file.ts?privateKey=x",request:"custom-secret-loader.js?privateKey=x",identifier(){return identifier}};
+ assert.throws(()=>assignStableModuleIds([fixture],"/safe/root",{identity:()=>"app/page",diagnosticPath:destination}));
+ const payload=fs.readFileSync(destination,"utf8"),report=JSON.parse(payload);
+ assert.deepEqual(report.fields[0].request.structure.loaderBasenames,["other"]);
+ assert.deepEqual(report.fields[0].request.structure.queryKeys,["other"]);
+ assert.doesNotMatch(payload,/secret|privateKey|custom/i);
 });

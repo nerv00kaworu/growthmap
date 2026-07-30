@@ -22,6 +22,29 @@ jobs:
         working-directory: src/frontend
         env:
           GROWTHMAP_MODULE_IDENTITY_REPORT: ${{ runner.temp }}/growthmap-module-identity.json
+      - name: Stage safe module identity refusal report
+        id: identity-refusal
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:RUNNER_TEMP 'growthmap-module-identity.json'
+          $staging = Join-Path $env:RUNNER_TEMP 'growthmap-safe-diagnostic-upload'
+          "present=false" >> $env:GITHUB_OUTPUT
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { exit 0 }
+          try { $report = Get-Content -LiteralPath $source -Raw | ConvertFrom-Json }
+          catch { throw 'Module identity diagnostic report is not valid JSON' }
+          if ($report.schema -ne 2 -or $report.status -ne 'refused') { exit 0 }
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item -LiteralPath $source -Destination (Join-Path $staging 'module-identity-refusal.json')
+          "present=true" >> $env:GITHUB_OUTPUT
+      - name: Upload safe module identity refusal JSON only
+        if: ${{ failure() && steps.identity-refusal.outputs.present == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthmap-module-identity-refusal-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/growthmap-safe-diagnostic-upload/module-identity-refusal.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Record tracked CSP manifest comparison status
         id: csp-gate
         shell: pwsh

@@ -41,55 +41,96 @@ function stableTie(module, normalized, root) {
     module.resource || "", module.userRequest || "", module.request || "", module.rawRequest || ""];
   return values.map((value) => normalizeModuleIdentifier(value, root)).join("\u0000");
 }
+const SAFE_LOADERS = new Set(["entry-loader.js", "next-flight-client-entry-loader.js"]);
+const SAFE_QUERY_KEYS = new Set(["modules"]);
+function boundedTokens(values, allowlist) {
+  const safe = values.slice(0, 16).map((value) => allowlist.has(value.toLowerCase()) ? value.toLowerCase() : "other");
+  return { values: [...new Set(safe)], count: values.length, truncated: values.length > 16 };
+}
 function structuralTokens(value) {
   const text = String(value);
-  const loaderBasenames = [...text.matchAll(/(?:^|!|[\\/])([A-Za-z0-9_.-]+(?:loader|entry-loader)\.js)(?=[?!|]|$)/gi)]
-    .map((match) => match[1].toLowerCase()).sort(compareTotal);
-  const queryKeys = [...text.matchAll(/[?&]([A-Za-z][A-Za-z0-9_.-]*)=/g)].map((match) => match[1]).sort(compareTotal);
+  const loaders = [...text.matchAll(/(?:^|!|[\\/])([A-Za-z0-9_.-]+(?:loader|entry-loader)\.js)(?=[?!|]|$)/gi)]
+    .map((match) => match[1]).sort(compareTotal);
+  const queries = [...text.matchAll(/[?&]([A-Za-z][A-Za-z0-9_.-]*)=/g)].map((match) => match[1]).sort(compareTotal);
   let current = text, encodingLevels = 0;
   for (; encodingLevels < 4 && /%25[0-9a-f]{2}/i.test(current); encodingLevels += 1) current = current.replace(/%25/gi, "%");
+  const loaderTokens = boundedTokens(loaders, SAFE_LOADERS), queryTokens = boundedTokens(queries, SAFE_QUERY_KEYS);
   return {
-    loaderBasenames: [...new Set(loaderBasenames)], queryKeys: [...new Set(queryKeys)], encodingLevels,
+    loaderBasenames: loaderTokens.values, loaderBasenameCount: loaderTokens.count, loaderBasenamesTruncated: loaderTokens.truncated,
+    queryKeys: queryTokens.values, queryKeyCount: queryTokens.count, queryKeysTruncated: queryTokens.truncated, encodingLevels,
     separators: { slash: (text.match(/\//g) || []).length, backslash: (text.match(/\\/g) || []).length,
       encodedSlash: (text.match(/%2f/gi) || []).length, encodedBackslash: (text.match(/%5c/gi) || []).length,
       encodedPercent: (text.match(/%25/gi) || []).length, loaderBoundary: (text.match(/!/g) || []).length },
   };
 }
-function assertRedacted(normalized, root) {
-  const lower = normalized.toLowerCase();
-  const rootVariants = [slash(root), encodeURI(slash(root)), encodeURIComponent(slash(root))].map((value) => value.toLowerCase());
-  const denied = [/[a-z]:[\\/]/i, /(?:^|[!|"'])\/(?:home|users|runner|a)\//i, /(?:^|%2f)(?:home|users|runner|a)%2f/i];
-  if (rootVariants.some((value) => value && lower.includes(value)) || denied.some((pattern) => pattern.test(normalized)) || /growthmap/i.test(normalized)) {
-    throw new Error("GrowthMap module identity diagnostic refused: normalized value retained a private root marker");
-  }
+const FIELD_NAMES = ["identifier", "readableIdentifier", "resource", "userRequest", "rawRequest", "request", "context", "layer", "type", "constructor", "chunkIdentity"];
+function denialReason(normalized, root) {
+  const lower = String(normalized).toLowerCase();
+  const normalizedRoot = slash(root).replace(/\/+$/, "").toLowerCase();
+  const rawRoots = [normalizedRoot, encodeURI(normalizedRoot)].filter(Boolean);
+  const encodedRoots = [encodeURIComponent(normalizedRoot)].filter(Boolean);
+  if (/[a-z]:[\\/]/i.test(normalized)) return "drive";
+  if (rawRoots.some((value) => lower.includes(value)) || /(?:^|[!|"'])\/(?:home|users|runner|a)\//i.test(normalized)) return "raw-root";
+  if (encodedRoots.some((value) => lower.includes(value.toLowerCase())) || /(?:^|%2f)(?:home|users|runner|a)%2f/i.test(normalized)
+    || /[a-z]%3a(?:%2f|%5c)/i.test(normalized)) return "encoded-root";
+  if (/growthmap/i.test(normalized)) return "project-marker";
+  return null;
 }
-export function moduleIdentityReport(module, root, chunkIdentity = "") {
+function fieldReport(raw, root) {
+  const normalized = normalizeModuleIdentifier(raw, root);
+  return {
+    metadata: { rawSha256: sha(raw), normalizedSha256: sha(normalized), rawLength: String(raw).length,
+      normalizedLength: normalized.length, rootRedactionCount: (normalized.match(/<PROJECT_ROOT>/g) || []).length,
+      structure: structuralTokens(raw) },
+    reason: denialReason(normalized, root),
+  };
+}
+function diagnosticFields(module, root, chunkIdentity) {
   const fields = {
-    identifier: module.identifier?.() || "", readableIdentifier: module.readableIdentifier?.({ shorten: (value) => value }) || "",
+    identifier: module.identifier?.() || "",
+    readableIdentifier: module.readableIdentifier?.({ shorten: (value) => normalizeModuleIdentifier(value, root) }) || "",
     resource: module.resource || "", userRequest: module.userRequest || "", rawRequest: module.rawRequest || "",
     request: module.request || "", context: module.context || "", layer: module.layer || "", type: module.type || "",
     constructor: module.constructor?.name || "", chunkIdentity,
   };
-  const report = {};
-  for (const [name, raw] of Object.entries(fields)) {
-    const normalized = normalizeModuleIdentifier(raw, root);
-    assertRedacted(normalized, root);
-    report[name] = { rawSha256: sha(raw), normalizedSha256: sha(normalized), rawLength: String(raw).length,
-      normalizedLength: normalized.length, rootRedactionCount: (normalized.match(/<PROJECT_ROOT>/g) || []).length,
-      structure: structuralTokens(raw) };
-  }
-  report.hashInput = { normalizedIdentifierSha256: sha(normalizeModuleIdentifier(fields.identifier, root)),
-    stableIdPrefix: sha(normalizeModuleIdentifier(fields.identifier, root)).slice(0, 16) };
+  return Object.fromEntries(FIELD_NAMES.map((name) => [name, fieldReport(fields[name], root)]));
+}
+function refusalError(field, result) {
+  return new Error(`Module identity diagnostic refused: ${JSON.stringify({ field, denialReason: result.reason, ...result.metadata })}`);
+}
+export function moduleIdentityReport(module, root, chunkIdentity = "") {
+  const bounded = diagnosticFields(module, root, chunkIdentity);
+  const unsafe = FIELD_NAMES.find((name) => bounded[name].reason);
+  if (unsafe) throw refusalError(unsafe, bounded[unsafe]);
+  const report = Object.fromEntries(FIELD_NAMES.map((name) => [name, bounded[name].metadata]));
+  report.hashInput = { normalizedIdentifierSha256: report.identifier.normalizedSha256,
+    stableIdPrefix: report.identifier.normalizedSha256.slice(0, 16) };
   return report;
+}
+function writeJson(destination, payload) {
+  const resolved = path.resolve(destination);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, `${JSON.stringify(payload, null, 2)}\n`);
 }
 function writeDiagnostics(rows, root, destination) {
   const selected = rows.filter(({ module, useIdentity }) => /next-flight-client-entry-loader\.js/i.test(module.identifier?.() || "")
     && useIdentity.split("\u0000").includes("app/page"));
-  if (selected.length !== 1) throw new Error(`GrowthMap module identity diagnostic refused: expected one app/page entry, found ${selected.length}`);
-  const payload = { schema: 1, modules: selected.map(({ module, useIdentity }) => moduleIdentityReport(module, root, useIdentity)) };
-  const resolved = path.resolve(destination);
-  fs.mkdirSync(path.dirname(resolved), { recursive: true });
-  fs.writeFileSync(resolved, `${JSON.stringify(payload, null, 2)}\n`);
+  if (selected.length !== 1) throw new Error(`Module identity diagnostic refused: selection-count=${selected.length}`);
+  const reports = selected.map(({ module, useIdentity }) => diagnosticFields(module, root, useIdentity));
+  const denials = reports.flatMap((fields, moduleIndex) => FIELD_NAMES.filter((field) => fields[field].reason)
+    .map((field) => ({ moduleIndex, field, denialReason: fields[field].reason })));
+  if (denials.length) {
+    writeJson(destination, { schema: 2, status: "refused", fields: reports.map((fields) =>
+      Object.fromEntries(FIELD_NAMES.map((name) => [name, fields[name].metadata]))), denials });
+    const first = denials[0];
+    throw refusalError(first.field, reports[first.moduleIndex][first.field]);
+  }
+  writeJson(destination, { schema: 1, modules: reports.map((fields) => {
+    const report = Object.fromEntries(FIELD_NAMES.map((name) => [name, fields[name].metadata]));
+    report.hashInput = { normalizedIdentifierSha256: report.identifier.normalizedSha256,
+      stableIdPrefix: report.identifier.normalizedSha256.slice(0, 16) };
+    return report;
+  }) });
 }
 export function assignStableModuleIds(modules, root, access = {}) {
   const get = access.get || ((module) => module.id);
