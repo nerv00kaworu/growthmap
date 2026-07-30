@@ -81,18 +81,9 @@ export function assignStableModuleIds(modules, root, access = {}) {
 function chunkKey(chunk) {
   return [chunk.name || "", chunk.id == null ? "" : String(chunk.id)].join("\u0000");
 }
-export function stabilizeChunkTraversal(compilation) {
-  // Next's client-reference manifest serializes chunkGroup.chunks and
-  // chunk.files in their insertion order. Webpack discovers those through
-  // filesystem-backed module traversal, whose order differs between POSIX and
-  // Windows. Sort the public iterables before Next reads them so inline RSC
-  // chunk tuples are platform-independent without rewriting exported HTML.
-  for (const group of compilation.chunkGroups) group.chunks.sort((a, b) => compareTotal(chunkKey(a), chunkKey(b)));
-  for (const chunk of compilation.chunks) {
-    const files = [...chunk.files].sort(compareTotal);
-    chunk.files.clear();
-    for (const file of files) chunk.files.add(file);
-  }
+export function compareChunks(a, b) { return compareTotal(chunkKey(a), chunkKey(b)); }
+export function stabilizeChunkGroups(chunkGroups) {
+  for (const group of chunkGroups) group.chunks.sort(compareChunks);
 }
 
 export class StableModuleIdsPlugin {
@@ -111,10 +102,13 @@ export class StableModuleIdsPlugin {
             .sort(compareTotal).join("\u0000"),
         });
       });
-      compilation.hooks.processAssets.tap(
-        { name: "GrowthMapStableChunkTraversal", stage: compiler.webpack.Compilation.PROCESS_ASSETS_STAGE_ANALYSE - 1 },
-        () => stabilizeChunkTraversal(compilation),
-      );
+      // Next's client-reference manifest serializes an entrypoint's chunks in
+      // iteration order. Webpack can discover those in a different order on
+      // Windows, so make its supported ordering hook total before chunks are
+      // materialized; mutating chunk groups during processAssets is too late.
+      compilation.hooks.afterChunks.tap("GrowthMapStableChunkOrder", () => {
+        stabilizeChunkGroups(compilation.chunkGroups);
+      });
     });
   }
 }
