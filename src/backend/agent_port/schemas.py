@@ -27,7 +27,7 @@ class NodeFields(Strict):
     constraints_text: Text|None=None; examples_text: Text|None=None; questions_text: Text|None=None
     decision_notes: Text|None=None
     tags: Annotated[list[Annotated[str,Field(max_length=100)]],Field(max_length=50)]|None=None
-    status: Literal["active","archived","completed"]|None=None
+    status: Literal["active","paused","archived","completed"]|None=None
     maturity: Literal["seed","rough","developing","stable","finalized"]|None=None
     priority: Annotated[int,Field(ge=-100,le=100)]|None=None
     confidence: Annotated[float,Field(ge=0,le=1)]|None=None
