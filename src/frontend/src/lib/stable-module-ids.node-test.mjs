@@ -167,3 +167,22 @@ test("virtual entry IDs normalize POSIX and percent-encoded Windows requests",()
  assert.ok(!identity.includes("runner")&&!identity.includes("D:")&&!/%5c/i.test(identity));
  assert.equal(posix.id,crypto.createHash("sha256").update(identity).digest("hex").slice(0,16));
 });
+
+test("actual Next entry fixture reports every identity field without private values", async()=>{
+ const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ const project="D:/a/growthmap/src/frontend";
+ const identifier="javascript/auto|D:\\a\\growthmap\\src\\frontend\\node_modules\\next\\dist\\entry-loader.js?modules=%7B%22request%22%3A%22D%3A%5Ca%5Cgrowthmap%5Csrc%5Cfrontend%5Csrc%5Capp%5Cpage.tsx%22%7D!|app-pages-browser";
+ class NormalModule { identifier(){return identifier} readableIdentifier(){return identifier} }
+ const fixtureModule=new NormalModule();Object.assign(fixtureModule,{resource:`${project}/src/app/page.tsx`,userRequest:identifier,rawRequest:identifier,request:identifier,context:project,layer:"app-pages-browser",type:"javascript/auto"});
+ const report=moduleIdentityReport(fixtureModule,project,"app/page");
+ for(const field of ["identifier","readableIdentifier","resource","userRequest","rawRequest","request","context","layer","type","constructor","chunkIdentity"]){
+  assert.match(report[field].rawSha256,/^[a-f0-9]{64}$/);assert.match(report[field].normalizedSha256,/^[a-f0-9]{64}$/);assert.equal(typeof report[field].rootRedactionCount,"number");
+ }
+ assert.deepEqual(report.identifier.structure.loaderBasenames,["entry-loader.js"]);
+ assert.deepEqual(report.identifier.structure.queryKeys,["modules"]);
+ assert.equal(JSON.stringify(report).includes(project),false);
+});
+test("identity report fails closed when normalization retains an unrecognized private path", async()=>{
+ const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ assert.throws(()=>moduleIdentityReport({identifier(){return "/home/other/private.ts"}},"/safe/root"),/refused/);
+});

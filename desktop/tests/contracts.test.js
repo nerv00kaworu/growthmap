@@ -98,3 +98,12 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
 })
 test('expired paid identity reaches freshness high-water while trial and no-license do not',()=>{const main=fs.readFileSync(path.resolve(__dirname,'../main.js'),'utf8');assert.match(main,/else if\(entitlement\.license_id\).*freshness\.checkpoint\(entitlement\.license_id\)/s);assert.doesNotMatch(main,/else\s*\{\s*freshness\.checkpoint/);});
+
+test('Windows CSP workflow uses explicit diff output instead of continue-on-error outcome control flow',()=>{
+ const workflow=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/desktop-windows.yml'),'utf8');
+ assert.match(workflow,/git diff --quiet -- desktop\/generated\/csp-script-hashes\.json/);
+ assert.match(workflow,/different=false.*GITHUB_OUTPUT/);assert.match(workflow,/different=true.*GITHUB_OUTPUT/);
+ assert.ok((workflow.match(/steps\.csp-gate\.outputs\.different == 'true'/g)||[]).length>=3);
+ assert.doesNotMatch(workflow,/continue-on-error:\s*true/);assert.doesNotMatch(workflow,/steps\.csp-gate\.outcome/);
+ assert.match(workflow,/GROWTHMAP_MODULE_IDENTITY_REPORT/);assert.match(workflow,/module-identity\.json/);
+});

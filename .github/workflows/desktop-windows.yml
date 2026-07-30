@@ -20,28 +20,29 @@ jobs:
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
-      - name: Tracked CSP manifest must already match the fresh deterministic build
+        env:
+          GROWTHMAP_MODULE_IDENTITY_REPORT: ${{ runner.temp }}/growthmap-module-identity.json
+      - name: Record tracked CSP manifest comparison status
         id: csp-gate
         shell: pwsh
         run: |
-          git diff --exit-code -- desktop/generated/csp-script-hashes.json
-          $cspStatus = $LASTEXITCODE
-          if ($cspStatus -ne 0) {
-            "failed=true" >> $env:GITHUB_OUTPUT
-            node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
-            $diagnosticStatus = $LASTEXITCODE
-            node desktop/scripts/analyze-flight-script.js --html src/frontend/out/index.html --script-index 9 --baseline desktop/generated/csp-flight-script-9-diagnostic.json
-            if ($LASTEXITCODE -ne 0) { Write-Host "::error::Flight byte diagnostic failed closed"; $diagnosticStatus = $LASTEXITCODE }
-            node desktop/scripts/stage-app-page-chunk-diagnostic.js --next src/frontend/.next --out "$env:RUNNER_TEMP/growthmap-app-page-diagnostic"
-            if ($LASTEXITCODE -ne 0) { Write-Host "::error::app/page artifact scan failed closed"; $diagnosticStatus = $LASTEXITCODE }
-            if ($diagnosticStatus -ne 0) { Write-Host "::error::CSP diagnostic failed closed with status $diagnosticStatus" }
-            exit $cspStatus
-          }
-          "failed=false" >> $env:GITHUB_OUTPUT
-          exit 0
-        continue-on-error: true
+          git diff --quiet -- desktop/generated/csp-script-hashes.json
+          if ($LASTEXITCODE -eq 0) { "different=false" >> $env:GITHUB_OUTPUT; exit 0 }
+          if ($LASTEXITCODE -eq 1) { "different=true" >> $env:GITHUB_OUTPUT; exit 0 }
+          throw "git diff failed with status $LASTEXITCODE"
+      - name: Stage CSP diagnostics only when the manifest differs
+        if: ${{ steps.csp-gate.outputs.different == 'true' }}
+        shell: pwsh
+        run: |
+          node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
+          if ($LASTEXITCODE -ne 0) { throw "CSP diagnostic failed closed with status $LASTEXITCODE" }
+          node desktop/scripts/analyze-flight-script.js --html src/frontend/out/index.html --script-index 9 --baseline desktop/generated/csp-flight-script-9-diagnostic.json
+          if ($LASTEXITCODE -ne 0) { throw "Flight byte diagnostic failed closed with status $LASTEXITCODE" }
+          node desktop/scripts/stage-app-page-chunk-diagnostic.js --next src/frontend/.next --out "$env:RUNNER_TEMP/growthmap-app-page-diagnostic"
+          if ($LASTEXITCODE -ne 0) { throw "app/page artifact scan failed closed with status $LASTEXITCODE" }
+          Copy-Item "$env:RUNNER_TEMP/growthmap-module-identity.json" "$env:RUNNER_TEMP/growthmap-app-page-diagnostic/module-identity.json"
       - name: Upload scanned app/page chunk diagnostic only on CSP failure
-        if: ${{ steps.csp-gate.outputs.failed == 'true' }}
+        if: ${{ steps.csp-gate.outputs.different == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: growthmap-app-page-chunk-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
@@ -49,7 +50,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - name: Preserve CSP gate failure after diagnostic upload
-        if: ${{ steps.csp-gate.outcome == 'failure' }}
+        if: ${{ steps.csp-gate.outputs.different == 'true' }}
         shell: pwsh
         run: throw 'Tracked CSP manifest differs from the fresh Windows build'
       - run: ./packaging/build-sidecar.ps1
