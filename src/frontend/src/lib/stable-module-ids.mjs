@@ -58,8 +58,12 @@ function structuralTokens(value) {
 function assertRedacted(normalized, root) {
   const lower = normalized.toLowerCase();
   const rootVariants = [slash(root), encodeURI(slash(root)), encodeURIComponent(slash(root))].map((value) => value.toLowerCase());
-  const denied = [/[a-z]:[\\/]/i, /(?:^|[!|"'])\/(?:home|users|runner|a)\//i, /(?:^|%2f)(?:home|users|runner|a)%2f/i];
-  if (rootVariants.some((value) => value && lower.includes(value)) || denied.some((pattern) => pattern.test(normalized)) || /growthmap/i.test(normalized)) {
+  const denied = [/[a-z]:[\\/]/i, /[a-z]%3a(?:%2f|%5c)/i,
+    /(?:^|[!|"'])\/(?:home|users|runner|a)\//i, /(?:^|%2f)(?:home|users|runner|a)%2f/i];
+  // Product and package names are valid module metadata. Privacy is a path
+  // property, so reject exact roots and absolute-path forms rather than any
+  // occurrence of the word "growthmap".
+  if (rootVariants.some((value) => value && lower.includes(value)) || denied.some((pattern) => pattern.test(normalized))) {
     throw new Error("GrowthMap module identity diagnostic refused: normalized value retained a private root marker");
   }
 }

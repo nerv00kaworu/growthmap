@@ -182,7 +182,14 @@ test("actual Next entry fixture reports every identity field without private val
  assert.deepEqual(report.identifier.structure.queryKeys,["modules"]);
  assert.equal(JSON.stringify(report).includes(project),false);
 });
+test("identity report permits product names while retaining only hashes and structural metadata", async()=>{
+ const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
+ const report=moduleIdentityReport({identifier(){return "javascript/auto|growthmap-client-entry"}},"D:/a/growthmap/src/frontend");
+ assert.equal(report.identifier.rawLength,38);
+ assert.equal(JSON.stringify(report).includes("growthmap"),false);
+});
 test("identity report fails closed when normalization retains an unrecognized private path", async()=>{
  const { moduleIdentityReport }=await import("./stable-module-ids.mjs");
- assert.throws(()=>moduleIdentityReport({identifier(){return "/home/other/private.ts"}},"/safe/root"),/refused/);
+ for(const identifier of ["/home/other/private.ts","D:/private/file.ts","D%3A%5Cprivate%5Cfile.ts"])
+  assert.throws(()=>moduleIdentityReport({identifier(){return identifier}},"/safe/root"),/refused/);
 });
