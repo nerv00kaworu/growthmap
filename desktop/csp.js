@@ -2,7 +2,7 @@
 const fs=require('node:fs');
 function loadManifest(filename){
   const manifest=JSON.parse(fs.readFileSync(filename,'utf8'));
-  if(manifest.version!==1||manifest.algorithm!=='sha256'||!Array.isArray(manifest.hashes)||!manifest.hashes.every(x=>/^sha256-[A-Za-z0-9+/]+={0,2}$/.test(x)))throw new Error('Packaged CSP script hash manifest is invalid');
+  if(manifest.version!==2||manifest.algorithm!=='sha256'||!manifest.contentIdentity||manifest.contentIdentity.version!==1||!Array.isArray(manifest.hashes)||!manifest.hashes.every(x=>/^sha256-[A-Za-z0-9+/]+={0,2}$/.test(x)))throw new Error('Packaged CSP script hash manifest is invalid');
   return manifest;
 }
 function policy(manifest){

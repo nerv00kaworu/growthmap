@@ -1,6 +1,9 @@
 import crypto from "node:crypto";
 
-function slash(value) { return String(value).replaceAll("\\", "/"); }
+// Webpack/Next loader queries URI-encode native Windows separators before this
+// compiler boundary sees them. Canonicalize both raw and encoded separators
+// without decoding any other request/query content.
+function slash(value) { return String(value).replaceAll("\\", "/").replace(/%5c/gi, "%2F"); }
 function windowsRoot(root) { return /^[A-Za-z]:\//.test(root); }
 function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function encodedEscape(value) {

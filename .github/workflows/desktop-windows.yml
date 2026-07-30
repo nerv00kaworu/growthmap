@@ -20,10 +20,10 @@ jobs:
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
-      - name: Tracked CSP manifest must already match the fresh deterministic build
+      - name: Tracked CSP semantic content identity must match the fresh deterministic build
         shell: pwsh
         run: |
-          git diff --exit-code -- desktop/generated/csp-script-hashes.json
+          node desktop/scripts/verify-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json
           $cspStatus = $LASTEXITCODE
           if ($cspStatus -ne 0) {
             node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out

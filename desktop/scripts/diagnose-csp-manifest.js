@@ -22,7 +22,7 @@ function fail(message) { throw new DiagnosticError(message); }
 function parseJson(text, label) {
   let value;
   try { value = JSON.parse(text); } catch { fail(`${label} is malformed JSON`); }
-  if (!value || value.version !== 1 || value.algorithm !== 'sha256' || !value.files || typeof value.files !== 'object' || Array.isArray(value.files)) fail(`${label} has an unsupported schema`);
+  if (!value || ![1, 2].includes(value.version) || value.algorithm !== 'sha256' || !value.files || typeof value.files !== 'object' || Array.isArray(value.files)) fail(`${label} has an unsupported schema`);
   for (const [file, hashes] of Object.entries(value.files)) {
     if (!safeRelative(file) || !Array.isArray(hashes) || hashes.some((item) => typeof item !== 'string' || !SHA_RE.test(item))) fail(`${label} contains an unsafe file or hash`);
   }

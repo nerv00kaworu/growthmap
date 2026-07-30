@@ -26,6 +26,17 @@ test("Windows slash, drive case, and encoded roots normalize",()=>{
 test("project-relative identity remains meaningful",()=>{
  assert.notEqual(normalizeModuleIdentifier(`${root}/src/a.ts`,root),normalizeModuleIdentifier(`${root}/src/b.ts`,root));
 });
+test("production loader identity canonicalizes POSIX and Windows encoded-root forms",()=>{
+ const posixRoot="/home/runner/work/repository/src/frontend";
+ const windowsRoot="D:/a/repository/src/frontend";
+ const loader="next-flight-client-entry-loader.js?modules=";
+ const posix=`${posixRoot}/node_modules/next/dist/build/webpack/loaders/${loader}%2Fhome%2Frunner%2Fwork%2Frepository%2Fsrc%2Ffrontend%2Fsrc%2Fapp%2Fpage.tsx!`;
+ const windows=`D:\\a\\repository\\src\\frontend\\node_modules\\next\\dist\\build\\webpack\\loaders\\${loader}D%3A%5Ca%5Crepository%5Csrc%5Cfrontend%5Csrc%5Capp%5Cpage.tsx!`;
+ const normalized=normalizeModuleIdentifier(posix,posixRoot);
+ assert.equal(normalizeModuleIdentifier(windows,windowsRoot),normalized);
+ assert.equal(normalized,`<PROJECT_ROOT>/node_modules/next/dist/build/webpack/loaders/${loader}<PROJECT_ROOT>/src%2Fapp%2Fpage.tsx!`);
+ assert.ok(!/[A-Z]:|%5c|runner/i.test(normalized));
+});
 test("Unicode-equivalent ties receive deterministic IDs across shuffled input",()=>{
  function unicodeRows(){return [
   {key:"nfc",resource:`${root}/caf\u00e9.ts`,identifier(){return `${root}/same.ts`}},
