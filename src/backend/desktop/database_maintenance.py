@@ -12,8 +12,8 @@ REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
-READBACK_CORE={"id":("VARCHAR(36)",True,None),"grant_id":("VARCHAR(36)",True,None),"project_id":("VARCHAR(36)",True,None),"target_node_id":("VARCHAR(36)",False,None),"commit_refs":("JSON",True,None),"files":("JSON",True,None),"tests":("JSON",True,None),"decisions":("JSON",True,None),"risks":("JSON",True,None),"todos":("JSON",True,None),"evidence":("JSON",True,None),"summary":("TEXT",False,None),"created_at":("DATETIME",False,None)}
-READBACK_V2={"based_on_project_revision":("INTEGER",True,"1"),"context_snapshot_digest":("VARCHAR(64)",True,""),"objective":("TEXT",True,""),"current_project_revision":("INTEGER",True,"1"),"context_stale":("BOOLEAN",True,"1")}
+READBACK_CORE={"id":("VARCHAR(36)",True,None,1),"grant_id":("VARCHAR(36)",True,None,0),"project_id":("VARCHAR(36)",True,None,0),"target_node_id":("VARCHAR(36)",False,None,0),"commit_refs":("JSON",True,None,0),"files":("JSON",True,None,0),"tests":("JSON",True,None,0),"decisions":("JSON",True,None,0),"risks":("JSON",True,None,0),"todos":("JSON",True,None,0),"evidence":("JSON",True,None,0),"summary":("TEXT",False,None,0),"created_at":("DATETIME",False,None,0)}
+READBACK_V2={"based_on_project_revision":("INTEGER",True,"1",0),"context_snapshot_digest":("VARCHAR(64)",True,"",0),"objective":("TEXT",True,"",0),"current_project_revision":("INTEGER",True,"1",0),"context_stale":("BOOLEAN",True,"1",0)}
 READBACK_FKS={("grant_id","agent_grants","id","CASCADE"),("project_id","projects","id","CASCADE"),("target_node_id","nodes","id","SET NULL")}
 READBACK_INDEXES={"ix_agent_readbacks_grant_id":"grant_id","ix_agent_readbacks_project_id":"project_id"}
 
@@ -32,7 +32,7 @@ def _literal_default(value):
 def _readback_drift(connection,include_v2=True):
  reasons=[];row=connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()
  if row!=("table",):return ["table:agent_readbacks"]
- info={r[1]:(str(r[2]).upper(),bool(r[3]),_literal_default(r[4])) for r in connection.execute('PRAGMA table_info("agent_readbacks")')}
+ info={r[1]:(str(r[2]).upper(),bool(r[3]),_literal_default(r[4]),int(r[5])) for r in connection.execute('PRAGMA table_info("agent_readbacks")')}
  expected={**READBACK_CORE,**(READBACK_V2 if include_v2 else {})}
  for name,spec in expected.items():
   if info.get(name)!=spec:reasons.append(f"column:agent_readbacks.{name}")

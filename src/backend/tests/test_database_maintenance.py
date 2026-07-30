@@ -69,3 +69,10 @@ def test_readback_index_and_fk_contract_fail_closed(tmp_path):
  for i,(old,new) in enumerate([('ON DELETE SET NULL','ON DELETE CASCADE'),('REFERENCES nodes(id) ON DELETE SET NULL','')]):
   p=tmp_path/f'fixture-fk-{i}.db';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);sql=c.execute("select sql from sqlite_schema where name='agent_readbacks'").fetchone()[0];assert old in sql;c.execute('pragma writable_schema=on');c.execute("update sqlite_schema set sql=? where name='agent_readbacks'",(sql.replace(old,new,1),));c.execute('pragma writable_schema=off');c.commit();c.close()
   with pytest.raises(ValueError,match='contract'):dm.validate(p)
+
+
+@pytest.mark.parametrize("definition",["id VARCHAR(36) NOT NULL, grant_id VARCHAR(36) NOT NULL","id VARCHAR(36) NOT NULL, grant_id VARCHAR(36) NOT NULL PRIMARY KEY"])
+def test_v2_primary_key_attacks_fail_closed(tmp_path,definition):
+ import subprocess,sys
+ p=tmp_path/f'fixture-pk-{abs(hash(definition))}.db';creator=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(creator),str(p)],check=True);c=sqlite3.connect(p);c.execute('alter table agent_readbacks rename to old_readbacks');c.execute(f"CREATE TABLE agent_readbacks({definition},project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),based_on_project_revision INTEGER NOT NULL DEFAULT '1',context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT '',objective TEXT NOT NULL DEFAULT '',current_project_revision INTEGER NOT NULL DEFAULT '1',context_stale BOOLEAN NOT NULL DEFAULT '1',commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME)");c.execute('drop table old_readbacks');c.commit();c.close()
+ with pytest.raises(ValueError,match='contract'):dm.validate(p)

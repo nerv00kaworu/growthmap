@@ -112,3 +112,14 @@ async def _readback_create_sql_matches_orm_contract(tmp_path):
  assert await contract(engines[0])==await contract(engines[1])
  for e in engines:await e.dispose()
 def test_readback_create_sql_matches_orm_contract(tmp_path):asyncio.run(_readback_create_sql_matches_orm_contract(tmp_path))
+
+@pytest.mark.parametrize('definition',["id VARCHAR(36),grant_id VARCHAR(36) NOT NULL PRIMARY KEY","id VARCHAR(36),grant_id VARCHAR(36) NOT NULL","id VARCHAR(36) NOT NULL,grant_id VARCHAR(36) NOT NULL PRIMARY KEY"])
+def test_legacy_primary_key_attacks_fail_closed(tmp_path,definition):
+ async def run():
+  core=f"CREATE TABLE agent_readbacks({definition},project_id VARCHAR(36) NOT NULL,target_node_id VARCHAR(36),commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);PRAGMA user_version=1;"
+  engine=await db(tmp_path,OLD+core)
+  with pytest.raises(RuntimeError):
+   async with engine.begin() as conn:await migrate_sqlite(conn)
+  async with engine.connect() as conn:assert (await conn.execute(text('pragma user_version'))).scalar()==1
+  await engine.dispose()
+ asyncio.run(run())

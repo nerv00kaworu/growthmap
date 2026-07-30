@@ -20,15 +20,15 @@ COLUMNS = (
     ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
 )
 READBACK_CORE_COLUMNS = (
-    ("agent_readbacks","id","VARCHAR(36)",True,None),
-    ("agent_readbacks","grant_id","VARCHAR(36)",True,None),
-    ("agent_readbacks","project_id","VARCHAR(36)",True,None),
-    ("agent_readbacks","target_node_id","VARCHAR(36)",False,None),
-    ("agent_readbacks","commit_refs","JSON",True,None),("agent_readbacks","files","JSON",True,None),
-    ("agent_readbacks","tests","JSON",True,None),("agent_readbacks","decisions","JSON",True,None),
-    ("agent_readbacks","risks","JSON",True,None),("agent_readbacks","todos","JSON",True,None),
-    ("agent_readbacks","evidence","JSON",True,None),("agent_readbacks","summary","TEXT",False,None),
-    ("agent_readbacks","created_at","DATETIME",False,None),
+    ("agent_readbacks","id","VARCHAR(36)",True,None,1),
+    ("agent_readbacks","grant_id","VARCHAR(36)",True,None,0),
+    ("agent_readbacks","project_id","VARCHAR(36)",True,None,0),
+    ("agent_readbacks","target_node_id","VARCHAR(36)",False,None,0),
+    ("agent_readbacks","commit_refs","JSON",True,None,0),("agent_readbacks","files","JSON",True,None,0),
+    ("agent_readbacks","tests","JSON",True,None,0),("agent_readbacks","decisions","JSON",True,None,0),
+    ("agent_readbacks","risks","JSON",True,None,0),("agent_readbacks","todos","JSON",True,None,0),
+    ("agent_readbacks","evidence","JSON",True,None,0),("agent_readbacks","summary","TEXT",False,None,0),
+    ("agent_readbacks","created_at","DATETIME",False,None,0),
 )
 READBACK_CREATE_SQL = """CREATE TABLE agent_readbacks (
  id VARCHAR(36) NOT NULL PRIMARY KEY,
@@ -66,11 +66,11 @@ TRIGGERS = {
 def _norm(sql): return re.sub(r"\s+", " ", sql.strip()).replace("IF NOT EXISTS ", "").lower()
 def _default(value): return None if value is None else str(value).strip("()").strip("'\"")
 
-async def _validate_column(conn, table, name, expected_type, not_null, default):
+async def _validate_column(conn, table, name, expected_type, not_null, default, expected_pk=None):
     rows = (await conn.execute(text(f'PRAGMA table_info("{table}")'))).mappings().all()
     row = next((r for r in rows if r["name"] == name), None)
     if not row: return False
-    if str(row["type"]).upper() != expected_type or bool(row["notnull"]) != not_null or _default(row["dflt_value"]) != default:
+    if str(row["type"]).upper() != expected_type or bool(row["notnull"]) != not_null or _default(row["dflt_value"]) != default or (expected_pk is not None and int(row["pk"]) != expected_pk):
         raise RuntimeError(f"incompatible migration column {table}.{name}")
     return True
 
