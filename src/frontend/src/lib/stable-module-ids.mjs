@@ -55,7 +55,7 @@ function structuralTokens(value) {
       encodedPercent: (text.match(/%25/gi) || []).length, loaderBoundary: (text.match(/!/g) || []).length },
   };
 }
-function assertRedacted(normalized, root) {
+function assertRedacted(normalized, root, field) {
   const lower = normalized.toLowerCase();
   const rootVariants = [slash(root), encodeURI(slash(root)), encodeURIComponent(slash(root))].map((value) => value.toLowerCase());
   const denied = [/[a-z]:[\\/]/i, /[a-z]%3a(?:%2f|%5c)/i,
@@ -64,7 +64,7 @@ function assertRedacted(normalized, root) {
   // property, so reject exact roots and absolute-path forms rather than any
   // occurrence of the word "growthmap".
   if (rootVariants.some((value) => value && lower.includes(value)) || denied.some((pattern) => pattern.test(normalized))) {
-    throw new Error("GrowthMap module identity diagnostic refused: normalized value retained a private root marker");
+    throw new Error(`GrowthMap module identity diagnostic refused: ${field} normalized value retained a private root marker`);
   }
 }
 export function moduleIdentityReport(module, root, chunkIdentity = "") {
@@ -77,7 +77,7 @@ export function moduleIdentityReport(module, root, chunkIdentity = "") {
   const report = {};
   for (const [name, raw] of Object.entries(fields)) {
     const normalized = normalizeModuleIdentifier(raw, root);
-    assertRedacted(normalized, root);
+    assertRedacted(normalized, root, name);
     report[name] = { rawSha256: sha(raw), normalizedSha256: sha(normalized), rawLength: String(raw).length,
       normalizedLength: normalized.length, rootRedactionCount: (normalized.match(/<PROJECT_ROOT>/g) || []).length,
       structure: structuralTokens(raw) };
