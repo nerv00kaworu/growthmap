@@ -19,7 +19,9 @@ from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret
-from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
+from services.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
+from services.maturity import auto_advance_maturity
+from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -471,82 +473,28 @@ async def list_nodes(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/projects/{project_id}/nodes", response_model=NodeOut, status_code=201)
 async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depends(get_db)):
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
-
-    # Load and validate every existing entity CAS before the project claim or any
-    # canonical write. A child relationship touches its parent even if maturity
-    # happens not to advance.
-    parent = None
-    if data.parent_id:
-        parent = await db.get(Node, data.parent_id)
-        if not parent or parent.project_id != project_id:
-            raise HTTPException(400, "Invalid parent node")
-        check_entity_revision(parent, data.expected_parent_revision, kind="node")
-        if (parent.branch_id or None) != (data.branch_id or None):
-            raise HTTPException(400, "Parent and child must belong to the same branch")
-
+    spec = CreateNodeInput(project_id=project_id, node_id=None, parent_id=data.parent_id,
+        branch_id=data.branch_id, title=data.title, summary=data.summary,
+        node_type=data.node_type, description=data.description, tags=data.tags,
+        actor_type="human", created_by="human")
+    try:
+        validated = await validate_create_node(db, spec)
+    except HTTPException as exc:
+        # Preserve the established GUI validation status while Agent wire errors
+        # retain their typed 422 contract.
+        if exc.status_code == 422:
+            raise HTTPException(400, exc.detail)
+        raise
+    if validated.parent:
+        check_entity_revision(validated.parent, data.expected_parent_revision, kind="node")
     await claim_project_revision(db, project_id, data.expected_project_revision)
-    branch = None
-    if data.branch_id:
-        branch = await db.get(Branch, data.branch_id)
-        if not branch or branch.project_id != project_id or branch.status != "active":
-            raise HTTPException(400, "Invalid active branch")
-
-    node = Node(
-        project_id=project_id,
-        branch_id=data.branch_id,
-        title=data.title,
-        summary=data.summary,
-        node_type=data.node_type,
-        description=data.description,
-        tags=data.tags,
-        created_by="human",
-    )
-    db.add(node)
-    await db.flush()
-
-    # 如果指定 parent，自動建 child_of edge
-    if data.parent_id:
-        # Determine if child should be mainline (first child)
-        result = await db.execute(
-            select(func.count()).select_from(Edge).where(
-                Edge.from_node_id == data.parent_id,
-                Edge.relation_type == "child_of"
-            )
-        )
-        existing_children = result.scalar() or 0
-        edge = Edge(
-            project_id=project_id,
-            from_node_id=data.parent_id,
-            to_node_id=node.id,
-            relation_type="child_of",
-            is_mainline=existing_children == 0,
-        )
-        db.add(edge)
-
-    db.add(ActionLog(
-        project_id=project_id,
-        node_id=node.id,
-        actor_type="human",
-        action_type="create_node",
-        payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
-    ))
-    # Auto-advance parent maturity and bump the touched existing parent exactly
-    # once for the relationship plus any maturity transition.
     touched = TouchedEntities()
-    if parent:
-        touched.add(parent)
-        await auto_advance_maturity(parent.id, db, touched=touched)
+    node = await apply_create_node(db, validated, touched=touched)
     touched.apply()
-    await db.commit()
-    await db.refresh(node)
-    # Response carries all authoritative CAS values needed by a serialized GUI
-    # workflow; these are response-only Pydantic fields, never canonical columns.
+    await db.commit(); await db.refresh(node)
     node.authoritative_project_revision = data.expected_project_revision + 1
-    node.authoritative_parent_id = parent.id if parent else None
-    node.authoritative_parent_revision = parent.revision if parent else None
+    node.authoritative_parent_id = validated.parent.id if validated.parent else None
+    node.authoritative_parent_revision = validated.parent.revision if validated.parent else None
     return node
 
 
@@ -1129,64 +1077,6 @@ async def delete_block(block_id: str, data: NodeEntityRevisionRequest, db: Async
     bump_existing(node)
     await db.delete(block)
     await db.commit()
-
-
-# ─── Maturity Auto-Advance ───
-
-MATURITY_ORDER = ["seed", "rough", "developing", "stable", "finalized"]
-
-async def auto_advance_maturity(node_id: str, db: AsyncSession, *, touched: TouchedEntities | None = None):
-    """Auto-advance node maturity based on content richness.
-    
-    Rules:
-    - seed → rough: has summary OR at least 1 child
-    - rough → developing: has ≥1 content block AND ≥1 child  
-    - developing → stable: has ≥3 content blocks AND summary AND ≥2 children
-    - stable → finalized: only manual (human decision)
-    """
-    node = await db.get(Node, node_id)
-    if not node or node.maturity == "finalized":
-        return
-
-    counts = (
-        await db.execute(
-            select(
-                select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == node_id).scalar_subquery(),
-                select(func.count()).select_from(Edge).where(
-                    Edge.from_node_id == node_id,
-                    Edge.relation_type == "child_of"
-                ).scalar_subquery(),
-            )
-        )
-    ).one()
-    block_count = counts[0] or 0
-    child_count = counts[1] or 0
-
-    has_summary = bool(node.summary and len(node.summary.strip()) > 10)
-    current = node.maturity
-    new_maturity = current
-
-    if current == "seed":
-        if has_summary or child_count >= 1:
-            new_maturity = "rough"
-    if current in ("seed", "rough"):
-        if block_count >= 1 and child_count >= 1:
-            new_maturity = "developing"
-    if current in ("seed", "rough", "developing"):
-        if block_count >= 3 and has_summary and child_count >= 2:
-            new_maturity = "stable"
-
-    if new_maturity != current:
-        node.maturity = new_maturity
-        if touched is not None:
-            touched.add(node)
-        db.add(ActionLog(
-            project_id=node.project_id,
-            node_id=node.id,
-            actor_type="system",
-            action_type="maturity_advance",
-            payload={"from": current, "to": new_maturity},
-        ))
 
 
 # ─── Node History ───

@@ -6,6 +6,8 @@ from sqlalchemy import select,update
 from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 from api.branching import deep_copy_branch
+from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
+from services.revisions import TouchedEntities
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 
@@ -194,12 +196,14 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     if touched_node_ids:
         existing_touched=(await db.execute(select(Node).where(Node.id.in_(touched_node_ids)))).scalars().all()
     ordered_results=[None]*len(ops)
+    canonical_touched=TouchedEntities()
     for op_index in execution_order:
         op=ops[op_index];kind=op["op"]
         if kind=="create_node":
-            n=Node(id=op["id"],project_id=project.id,title=op["title"].strip(),summary=op.get("summary",""),node_type=op.get("node_type","idea"),branch_id=op.get("branch_id"),created_by=actor or grant.agent_identity,last_edited_by=actor or grant.agent_identity,revision=1);db.add(n)
-            await db.flush()
-            if op.get("parent_id"):db.add(Edge(project_id=project.id,from_node_id=op["parent_id"],to_node_id=n.id,relation_type="child_of",is_mainline=False,revision=1))
+            identity=actor or grant.agent_identity
+            spec=CreateNodeInput(project_id=project.id,node_id=op["id"],parent_id=op.get("parent_id"),branch_id=op.get("branch_id"),title=op["title"],summary=op.get("summary",""),node_type=op.get("node_type","idea"),actor_type="human" if actor else "agent",actor_id=identity,created_by=identity,provenance={"entry":"agent_port"})
+            validated=await validate_create_node(db,spec)
+            n=await apply_create_node(db,validated,touched=canonical_touched,parent_is_existing=bool(op.get("parent_id") in existing_node_ids))
             ordered_results[op_index]={"op":kind,"id":n.id,"revision":1}
         elif kind=="update_node":
             n=await db.get(Node,op["node_id"])
@@ -214,7 +218,8 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
     results=ordered_results
-    bump(existing_touched)
+    canonical_touched.add(*existing_touched)
+    canonical_touched.apply()
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))
