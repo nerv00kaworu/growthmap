@@ -225,13 +225,13 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             project = client.post("/api/projects", json={"name": "Graph project"}).json()
             root_id = project["root_node_id"]
             other = self.create_node(client, project, **{"title": "Other", "parent_id": root_id}).json()
-            edge = client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"})
+            edge = client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_from_revision": client.get(f"/api/nodes/{root_id}").json()["revision"], "expected_to_revision": client.get(f"/api/nodes/{other['id']}").json()["revision"], "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"})
             self.assertEqual(edge.status_code, 201)
             edge_id = edge.json()["id"]
             self.assertEqual(len(client.get(f"/api/projects/{project['id']}/edges").json()), 2)
-            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"}).status_code, 409)
-            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": root_id, "relation_type": "supports"}).status_code, 400)
-            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "unknown"}).status_code, 400)
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_from_revision": client.get(f"/api/nodes/{root_id}").json()["revision"], "expected_to_revision": client.get(f"/api/nodes/{other['id']}").json()["revision"], "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"}).status_code, 409)
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_from_revision": client.get(f"/api/nodes/{root_id}").json()["revision"], "expected_to_revision": client.get(f"/api/nodes/{root_id}").json()["revision"], "from_node_id": root_id, "to_node_id": root_id, "relation_type": "supports"}).status_code, 400)
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_from_revision": client.get(f"/api/nodes/{root_id}").json()["revision"], "expected_to_revision": client.get(f"/api/nodes/{other['id']}").json()["revision"], "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "unknown"}).status_code, 400)
             changed = client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": edge.json()["revision"], "weight": 0.65, "note": "人工確認的支持關係"})
             self.assertEqual(changed.status_code, 200)
             self.assertEqual(changed.json()["weight"], 0.65)

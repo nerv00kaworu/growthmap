@@ -23,6 +23,14 @@ function remember(value: unknown): void {
       const cachedParent = revisionCache.nodes.get(row.authoritative_parent_id);
       if (cachedParent) revisionCache.nodes.set(row.authoritative_parent_id, { ...cachedParent, revision: row.authoritative_parent_revision });
     }
+    if (typeof row.authoritative_from_revision === "number" && typeof row.from_node_id === "string") {
+      const cached = revisionCache.nodes.get(row.from_node_id);
+      if (cached) revisionCache.nodes.set(row.from_node_id, { ...cached, revision: row.authoritative_from_revision });
+    }
+    if (typeof row.authoritative_to_revision === "number" && typeof row.to_node_id === "string") {
+      const cached = revisionCache.nodes.get(row.to_node_id);
+      if (cached) revisionCache.nodes.set(row.to_node_id, { ...cached, revision: row.authoritative_to_revision });
+    }
     if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
     else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
     else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
@@ -171,8 +179,16 @@ export const api = {
   listEdges: (projectId: string, relationType?: string) =>
     request<Edge[]>(`/projects/${projectId}/edges${relationType ? `?relation_type=${encodeURIComponent(relationType)}` : ""}`),
   createEdge: (data: { expected_project_revision?: number; from_node_id: string; to_node_id: string; relation_type?: string; is_mainline?: boolean }) => {
-    const node = revisionCache.nodes.get(data.from_node_id); if (!node) throw new Error("Node revision unavailable; refresh and retry");
-    return request<Edge>(`/edges`, { method: "POST", body: JSON.stringify({ ...data, expected_project_revision: data.expected_project_revision ?? projectExpected(node.projectId) }) });
+    const from = revisionCache.nodes.get(data.from_node_id);
+    const to = revisionCache.nodes.get(data.to_node_id);
+    if (!from || !to) throw new Error("Endpoint revision unavailable; refresh and retry");
+    if (from.projectId !== to.projectId) throw new Error("Edge endpoints must belong to the same project");
+    return request<Edge>(`/edges`, { method: "POST", body: JSON.stringify({
+      ...data,
+      expected_project_revision: data.expected_project_revision ?? projectExpected(from.projectId),
+      expected_from_revision: from.revision,
+      expected_to_revision: to.revision,
+    }) });
   },
   promoteMainline: (edgeId: string, expectedProjectRevision: number, expectedRevision: number) =>
     request<Edge>(`/edges/${edgeId}/promote-mainline`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),

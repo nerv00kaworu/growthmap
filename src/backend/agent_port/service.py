@@ -9,6 +9,8 @@ from api.branching import deep_copy_branch
 from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
 from services.canonical_node_updates import (UpdateNodeInput, validate_update_node,
     apply_update_node, finalize_update_maturity)
+from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
+    apply_create_edge)
 from services.revisions import TouchedEntities
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
@@ -104,6 +106,8 @@ async def validate_operations(db,grant,operations):
         current=n.revision if isinstance(n,Node) else 1
         if expected!=current:
             conflict("Entity revision is stale",entity_id=n.id if isinstance(n,Node) else n["id"],expected=expected,current=current,field=field)
+    edge_keys=set((await db.execute(select(Edge.from_node_id,Edge.to_node_id,Edge.relation_type).where(
+        Edge.project_id==project_id))).all())
     for op in normalized:
         kind=op["op"]
         refs=[]
@@ -133,6 +137,10 @@ async def validate_operations(db,grant,operations):
             a=node_ref(op["from_node_id"]);b=node_ref(op["to_node_id"]);refs += [op["from_node_id"],op["to_node_id"]]
             check_ref_revision(a,op["expected_from_revision"],"expected_from_revision")
             check_ref_revision(b,op["expected_to_revision"],"expected_to_revision")
+            if op["from_node_id"]==op["to_node_id"]:raise HTTPException(422,{"code":"SELF_RELATION","message":"Cannot create a self-relation"})
+            edge_key=(op["from_node_id"],op["to_node_id"],op["relation_type"])
+            if edge_key in edge_keys:raise HTTPException(409,{"code":"DUPLICATE_RELATION","message":"Duplicate relation"})
+            edge_keys.add(edge_key)
             if op["relation_type"]=="child_of" and node_branch(a)!=node_branch(b):raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Containment endpoints must share branch"})
         elif kind=="create_content_block":
             n=node_ref(op["node_id"]);refs.append(op["node_id"])
@@ -235,7 +243,17 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             n=await apply_update_node(db,validated,touched=canonical_touched,defer_maturity=True)
             ordered_results[op_index]={"op":kind,"id":n.id,"revision":n.revision};result_entities[op_index]=n
         elif kind=="create_edge":
-            e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
+            identity=actor or grant.agent_identity
+            spec=CreateEdgeInput(project_id=project.id,edge_id=op["id"],
+                from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],
+                relation_type=op["relation_type"],weight=op["weight"],note=op["note"],
+                is_mainline=False,actor_type="human" if actor else "agent",actor_id=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_create_edge(db,spec,allowed_relation_types={
+                "child_of","extends","depends_on","supports","alternative_to","refines","references","conflicts_with"})
+            e,_=await apply_create_edge(db,validated,touched=canonical_touched,
+                touch_endpoint_ids=existing_node_ids)
+            ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
             b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
         else:

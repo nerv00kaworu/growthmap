@@ -185,6 +185,8 @@ class NodeBrief(BaseModel):
 
 class EdgeCreate(BaseModel):
     expected_project_revision: int
+    expected_from_revision: int
+    expected_to_revision: int
     from_node_id: str
     to_node_id: str
     relation_type: str = "child_of"
@@ -211,6 +213,10 @@ class EdgeOut(BaseModel):
     is_mainline: bool
     created_at: datetime
     revision: int = 1
+    authoritative_project_revision: Optional[int] = None
+    authoritative_from_revision: Optional[int] = None
+    authoritative_to_revision: Optional[int] = None
+    touched_edge_revisions: dict[str, int] = {}
 
     @field_validator("weight", mode="before")
     @classmethod

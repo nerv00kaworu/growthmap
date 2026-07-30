@@ -24,6 +24,8 @@ from services.maturity import auto_advance_maturity
 from services.canonical_nodes import CreateNodeInput, validate_create_node, apply_create_node
 from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
     validate_update_node, apply_update_node)
+from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
+    apply_create_edge)
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -709,6 +711,7 @@ async def list_project_edges(project_id: str, relation_type: str | None = None, 
 
 @router.post("/edges", response_model=EdgeOut, status_code=201)
 async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
+    # Preserve the GUI's established validation status/text before shared-core use.
     from_node = await db.get(Node, data.from_node_id)
     to_node = await db.get(Node, data.to_node_id)
     if not from_node or not to_node:
@@ -719,27 +722,38 @@ async def create_edge(data: EdgeCreate, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "Cannot create a self-relation")
     if data.relation_type != "child_of" and data.relation_type not in GRAPH_RELATION_TYPES:
         raise HTTPException(400, "Unsupported graph relation type")
-    duplicate = await db.execute(select(Edge).where(Edge.from_node_id == data.from_node_id, Edge.to_node_id == data.to_node_id, Edge.relation_type == data.relation_type))
-    if duplicate.scalar_one_or_none():
+    if not 0 <= data.weight <= 1:
+        raise HTTPException(400, "Weight must be between 0 and 1")
+    if len(data.note) > 2000:
+        raise HTTPException(400, "Note is too long")
+    duplicate = await db.scalar(select(Edge.id).where(Edge.from_node_id == data.from_node_id,
+        Edge.to_node_id == data.to_node_id, Edge.relation_type == data.relation_type))
+    if duplicate:
         raise HTTPException(409, "Duplicate relation")
+    if data.relation_type == "child_of" and (from_node.branch_id or None) != (to_node.branch_id or None):
+        raise HTTPException(422, {"code":"BRANCH_MISMATCH", "message":"Containment endpoints must share branch"})
 
+    spec = CreateEdgeInput(project_id=from_node.project_id, edge_id=None,
+        from_node_id=data.from_node_id, to_node_id=data.to_node_id,
+        relation_type=data.relation_type, weight=data.weight, note=data.note,
+        is_mainline=data.is_mainline, actor_type="human", actor_id=None,
+        provenance={"entry":"gui_rest"})
+    validated = await validate_create_edge(db, spec,
+        allowed_relation_types=GRAPH_RELATION_TYPES | {"child_of"})
     await claim_project_revision(db, from_node.project_id, data.expected_project_revision)
-    payload = data.model_dump(exclude={"expected_project_revision"})
-    is_mainline = payload.pop("is_mainline", False)
-
-    # If new edge is marked as mainline, demote siblings first
-    if is_mainline and payload.get("relation_type", "child_of") == "child_of":
-        await demote_mainline_siblings(db, payload["from_node_id"])
-
-    edge = Edge(
-        project_id=from_node.project_id,
-        **payload,
-        is_mainline=is_mainline,
-    )
-    db.add(edge)
+    check_entity_revision(from_node, data.expected_from_revision, kind="node")
+    check_entity_revision(to_node, data.expected_to_revision, kind="node")
+    touched = TouchedEntities()
+    edge, siblings = await apply_create_edge(db, validated, touched=touched)
+    touched.apply()
     await db.commit()
     await db.refresh(edge)
-    return edge
+    return EdgeOut.model_validate(edge).model_copy(update={
+        "authoritative_project_revision": data.expected_project_revision + 1,
+        "authoritative_from_revision": from_node.revision,
+        "authoritative_to_revision": to_node.revision,
+        "touched_edge_revisions": {s.id: s.revision for s in siblings},
+    })
 
 
 @router.patch("/edges/{edge_id}", response_model=EdgeOut)

@@ -77,7 +77,8 @@ class SharedRevisionContractTest(unittest.TestCase):
         }).json()
         current = self.client.get(f"/api/projects/{project['id']}").json()
         edge = self.client.post("/api/edges", json={
-            "expected_project_revision": current["revision"], "from_node_id": root["id"],
+            "expected_project_revision": current["revision"], "expected_from_revision": self.client.get(f"/api/nodes/{root['id']}").json()["revision"],
+            "expected_to_revision": self.client.get(f"/api/nodes/{child['id']}").json()["revision"], "from_node_id": root["id"],
             "to_node_id": child["id"], "relation_type": "supports", "note": "before"
         }).json()
         stale = current["revision"]

@@ -5,13 +5,15 @@ All notable changes to the GrowthMap **authoring/editor** package are documented
 ## Unreleased
 
 ### Changed
+- GUI REST and Agent Port `create_edge` now share canonical validation, edge persistence, transaction-deduplicated endpoint revisions, and one sanitized per-edge action history record. GUI responses expose authoritative project/from/to revisions.
+- GUI keeps its graph-relation vocabulary and GUI-only `is_mainline` behavior (including revisioned sibling demotion); Agent Port keeps its existing wire vocabulary and always creates non-mainline edges. Neither vocabulary is expanded by the other adapter.
 - GUI REST and Agent Port `update_node` now share the canonical intersection mutation, maturity evaluator, touched-entity revision semantics, and per-node sanitized action history.
 - The canonical maturity wire vocabulary is `seed`, `rough`, `developing`, `stable`, `finalized`; obsolete Agent Port values `sprout`, `growing`, and `mature` are rejected.
 - Update omission means unchanged, explicit `null` and empty updates return 422, and empty `tags`/`file_paths` lists clear those fields.
 - GUI update responses expose the authoritative project revision; the frontend consumes it with a legacy-response fallback.
 
 ### Deferred
-- GUI-only `node_type` and position fields remain GUI-only. Shared edge, content-block, and context mutation services are not part of this slice.
+- GUI-only `node_type` and position fields remain GUI-only. Shared content-block and context mutation services are not part of this slice.
 
 ## [0.1.0-authoring.2] - 2026-07-27
 
