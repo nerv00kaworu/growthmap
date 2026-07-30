@@ -21,19 +21,37 @@ jobs:
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
       - name: Tracked CSP manifest must already match the fresh deterministic build
+        id: csp-gate
         shell: pwsh
         run: |
           git diff --exit-code -- desktop/generated/csp-script-hashes.json
           $cspStatus = $LASTEXITCODE
           if ($cspStatus -ne 0) {
+            "failed=true" >> $env:GITHUB_OUTPUT
             node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
             $diagnosticStatus = $LASTEXITCODE
             node desktop/scripts/analyze-flight-script.js --html src/frontend/out/index.html --script-index 9 --baseline desktop/generated/csp-flight-script-9-diagnostic.json
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::Flight byte diagnostic failed closed"; $diagnosticStatus = $LASTEXITCODE }
+            node desktop/scripts/stage-app-page-chunk-diagnostic.js --next src/frontend/.next --out "$env:RUNNER_TEMP/growthmap-app-page-diagnostic"
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::app/page artifact scan failed closed"; $diagnosticStatus = $LASTEXITCODE }
             if ($diagnosticStatus -ne 0) { Write-Host "::error::CSP diagnostic failed closed with status $diagnosticStatus" }
             exit $cspStatus
           }
+          "failed=false" >> $env:GITHUB_OUTPUT
           exit 0
+        continue-on-error: true
+      - name: Upload scanned app/page chunk diagnostic only on CSP failure
+        if: ${{ steps.csp-gate.outputs.failed == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthmap-app-page-chunk-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/growthmap-app-page-diagnostic
+          if-no-files-found: error
+          retention-days: 3
+      - name: Preserve CSP gate failure after diagnostic upload
+        if: ${{ steps.csp-gate.outcome == 'failure' }}
+        shell: pwsh
+        run: throw 'Tracked CSP manifest differs from the fresh Windows build'
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
       - run: npm ci
