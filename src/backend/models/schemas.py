@@ -216,7 +216,7 @@ class EdgeOut(BaseModel):
     authoritative_project_revision: Optional[int] = None
     authoritative_from_revision: Optional[int] = None
     authoritative_to_revision: Optional[int] = None
-    touched_edge_revisions: dict[str, int] = {}
+    touched_edge_revisions: dict[str, int] = Field(default_factory=dict)
 
     @field_validator("weight", mode="before")
     @classmethod

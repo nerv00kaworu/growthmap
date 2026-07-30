@@ -9,6 +9,12 @@ const revisionCache = {
   branches: new Map<string, { projectId: string; revision: number }>(),
 };
 
+/** Test fixture boundary; production callers must populate cache via API reads. */
+export function resetRevisionCacheForTests(): void {
+  revisionCache.projects.clear(); revisionCache.nodes.clear(); revisionCache.edges.clear();
+  revisionCache.blocks.clear(); revisionCache.branches.clear();
+}
+
 function remember(value: unknown): void {
   if (Array.isArray(value)) { value.forEach(remember); return; }
   if (!value || typeof value !== "object") return;

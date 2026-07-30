@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { api } from "./api";
+import { api, resetRevisionCacheForTests } from "./api";
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), {
   status, headers: { "content-type": "application/json" },
@@ -9,6 +9,7 @@ const project = (id: string, revision: number) => ({ id, revision, root_node_id:
 const node = (id: string, project_id: string, revision: number) => ({ id, project_id, revision, node_type: "idea" });
 
 test("createEdge sends both endpoint CAS and consumes authoritative revisions", async () => {
+  resetRevisionCacheForTests();
   const calls: Array<{ url: string; body?: Record<string, unknown> }> = [];
   globalThis.fetch = async (input, init) => {
     const url = String(input); const body = init?.body ? JSON.parse(String(init.body)) : undefined;
@@ -29,6 +30,7 @@ test("createEdge sends both endpoint CAS and consumes authoritative revisions", 
 });
 
 test("createEdge fails closed for missing endpoint cache and cross-project endpoints", async () => {
+  resetRevisionCacheForTests();
   let writes = 0;
   globalThis.fetch = async (input) => {
     const url = String(input);
@@ -42,4 +44,23 @@ test("createEdge fails closed for missing endpoint cache and cross-project endpo
   await api.getNode("edge-d");
   assert.throws(() => api.createEdge({ from_node_id: "edge-c", to_node_id: "edge-d" }), /same project/);
   assert.equal(writes, 0);
+});
+
+test("createEdge conflict and missing authoritative fields never guess cache revisions", async () => {
+  resetRevisionCacheForTests();
+  const bodies: Record<string, unknown>[] = []; let writes = 0;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/projects")) return json([project("edge-p4", 9)]);
+    if (url.endsWith("/nodes/edge-e")) return json(node("edge-e", "edge-p4", 2));
+    if (url.endsWith("/nodes/edge-f")) return json(node("edge-f", "edge-p4", 4));
+    bodies.push(JSON.parse(String(init?.body))); writes++;
+    if (writes === 1) return json({ detail: { code: "REVISION_CONFLICT", message: "stale" } }, 409);
+    return json({ id: `edge-${writes}`, project_id: "edge-p4", from_node_id: "edge-e", to_node_id: "edge-f", relation_type: "supports", weight: 1, note: "", is_mainline: false, created_at: "2026-01-01", revision: 1 }, 201);
+  };
+  await api.listProjects(); await api.getNode("edge-e"); await api.getNode("edge-f");
+  await assert.rejects(api.createEdge({ from_node_id: "edge-e", to_node_id: "edge-f" }), /stale/);
+  await api.createEdge({ from_node_id: "edge-e", to_node_id: "edge-f" });
+  await api.createEdge({ from_node_id: "edge-e", to_node_id: "edge-f" });
+  assert.deepEqual(bodies.map(x => [x.expected_project_revision, x.expected_from_revision, x.expected_to_revision]), [[9,2,4],[9,2,4],[9,2,4]]);
 });
