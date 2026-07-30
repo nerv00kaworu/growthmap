@@ -46,7 +46,9 @@ async def test_official_client_session_live_uvicorn():
             from datetime import datetime,timedelta,timezone
             grant=request(base+"/api/agent-port/grants","POST",{"project_id":project["id"],"permission":"write","expires_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),"label":"mcp","agent_identity":"official-sdk"},TOKEN)
             agent_token=grant["token"]
-            client_env={**env,"GROWTHMAP_AGENT_TOKEN":agent_token,"GROWTHMAP_AGENT_BASE_URL":base+"/agent/v1"}
+            # Simulate the Windows runner's legacy console code page. The MCP
+            # stdio protocol must remain UTF-8 independently of host locale.
+            client_env={**env,"GROWTHMAP_AGENT_TOKEN":agent_token,"GROWTHMAP_AGENT_BASE_URL":base+"/agent/v1","PYTHONIOENCODING":"cp1252"}
             with tempfile.TemporaryFile(mode="w+") as errlog:
                 params=StdioServerParameters(command=sys.executable,args=[str(ADAPTER)],env=client_env)
                 async with stdio_client(params,errlog=errlog) as (read_stream,write_stream):

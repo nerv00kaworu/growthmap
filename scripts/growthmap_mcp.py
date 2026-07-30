@@ -21,7 +21,11 @@ TOOLS={
  "submit_readback":("POST","/readbacks",_STRICT["submit_readback"])}
 class NoRedirect(urllib.request.HTTPRedirectHandler):
  def redirect_request(self,*a,**k):return None
-def send(o):sys.stdout.write(json.dumps(o,separators=(",",":"),ensure_ascii=False)+"\n");sys.stdout.flush()
+def send(o):
+ # JSON-RPC over stdio is UTF-8 regardless of the host console code page.
+ # Write protocol bytes directly so Windows cp1252/charmap cannot corrupt or
+ # reject Unicode objectives, tool results, or error messages.
+ sys.stdout.buffer.write(json.dumps(o,separators=(",",":"),ensure_ascii=False).encode("utf-8")+b"\n");sys.stdout.buffer.flush()
 def err(mid,code,message):send({"jsonrpc":"2.0","id":mid,"error":{"code":code,"message":message}})
 def base_url():
  raw=os.getenv("GROWTHMAP_AGENT_BASE_URL","http://127.0.0.1:8100/agent/v1");u=urllib.parse.urlsplit(raw)
