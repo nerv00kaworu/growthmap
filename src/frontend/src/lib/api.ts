@@ -80,16 +80,27 @@ export async function persistSequentialBlockReorder<T>({
     await updateBlock(currentId, currentOrder);
     firstCommitted = true;
     await updateBlock(targetId, targetOrder);
-  } catch (cause) {
+  } catch (patchError) {
     // Two PATCHes cannot be atomic. Never pretend to roll both back after the
     // first commit: read the server truth and render that partial state.
-    const authoritative = await getBlocks(nodeId);
-    applyAuthoritativeBlocks(authoritative);
-    throw new ContentBlockReorderError(
-      firstCommitted ? "排序只完成部分，已重新載入伺服器狀態" : "排序未完成，已重新載入伺服器狀態",
-      firstCommitted,
-      { cause },
-    );
+    try {
+      const authoritative = await getBlocks(nodeId);
+      applyAuthoritativeBlocks(authoritative);
+      throw new ContentBlockReorderError(
+        firstCommitted ? "排序只完成部分，已重新載入伺服器狀態" : "排序未完成，已重新載入伺服器狀態",
+        firstCommitted,
+        { cause: patchError },
+      );
+    } catch (refreshError) {
+      if (refreshError instanceof ContentBlockReorderError) throw refreshError;
+      throw new ContentBlockReorderError(
+        firstCommitted
+          ? "排序可能只完成部分，且無法重新載入伺服器狀態，請重新整理"
+          : "排序未完成，且無法重新載入伺服器狀態，請重新整理",
+        firstCommitted,
+        { cause: new AggregateError([patchError, refreshError], "block reorder and authoritative refresh failed") },
+      );
+    }
   }
 }
 

@@ -38,6 +38,35 @@ test("first PATCH 200 then second 409 renders authoritative partial state and di
   assert.notEqual(rendered, stale);
 });
 
+test("partial success plus refresh failure remains disclosed without claiming synchronization", async () => {
+  let applied = false;
+  await assert.rejects(
+    persistSequentialBlockReorder({
+      nodeId: "n",
+      currentId: "a",
+      currentOrder: 1,
+      targetId: "b",
+      targetOrder: 0,
+      updateBlock: async (id) => {
+        if (id === "b") throw new Error("409 conflict");
+      },
+      getBlocks: async () => { throw new Error("network unavailable"); },
+      applyAuthoritativeBlocks: () => { applied = true; },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ContentBlockReorderError);
+      assert.equal(error.partialSuccess, true);
+      assert.match(error.message, /可能只完成部分/);
+      assert.match(error.message, /無法重新載入/);
+      assert.doesNotMatch(error.message, /已重新載入/);
+      assert.ok(error.cause instanceof AggregateError);
+      assert.equal(error.cause.errors.length, 2);
+      return true;
+    },
+  );
+  assert.equal(applied, false);
+});
+
 test("first PATCH failure still refreshes authoritative state without claiming partial success", async () => {
   let rendered: { id: string; order_index: number }[] = [];
   await assert.rejects(
