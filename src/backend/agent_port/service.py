@@ -29,8 +29,12 @@ def bump(entities=()):
 
 async def descendants(db,project_id,root_id,limit=5000):
     rows=(await db.execute(select(Edge.from_node_id,Edge.to_node_id).where(Edge.project_id==project_id,Edge.relation_type=="child_of"))).all()
+    node_projects=dict((await db.execute(select(Node.id,Node.project_id))).all())
     children={}
-    for a,b in rows:children.setdefault(a,[]).append(b)
+    for a,b in rows:
+        if node_projects.get(a)!=project_id or node_projects.get(b)!=project_id:
+            raise HTTPException(409,{"code":"INVALID_GRAPH_SCOPE","message":"Containment edge crosses project boundary"})
+        children.setdefault(a,[]).append(b)
     out=set();stack=[root_id]
     while stack:
         cur=stack.pop()

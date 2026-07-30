@@ -74,6 +74,7 @@ class ReadbackIn(Strict):
     idempotency_key: Key; target_node_id: Id|None=None
     based_on_project_revision: Annotated[int,Field(ge=1)]
     context_snapshot_digest: Digest
+    objective: Annotated[str,Field(max_length=2000)]
     summary: Annotated[str,Field(max_length=8000)]=""
     commit_refs: Annotated[list[Annotated[str,Field(max_length=200)]],Field(max_length=100)]=[]
     files: Annotated[list[Annotated[str,Field(max_length=1024)]],Field(max_length=500)]=[]

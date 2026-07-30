@@ -91,7 +91,7 @@ import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConf
 import type { Entitlement } from "./entitlement";
 
 export type AgentPortRecord={name:string;status:string;detail:string};
-export type AgentPortReadback={id:string;target_node_id:string|null;summary:string;based_on_project_revision:number;context_snapshot_digest:string;current_project_revision:number;context_stale:boolean;commit_refs:string[];files:string[];tests:AgentPortRecord[];decisions:string[];risks:string[];todos:string[];evidence:AgentPortRecord[];created_at:string};
+export type AgentPortReadback={id:string;target_node_id:string|null;summary:string;based_on_project_revision:number;context_snapshot_digest:string;objective:string;current_project_revision:number;context_stale:boolean;commit_refs:string[];files:string[];tests:AgentPortRecord[];decisions:string[];risks:string[];todos:string[];evidence:AgentPortRecord[];created_at:string};
 export type AgentPortActivity={proposals:Record<string,unknown>[];events:Record<string,unknown>[];readbacks:AgentPortReadback[]};
 import { loadLLMConfig } from "./llm-provider";
 

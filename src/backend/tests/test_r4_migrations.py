@@ -56,3 +56,19 @@ async def _injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monk
 def test_populated_old_and_partial_compatible_upgrade(tmp_path): asyncio.run(_populated_old_and_partial_compatible_upgrade(tmp_path))
 def test_incompatible_column_and_index_fail_closed(tmp_path): asyncio.run(_incompatible_column_and_index_fail_closed(tmp_path))
 def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch): asyncio.run(_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch))
+
+async def _v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):
+ sql=OLD+"CREATE TABLE agent_readbacks(id TEXT PRIMARY KEY);PRAGMA user_version=1;"
+ engine=await db(tmp_path,sql)
+ async with engine.begin() as conn:await migrate_sqlite(conn)
+ async with engine.connect() as conn:
+  info={r[1]:(r[2],bool(r[3]),str(r[4]).strip("'")) for r in (await conn.execute(text("pragma table_info(agent_readbacks)"))).all()}
+  assert info["based_on_project_revision"]==("INTEGER",True,"1")
+  assert info["context_snapshot_digest"]==("VARCHAR(64)",True,"")
+  assert info["objective"]==("TEXT",True,"")
+  assert info["current_project_revision"]==("INTEGER",True,"1")
+  assert info["context_stale"]==("BOOLEAN",True,"1")
+  assert (await conn.execute(text("pragma user_version"))).scalar()==2
+ await engine.dispose()
+
+def test_v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path):asyncio.run(_v1_readback_ledger_upgrades_to_v2_with_stale_defaults(tmp_path))

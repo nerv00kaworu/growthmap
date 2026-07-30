@@ -2,7 +2,7 @@
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
 
-CURRENT_USER_VERSION=1
+CURRENT_USER_VERSION=2
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 ALLOWED_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
@@ -12,6 +12,7 @@ REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
+READBACK_V2={"based_on_project_revision":("INTEGER",True),"context_snapshot_digest":("VARCHAR(64)",True),"objective":("TEXT",True),"current_project_revision":("INTEGER",True),"context_stale":("BOOLEAN",True)}
 
 def _attributes(path):
  if os.name!="nt": return 0
@@ -68,6 +69,12 @@ def _validate_connection(connection,source):
   if row!=("table",): raise ValueError("required table is missing")
   actual={item[1] for item in connection.execute(f'PRAGMA table_info("{table}")')}
   if columns-actual: raise ValueError("required columns are missing")
+ if version>=2:
+  if connection.execute("SELECT type FROM sqlite_schema WHERE name='agent_readbacks'").fetchone()!=("table",): raise ValueError("current agent_readbacks table is missing")
+  info={row[1]:(str(row[2]).upper(),bool(row[3])) for row in connection.execute('PRAGMA table_info("agent_readbacks")')}
+  if any(info.get(name)!=expected for name,expected in READBACK_V2.items()): raise ValueError("current agent_readbacks columns are incompatible")
+ # SQLite foreign keys do not express edge.project_id == endpoint.project_id.
+ if connection.execute("SELECT 1 FROM edges e LEFT JOIN nodes f ON f.id=e.from_node_id LEFT JOIN nodes t ON t.id=e.to_node_id WHERE f.id IS NULL OR t.id IS NULL OR e.project_id!=f.project_id OR e.project_id!=t.project_id LIMIT 1").fetchone(): raise ValueError("edge crosses project boundary")
  counts={}
  for table,limit in MAX_COUNTS.items():
   counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
@@ -102,11 +109,15 @@ def schema_status(path):
  if not source.exists(): return {"exists":False,"migrationNeeded":True,"reasons":["database_missing"]}
  connection,meta=_open_validated(source)
  try:
-  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("projects","nodes","edges","content_blocks","branches","provider_configs")}
+  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("projects","nodes","edges","content_blocks","branches","provider_configs","agent_readbacks") if connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",(table,)).fetchone()}
   objects={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('index','trigger')")}
   reasons=[]
   for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),("edges","revision"),("content_blocks","revision"),("branches","revision")):
    if column not in columns[table]: reasons.append(f"column:{table}.{column}")
+  if "agent_readbacks" not in columns: reasons.append("table:agent_readbacks")
+  else:
+   for column in READBACK_V2:
+    if column not in columns["agent_readbacks"]: reasons.append(f"column:agent_readbacks.{column}")
   for name in ("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"):
    if name not in objects: reasons.append(f"object:{name}")
   return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}

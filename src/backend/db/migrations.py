@@ -22,6 +22,7 @@ COLUMNS = (
 READBACK_COLUMNS = (
     ("agent_readbacks", "based_on_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN based_on_project_revision INTEGER NOT NULL DEFAULT 1"),
     ("agent_readbacks", "context_snapshot_digest", "VARCHAR(64)", True, "", "ALTER TABLE agent_readbacks ADD COLUMN context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("agent_readbacks", "objective", "TEXT", True, "", "ALTER TABLE agent_readbacks ADD COLUMN objective TEXT NOT NULL DEFAULT ''"),
     ("agent_readbacks", "current_project_revision", "INTEGER", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN current_project_revision INTEGER NOT NULL DEFAULT 1"),
     ("agent_readbacks", "context_stale", "BOOLEAN", True, "1", "ALTER TABLE agent_readbacks ADD COLUMN context_stale BOOLEAN NOT NULL DEFAULT 1"),
 )

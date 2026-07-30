@@ -2,6 +2,7 @@
 import {useCallback,useEffect,useState} from "react";
 import {api} from "@/lib/api";
 import type {AgentPortActivity,AgentPortReadback} from "@/lib/api";
+import {readbackViewModel} from "@/lib/agent-port-control";
 import {useAgentPortDesktopControl} from "@/lib/agent-port-control";
 import type {GNode} from "@/lib/types";
 export function AgentPortPanel({projectId,rootNode,onClose,onSelectNode}:{projectId:string;rootNode:GNode;onClose:()=>void;onSelectNode?:(nodeId:string)=>void}){
@@ -20,7 +21,6 @@ export function AgentPortPanel({projectId,rootNode,onClose,onSelectNode}:{projec
 }
 
 function ReadbackCard({readback:r,fallbackNodeId,onSelectNode}:{readback:AgentPortReadback;fallbackNodeId:string;onSelectNode?:(nodeId:string)=>void}){
- const target=r.target_node_id||fallbackNodeId;
- const list=(label:string,items:unknown[])=><div><span className="text-gray-400">{label}:</span> {items.length?JSON.stringify(items):"—"}</div>;
- return <div data-testid="agent-readback-card" className="mt-2 rounded border border-gray-800 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><b>{r.summary||"Implementation readback"}</b><span>based on project r{r.based_on_project_revision}</span><span className={r.context_stale?"rounded bg-amber-900 px-2 py-0.5 text-amber-200":"rounded bg-emerald-900 px-2 py-0.5 text-emerald-200"}>{r.context_stale?`stale · current r${r.current_project_revision}`:`current r${r.current_project_revision}`}</span><code title={r.context_snapshot_digest}>digest {r.context_snapshot_digest.slice(0,12)}</code></div><div className="mt-1 text-gray-500">target {onSelectNode?<button type="button" className="underline" onClick={()=>onSelectNode(target)}>{target}</button>:target}</div><div className="mt-2 space-y-1 text-gray-300">{list("commits",r.commit_refs)}{list("files",r.files)}{list("tests",r.tests)}{list("decisions",r.decisions)}{list("risks",r.risks)}{list("todos",r.todos)}{list("evidence",r.evidence)}</div></div>;
+ const view=readbackViewModel(r,fallbackNodeId);
+ return <article data-testid="agent-readback-card" className="mt-2 rounded border border-gray-800 p-3 text-xs"><header className="flex flex-wrap items-center gap-2"><b>{r.summary||"Implementation readback"}</b><span>{view.revisionLabel}</span><span className={r.context_stale?"rounded bg-amber-900 px-2 py-0.5 text-amber-200":"rounded bg-emerald-900 px-2 py-0.5 text-emerald-200"}>{view.stateLabel}</span><code title={r.context_snapshot_digest||"Digest unavailable"}>{view.digestLabel}</code></header><div className="mt-1 text-gray-500">{view.objectiveLabel} · target {onSelectNode?<button type="button" className="underline" onClick={()=>onSelectNode(view.targetId)}>{view.targetId}</button>:view.targetId}</div><section aria-label="Implementation evidence" className="mt-2 max-h-56 space-y-1 overflow-y-auto text-gray-300">{view.sections.map(section=><div key={section.label}><span className="text-gray-400">{section.label}:</span> {section.items.length?JSON.stringify(section.items):"—"}</div>)}</section></article>;
 }

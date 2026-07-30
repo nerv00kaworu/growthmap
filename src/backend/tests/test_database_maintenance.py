@@ -1,4 +1,4 @@
-import os, sqlite3
+import os, sqlite3, asyncio
 from pathlib import Path
 import pytest
 from desktop import database_maintenance as dm
@@ -27,6 +27,24 @@ def test_accepts_canonical_edge_integrity_objects_only(tmp_path):
  p2=tmp_path/'lookalike.db';fixture(p2);c=sqlite3.connect(p2)
  c.execute("CREATE TRIGGER trg_edges_not_canonical AFTER INSERT ON edges BEGIN SELECT 1; END");c.close()
  with pytest.raises(ValueError,match='unapproved'):dm.validate(p2)
+
+def test_v2_schema_status_validates_readback_provenance_and_fails_closed(tmp_path):
+ from sqlalchemy.ext.asyncio import create_async_engine
+ from db.database import Base
+ import models.models  # register canonical metadata
+ from db.migrations import migrate_sqlite
+ async def create(path):
+  engine=create_async_engine(f"sqlite+aiosqlite:///{path}")
+  async with engine.begin() as connection:
+   await connection.run_sync(Base.metadata.create_all);await migrate_sqlite(connection)
+  await engine.dispose()
+ p=tmp_path/'v2.db';asyncio.run(create(p));assert dm.validate(p)['userVersion']==2;status=dm.schema_status(p);assert status['migrationNeeded'] is False,status
+ c=sqlite3.connect(p);c.execute('PRAGMA writable_schema=ON');sql=c.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='agent_readbacks'").fetchone()[0];c.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='agent_readbacks'",(sql.replace("\n\tobjective TEXT DEFAULT '' NOT NULL, ",""),));c.execute('PRAGMA writable_schema=OFF');c.commit();c.close()
+ with pytest.raises(ValueError,match='agent_readbacks'):dm.validate(p)
+
+def test_rejects_cross_project_edge_even_when_foreign_keys_are_satisfied(tmp_path):
+ p=tmp_path/'cross.db';fixture(p);c=sqlite3.connect(p);c.execute("insert into projects values('q','q','active','','')");c.executemany("insert into nodes values(?,?,?,?,?,?)",[('a','p','a','idea','active','seed'),('b','q','b','idea','active','seed')]);c.execute("insert into edges values('e','p','a','b','child_of')");c.commit();c.close()
+ with pytest.raises(ValueError,match='crosses project'):dm.validate(p)
 
 def test_validated_snapshot_rejects_hardlink_and_uses_combined_validation(tmp_path):
  p=tmp_path/'a.db';fixture(p);hard=tmp_path/'hard.db';os.link(p,hard)

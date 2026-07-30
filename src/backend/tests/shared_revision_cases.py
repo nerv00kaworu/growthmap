@@ -167,7 +167,7 @@ class SharedRevisionContractTest(unittest.TestCase):
             }, "events"),
             ("/agent/v1/readbacks", {
                 "idempotency_key": "readback-race", "target_node_id": root["id"],
-                "based_on_project_revision": project["revision"], "context_snapshot_digest": "0" * 64,
+                "based_on_project_revision": project["revision"], "context_snapshot_digest": "0" * 64, "objective": "",
                 "summary": "one", "files": ["a.py"], "tests": [{"name": "unit", "status": "passed"}],
             }, "readbacks"),
             ("/agent/v1/proposals", {

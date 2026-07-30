@@ -527,7 +527,7 @@ export default function HomePage() {
       {/* Settings Modal */}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       {showAgentSessions && currentProject && rootNode && <AgentSessions projectId={currentProject.id} rootNode={rootNode} branches={branches} onClose={() => setShowAgentSessions(false)} />}
-      {showAgentPort && currentProject && rootNode && <AgentPortPanel projectId={currentProject.id} rootNode={rootNode} onClose={() => setShowAgentPort(false)} />}
+      {showAgentPort && currentProject && rootNode && <AgentPortPanel projectId={currentProject.id} rootNode={rootNode} onSelectNode={selectNode} onClose={() => setShowAgentPort(false)} />}
 
       {/* Keyboard Shortcuts Modal */}
       {showShortcuts && (

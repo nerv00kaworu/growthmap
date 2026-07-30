@@ -1,0 +1,7 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {readbackViewModel} from "./agent-port-control";
+import type {AgentPortReadback} from "./api";
+const base:AgentPortReadback={id:"r",target_node_id:"target",summary:"done",based_on_project_revision:4,context_snapshot_digest:"a".repeat(64),objective:"ship",current_project_revision:4,context_stale:false,commit_refs:["c"],files:["f"],tests:[{name:"t",status:"pass",detail:""}],decisions:["d"],risks:["r"],todos:["todo"],evidence:[{name:"e",status:"ok",detail:"proof"}],created_at:"now"};
+test("readback view model formats current provenance and every evidence section",()=>{const v=readbackViewModel(base,"fallback");assert.equal(v.targetId,"target");assert.equal(v.revisionLabel,"based on project r4");assert.equal(v.stateLabel,"current r4");assert.equal(v.digestLabel,"digest aaaaaaaaaaaa");assert.equal(v.objectiveLabel,"objective: ship");assert.deepEqual(v.sections.map(s=>s.label),["commits","files","tests","decisions","risks","todos","evidence"]);});
+test("readback view model safely formats stale legacy provenance and fallback target callback contract",()=>{const v=readbackViewModel({...base,target_node_id:null,context_snapshot_digest:"",objective:"",context_stale:true,current_project_revision:7},"fallback");assert.equal(v.targetId,"fallback");assert.equal(v.stateLabel,"stale · current r7");assert.equal(v.digestLabel,"digest unknown");assert.equal(v.objectiveLabel,"objective: none");});

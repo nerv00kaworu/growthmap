@@ -22,12 +22,13 @@ CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,actor_type TEXT,action_type TEXT,created_at TEXT);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key TEXT DEFAULT '');
+CREATE TABLE agent_readbacks(id TEXT PRIMARY KEY,grant_id TEXT NOT NULL,project_id TEXT NOT NULL,target_node_id TEXT,based_on_project_revision INTEGER NOT NULL DEFAULT 1,context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT '',objective TEXT NOT NULL DEFAULT '',current_project_revision INTEGER NOT NULL DEFAULT 1,context_stale BOOLEAN NOT NULL DEFAULT 1,commit_refs JSON NOT NULL DEFAULT '[]',files JSON NOT NULL DEFAULT '[]',tests JSON NOT NULL DEFAULT '[]',decisions JSON NOT NULL DEFAULT '[]',risks JSON NOT NULL DEFAULT '[]',todos JSON NOT NULL DEFAULT '[]',evidence JSON NOT NULL DEFAULT '[]',summary TEXT DEFAULT '',created_at TEXT);
 CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of' AND is_mainline=1;
 CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1); END;
 CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id,relation_type,is_mainline ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1 AND id!=OLD.id); END;
 CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
 CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight,note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 """)
 project_id="11111111-1111-4111-8111-111111111111"; root_id="22222222-2222-4222-8222-222222222222"; now="2026-07-30T00:00:00+00:00"
 c.execute("INSERT INTO projects(id,name,description,goal,root_node_id,status,settings,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,1)",(project_id,"Desktop Fixture","","",root_id,"active","{}",now,now))

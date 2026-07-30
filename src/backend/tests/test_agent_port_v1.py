@@ -1,4 +1,4 @@
-import os,subprocess,sys,tempfile,unittest
+import asyncio,os,subprocess,sys,tempfile,unittest,uuid
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -35,14 +35,24 @@ class AgentPortV1(unittest.TestCase):
   self.client.post(f'/api/agent-port/grants/{write["id"]}/revoke',headers=self.human);self.assertEqual(self.client.get("/agent/v1/project",headers=self.auth(write["token"])).status_code,401);self.assertEqual(self.grant(expired=True).status_code,422)
  def test_readback_timeline_and_token_query_forbidden(self):
   g=self.grant("propose").json();h=self.auth(g["token"]);ctx=self.client.get(f"/agent/v1/context/{self.root}",headers=h).json();before=ctx["project_revision"]
-  body={"idempotency_key":"readback-1","target_node_id":self.root,"based_on_project_revision":before,"context_snapshot_digest":ctx["snapshot_digest"],"summary":"implemented","commit_refs":["abc"],"files":["a.py"],"tests":[{"name":"unit","status":"passed"}],"decisions":["keep API neutral"],"risks":["migration"],"todos":["docs"],"evidence":[{"name":"diff","status":"verified","detail":"clean"}]}
+  body={"idempotency_key":"readback-1","target_node_id":self.root,"based_on_project_revision":before,"context_snapshot_digest":ctx["snapshot_digest"],"objective":"","summary":"implemented","commit_refs":["abc"],"files":["a.py"],"tests":[{"name":"unit","status":"passed"}],"decisions":["keep API neutral"],"risks":["migration"],"todos":["docs"],"evidence":[{"name":"diff","status":"verified","detail":"clean"}]}
   r=self.client.post("/agent/v1/readbacks",headers=h,json=body);self.assertEqual(r.status_code,201,r.text);self.assertFalse(r.json()["context_stale"]);self.assertEqual(self.client.get(f"/api/projects/{self.pid}").json()["revision"],before)
   activity=self.client.get(f"/api/agent-port/activity?project_id={self.pid}",headers=self.human).json();row=activity["readbacks"][0];self.assertEqual(row["summary"],"implemented");self.assertEqual(row["based_on_project_revision"],before);self.assertFalse(row["context_stale"]);self.assertEqual(row["decisions"],["keep API neutral"]);self.assertEqual(row["evidence"][0]["name"],"diff")
-  self.assertEqual(self.client.post("/agent/v1/readbacks",headers=h,json={**body,"idempotency_key":"bad-digest","context_snapshot_digest":"bad"}).status_code,422);self.assertEqual(self.client.post("/agent/v1/readbacks",headers=h,json={**body,"idempotency_key":"bad-revision","based_on_project_revision":0}).status_code,422)
+  ship=self.client.get(f"/agent/v1/context/{self.root}?objective=ship",headers=h).json();ship_body={**body,"idempotency_key":"objective-current","objective":"ship","context_snapshot_digest":ship["snapshot_digest"]};self.assertFalse(self.client.post("/agent/v1/readbacks",headers=h,json=ship_body).json()["context_stale"]);self.assertTrue(self.client.post("/agent/v1/readbacks",headers=h,json={**ship_body,"idempotency_key":"objective-mismatch","objective":"other"}).json()["context_stale"])
+  self.assertEqual(self.client.post("/agent/v1/readbacks",headers=h,json={**body,"idempotency_key":"bad-digest","context_snapshot_digest":"bad"}).status_code,422);self.assertEqual(self.client.post("/agent/v1/readbacks",headers=h,json={**body,"idempotency_key":"bad-revision","based_on_project_revision":0}).status_code,422);self.assertEqual(self.client.post("/agent/v1/readbacks",headers=h,json={k:v for k,v in body.items() if k!="objective"}).status_code,422)
   self.human_patch(rules_text="new human rule");stale=self.client.post("/agent/v1/readbacks",headers=h,json={**body,"idempotency_key":"readback-stale"});self.assertEqual(stale.status_code,201,stale.text);self.assertTrue(stale.json()["context_stale"]);self.assertGreater(stale.json()["current_project_revision"],before)
   outside=self.child("outside").json();scoped=self.grant("propose",{"node_scope_id":self.root}).json();sh=self.auth(scoped["token"]);denied=self.client.post("/agent/v1/readbacks",headers=sh,json={**body,"idempotency_key":"scope-denied","target_node_id":outside["id"]});self.assertEqual(denied.status_code,403)
   self.client.post(f'/api/agent-port/grants/{scoped["id"]}/revoke',headers=self.human);self.assertEqual(self.client.post("/agent/v1/readbacks",headers=sh,json={**body,"idempotency_key":"revoked"}).status_code,401)
   self.assertEqual(self.client.get(f"/agent/v1/project?token={g['token']}",headers=h).status_code,400)
+ def test_cross_project_branch_edge_fails_closed_for_reads_and_mutations(self):
+  other=self.client.post("/api/projects",json={"name":"other"}).json();other_root=other["root_node_id"]
+  from db.database import engine
+  from sqlalchemy import text
+  async def inject():
+   async with engine.begin() as db:await db.execute(text("insert into edges(id,project_id,from_node_id,to_node_id,relation_type,is_mainline,revision) values(:id,:p,:a,:b,'child_of',0,1)"),{"id":str(uuid.uuid4()),"p":self.pid,"a":self.root,"b":other_root})
+  asyncio.run(inject())
+  g=self.grant("write",{"branch_root_id":self.root}).json();h=self.auth(g["token"]);self.assertEqual(self.client.get("/agent/v1/graph",headers=h).status_code,409);self.assertEqual(self.client.get(f"/agent/v1/context/{self.root}",headers=h).status_code,409)
+  p=self.client.get(f"/api/projects/{self.pid}").json();n=self.client.get(f"/api/nodes/{self.root}").json();mutation={"expected_project_revision":p["revision"],"idempotency_key":"cross-project-denied","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":"no"}}]};self.assertEqual(self.client.post("/agent/v1/batch",headers=h,json=mutation).status_code,409)
  def test_two_writers_same_revision_exactly_one(self):
   a=self.grant().json();b=self.grant().json();p=self.client.get("/agent/v1/project",headers=self.auth(a["token"])).json();n=self.client.get(f"/api/nodes/{self.root}").json();statuses=[]
   for i,g in enumerate((a,b)):statuses.append(self.client.post("/agent/v1/batch",headers=self.auth(g["token"]),json={"expected_project_revision":p["revision"],"idempotency_key":f"writer-{i}","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":str(i)}}]}).status_code)
