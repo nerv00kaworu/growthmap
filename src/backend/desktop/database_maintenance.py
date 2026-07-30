@@ -72,10 +72,18 @@ def _validate_connection(connection,source):
  for table,limit in MAX_COUNTS.items():
   counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
   if counts[table]>limit: raise ValueError("database row limits exceeded")
+ # A current-schema import must also be readable through the authoritative
+ # projects API after restart. Older valid schemas remain migration inputs.
+ project_columns={row[1] for row in connection.execute('PRAGMA table_info("projects")')}
+ api_columns={"id","name","root_node_id","status","settings","created_at","updated_at"}
+ if api_columns<=project_columns and connection.execute("SELECT 1 FROM projects WHERE id IS NULL OR id='' OR name IS NULL OR root_node_id IS NULL OR root_node_id='' OR status IS NULL OR settings IS NULL OR created_at IS NULL OR updated_at IS NULL LIMIT 1").fetchone():
+  raise ValueError("project contains fields required by the application API")
+ project_ids=[row[0] for row in connection.execute("SELECT id FROM projects ORDER BY id")]
+ project_id_sha256=hashlib.sha256(json.dumps(project_ids,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
  # Bound potentially hostile values without materializing them.
  for table,column in (("projects","name"),("nodes","title"),("content_blocks","content")):
   if connection.execute(f'SELECT 1 FROM "{table}" WHERE length("{column}")>16777216 LIMIT 1').fetchone(): raise ValueError("database value limits exceeded")
- return {"valid":True,"userVersion":version,"counts":counts,"pageCount":page_count,"pageSize":page_size}
+ return {"valid":True,"userVersion":version,"counts":counts,"projectIdSha256":project_id_sha256,"pageCount":page_count,"pageSize":page_size}
 
 def _open_validated(source):
  source=Path(source);stat=_regular_file(source)

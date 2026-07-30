@@ -29,4 +29,7 @@ CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.we
 CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight,note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
 PRAGMA user_version=1;
 """)
-c.execute("INSERT INTO projects(id,name,status,revision) VALUES('fixture','Desktop Fixture','active',1)");c.commit();c.close()
+project_id="11111111-1111-4111-8111-111111111111"; root_id="22222222-2222-4222-8222-222222222222"; now="2026-07-30T00:00:00+00:00"
+c.execute("INSERT INTO projects(id,name,description,goal,root_node_id,status,settings,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,1)",(project_id,"Desktop Fixture","","",root_id,"active","{}",now,now))
+c.execute("INSERT INTO nodes(id,project_id,title,node_type,status,maturity,workflow_status,file_paths,revision) VALUES(?,?,?,?,?,?,?,?,1)",(root_id,project_id,"Desktop Fixture Root","root","active","seed","draft","[]"))
+c.commit();c.close()
