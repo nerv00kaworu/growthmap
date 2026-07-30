@@ -264,10 +264,10 @@ export function NodeContent({
     setBlocks(nextBlocks.map((block, order_index) => ({ ...block, order_index })));
 
     try {
-      await Promise.all([
-        api.updateBlock(current.id, { order_index: nextIndex }),
-        api.updateBlock(target.id, { order_index: index }),
-      ]);
+      // Both blocks share project/node CAS. Apply sequentially so the first
+      // authoritative response advances the cache used by the second request.
+      await api.updateBlock(current.id, { order_index: nextIndex });
+      await api.updateBlock(target.id, { order_index: index });
       await refreshTree();
     } catch (error) {
       setBlocks(blocks);
