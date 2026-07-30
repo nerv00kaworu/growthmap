@@ -99,6 +99,8 @@ async def apply_update_node(db: AsyncSession, validated: ValidatedUpdateNode, *,
     if data.provenance: payload["provenance"] = deepcopy(data.provenance)
     db.add(ActionLog(project_id=data.project_id, node_id=node.id,
                      actor_type=data.actor_type,
+                     # Column has a legacy empty-string default; SQL NULL keeps
+                     # GUI's deliberately anonymous actor identity distinguishable.
                      actor_id=data.actor_id if data.actor_id is not None else null(),
                      action_type="update_node", payload=payload))
     if not defer_maturity and "maturity" not in validated.changes:

@@ -25,18 +25,21 @@ def gui(c,nid,project_revision,node_revision,changes):return c.patch('/api/nodes
 async def rows(pid,nid):
  async with async_session() as db:
   p=await db.get(Project,pid);n=await db.get(Node,nid);logs=(await db.execute(select(ActionLog).where(ActionLog.node_id==nid).order_by(ActionLog.created_at))).scalars().all();return p,n,logs
+async def fix_timestamp(nid):
+ async with async_session() as db:
+  n=await db.get(Node,nid);n.updated_at=datetime(2020,1,1,tzinfo=timezone.utc);await db.commit()
 
 def parity_contracts():
  with TestClient(app) as c:
   shared={'title':'  canonical title  ','summary':'a sufficiently rich shared summary','status':'paused','maturity':'stable','priority':7,'confidence':.8,'description':'d','rules_text':'r','constraints_text':'c','examples_text':'e','questions_text':'q','decision_notes':'notes','tags':['x'],'workflow_status':'review','file_paths':['docs/a.md']}
   snapshots=[]
   for entry in ('gui','agent'):
-   p=project(c,entry);rid=p['root_node_id'];before=node(c,rid);h=grant(c,p['id'])
+   p=project(c,entry);rid=p['root_node_id'];arun(fix_timestamp(rid));before=node(c,rid);h=grant(c,p['id'])
    if entry=='gui':r=gui(c,rid,1,1,shared)
    else:r=batch(c,h,1,'parity-update',[{'op':'update_node','node_id':rid,'expected_revision':1,'fields':shared}])
    assert r.status_code==200,(entry,r.text)
    after=node(c,rid);pr,n,logs=arun(rows(p['id'],rid));updates=[x for x in logs if x.action_type=='update_node']
-   assert pr.revision==2 and n.revision==2 and n.updated_at.isoformat()!=before['updated_at'] and len(updates)==1,(entry,pr.revision,n.revision,n.updated_at,before['updated_at'],len(updates))
+   assert pr.revision==2 and n.revision==2 and n.updated_at.replace(tzinfo=timezone.utc)>datetime(2020,1,1,tzinfo=timezone.utc) and before['updated_at'].startswith('2020-01-01') and len(updates)==1,(entry,pr.revision,n.revision,n.updated_at,before['updated_at'],len(updates))
    assert updates[0].payload['changes']=={**shared,'title':'canonical title'},(entry,updates[0].payload['changes'])
    if entry=='gui':assert n.last_edited_by=='human' and updates[0].actor_id is None
    else:assert n.last_edited_by=='agent-update' and updates[0].actor_id=='agent-update',(n.last_edited_by,updates[0].actor_id)
@@ -111,7 +114,7 @@ def history_rollback_race():
   assert all(set(x['payload'])<= {'changes','provenance'} for x in updates);assert 'Bearer' not in str(updates) and 'token' not in str(updates).lower()
   # Post-CAS second update failure rolls back fields, maturity, revisions and logs.
   import agent_port.service as service
-  p=project(c,'rollback');rid=p['root_node_id'];h=grant(c,p['id']);original=service.apply_update_node;calls=0
+  p=project(c,'rollback');rid=p['root_node_id'];arun(fix_timestamp(rid));h=grant(c,p['id']);original=service.apply_update_node;calls=0
   async def fail_second(*args,**kwargs):
    nonlocal calls;calls+=1
    if calls==2:raise HTTPException(409,{'code':'INJECTED','message':'late'})
@@ -119,7 +122,7 @@ def history_rollback_race():
   service.apply_update_node=fail_second
   try:r=batch(c,h,1,'rollback-key',[{'op':'update_node','node_id':rid,'expected_revision':1,'fields':{'summary':'rich enough for maturity'}},{'op':'update_node','node_id':rid,'expected_revision':1,'fields':{'title':'never'}}])
   finally:service.apply_update_node=original
-  assert r.status_code==409,r.text;pr,n,logs=arun(rows(p['id'],rid));assert (pr.revision,n.revision,n.title,n.summary,n.maturity)==(1,1,'rollback','','seed');assert not [x for x in logs if x.action_type=='update_node']
+  assert r.status_code==409,r.text;pr,n,logs=arun(rows(p['id'],rid));assert (pr.revision,n.revision,n.title,n.summary,n.maturity)==(1,1,'rollback','','seed');assert n.updated_at.isoformat().startswith('2020-01-01');assert not [x for x in logs if x.action_type=='update_node']
   # Same rollback guarantee through proposal; proposal stays pending.
   ph=grant(c,p['id'],'propose');made=c.post('/agent/v1/proposals',headers=ph,json={'idempotency_key':'proposal-wire','expected_project_revision':1,'title':'rollback','operations':[{'op':'update_node','node_id':rid,'expected_revision':1,'fields':{'summary':'first'}},{'op':'update_node','node_id':rid,'expected_revision':1,'fields':{'title':'second'}}]});assert made.status_code==201,made.text
   calls=0;service.apply_update_node=fail_second

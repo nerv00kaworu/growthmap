@@ -61,8 +61,13 @@ class TouchedEntities:
                 self._entities[(type(entity), str(entity.id))] = entity
 
     def apply(self) -> None:
+        now = datetime.now(timezone.utc)
         for entity in self._entities.values():
             entity.revision = (entity.revision or 1) + 1
+            # Do not rely on ORM onupdate timing: a canonical touch owns both
+            # revision and updated_at in the same transaction.
+            if hasattr(entity, "updated_at"):
+                entity.updated_at = now
 
 
 def bump_existing(*entities) -> None:
