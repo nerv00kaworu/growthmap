@@ -6,7 +6,7 @@ remain adapter responsibilities.
 from dataclasses import dataclass, field
 from typing import Any
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, null, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.models import ActionLog, Branch, Edge, Node, Project
 from services.maturity import auto_advance_maturity
@@ -24,7 +24,7 @@ class CreateNodeInput:
     description: str = ""
     tags: list[str] = field(default_factory=list)
     actor_type: str = "human"
-    actor_id: str = ""
+    actor_id: str | None = None
     created_by: str = "human"
     provenance: dict[str, Any] = field(default_factory=dict)
 
@@ -39,6 +39,8 @@ class ValidatedCreateNode:
 async def validate_create_node(db: AsyncSession, data: CreateNodeInput) -> ValidatedCreateNode:
     project = await db.get(Project, data.project_id)
     if not project: raise HTTPException(404, "Project not found")
+    if not data.title.strip():
+        raise HTTPException(422, {"code":"INVALID_TITLE", "message":"Node title cannot be blank"})
     if data.node_id and await db.get(Node, data.node_id):
         raise HTTPException(409, {"code":"ID_CONFLICT", "message":"Entity id already exists"})
     if data.node_id and data.parent_id == data.node_id:
@@ -80,5 +82,6 @@ async def apply_create_node(db: AsyncSession, validated: ValidatedCreateNode, *,
     payload={"title":node.title,"parent_id":validated.parent.id if validated.parent else None}
     if d.provenance: payload["provenance"] = d.provenance
     db.add(ActionLog(project_id=d.project_id,node_id=node.id,actor_type=d.actor_type,
-                     actor_id=d.actor_id,action_type="create_node",payload=payload))
+                     actor_id=d.actor_id if d.actor_id is not None else null(),
+                     action_type="create_node",payload=payload))
     return node

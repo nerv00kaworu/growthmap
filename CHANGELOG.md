@@ -11,6 +11,9 @@ All notable changes to the GrowthMap **authoring/editor** package are documented
 - Requires `GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}` for every profile on create/patch/write and before test/AI resolution (including mock); unsafe existing rows fail closed with a rebind error; keeps writes localhost-only, atomic, mode `0600`, and response-empty.
 - Makes release launcher binds strictly `127.0.0.1`/`localhost` only (IPv6 forms rejected) and adds matching backend Trusted Host enforcement.
 
+### Changed
+- Canonical node creation now rejects whitespace-only titles and trims accepted titles consistently across GUI and Agent Port writes.
+
 ### Verification
 - Frontend clean install, lint, typecheck, production build, and production npm audit pass (0 vulnerabilities).
 - Backend compile and 20 isolated tests pass (original 12 core tests plus 8 security regressions); pip-audit reports 0 known vulnerabilities.

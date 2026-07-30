@@ -485,10 +485,12 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
     try:
         validated = await validate_create_node(db, spec)
     except HTTPException as exc:
-        # Preserve the established GUI validation status while Agent wire errors
-        # retain their typed 422 contract.
-        if exc.status_code == 422:
-            raise HTTPException(400, exc.detail)
+        # Preserve the established GUI detail/status contract while Agent Port
+        # retains typed canonical error objects.
+        code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+        if code == "INVALID_REFERENCE": raise HTTPException(400, "Invalid parent node")
+        if code in {"INVALID_BRANCH", "INACTIVE_BRANCH"}: raise HTTPException(400, "Invalid active branch")
+        if code == "BRANCH_MISMATCH": raise HTTPException(400, "Parent and child must belong to the same branch")
         raise
     if validated.parent:
         check_entity_revision(validated.parent, data.expected_parent_revision, kind="node")

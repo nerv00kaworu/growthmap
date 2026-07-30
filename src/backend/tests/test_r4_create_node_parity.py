@@ -50,10 +50,18 @@ def run_core():
    if entry=='agent':assert create('first',1,1).json()==a.json()
    b=create('second',2,2);assert b.status_code in (200,201),b.text
    rev,parent,nodes,edges,logs=arun(counts(p['id'],root['id']));assert (rev,parent)==(3,(3,'rough'));assert [e.is_mainline for e in edges]==[True,False]
-   assert len([x for x in logs if x.action_type=='create_node'])==2 and len([x for x in logs if x.action_type=='maturity_advance'])==1
+   creates=[x for x in logs if x.action_type=='create_node'];assert len(creates)==2 and len([x for x in logs if x.action_type=='maturity_advance'])==1
+   if entry=='gui':assert all(x.actor_id is None for x in creates)
 
 def run_validation():
  with TestClient(app) as c:
+  # GUI compatibility uses legacy string details; both adapters reject blank titles.
+  p0=project(c,'invalids');h0=grant(c,p0['id']);foreign=project(c,'foreign')
+  bad_parent=c.post(f"/api/projects/{p0['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':foreign['root_node_id'],'title':'x'});assert bad_parent.status_code==400 and bad_parent.json()['detail']=='Invalid parent node',bad_parent.text
+  missing_branch=str(uuid.uuid4());bad_branch=c.post(f"/api/projects/{p0['id']}/nodes",json={'expected_project_revision':1,'branch_id':missing_branch,'title':'x'});assert bad_branch.status_code==400 and bad_branch.json()['detail']=='Invalid active branch',bad_branch.text
+  assert c.post(f"/api/projects/{p0['id']}/nodes",json={'expected_project_revision':1,'title':'   '}).status_code==422
+  assert batch(c,h0,p0,'blank-title',[{'op':'create_node','title':'   '}]).status_code==422
+  trimmed=c.post(f"/api/projects/{p0['id']}/nodes",json={'expected_project_revision':1,'title':'  trimmed  '});assert trimmed.status_code==201 and trimmed.json()['title']=='trimmed',trimmed.text
   # Branch inheritance and explicit mismatch.
   p=project(c,'branch');root=c.get('/api/nodes/'+p['root_node_id']).json();bid=arun(add_branch(p['id']))
   async def put_parent():
@@ -61,11 +69,11 @@ def run_validation():
   arun(put_parent());h=grant(c,p['id']);gui_omitted=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'title':'omitted'});assert gui_omitted.status_code==400,gui_omitted.text;gui_explicit=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':1,'expected_parent_revision':1,'parent_id':root['id'],'branch_id':bid,'title':'explicit'});assert gui_explicit.status_code==201,gui_explicit.text;p=c.get('/api/projects/'+p['id']).json();root=c.get('/api/nodes/'+root['id']).json()
   inherited=batch(c,h,p,'inherit-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':root['revision'],'title':'inherited'}]);assert inherited.status_code==200,inherited.text;assert c.get('/api/nodes/'+inherited.json()['results'][0]['id']).json()['branch_id']==bid
   other=arun(add_branch(p['id']));cur=c.get('/api/projects/'+p['id']).json();parent=c.get('/api/nodes/'+root['id']).json()
-  g=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'expected_parent_revision':parent['revision'],'parent_id':root['id'],'branch_id':other,'title':'bad'});assert g.status_code==400,g.text
+  g=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'expected_parent_revision':parent['revision'],'parent_id':root['id'],'branch_id':other,'title':'bad'});assert g.status_code==400 and g.json()['detail']=='Parent and child must belong to the same branch',g.text
   a=batch(c,h,cur,'mismatch-1',[{'op':'create_node','parent_id':root['id'],'expected_parent_revision':parent['revision'],'branch_id':other,'title':'bad'}]);assert a.status_code==422,a.text
   # Inactive and cross-project parent.
   inactive=arun(add_branch(p['id'],'archived'));cur=c.get('/api/projects/'+p['id']).json()
-  assert c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'branch_id':inactive,'title':'inactive'}).status_code==400
+  inactive_gui=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'branch_id':inactive,'title':'inactive'});assert inactive_gui.status_code==400 and inactive_gui.json()['detail']=='Invalid active branch',inactive_gui.text
   assert batch(c,h,cur,'inactive-1',[{'op':'create_node','branch_id':inactive,'title':'inactive'}]).status_code==422
   p2=project(c,'other');assert c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':cur['revision'],'expected_parent_revision':1,'parent_id':p2['root_node_id'],'title':'cross'}).status_code==400
   assert batch(c,h,cur,'cross-project',[{'op':'create_node','parent_id':p2['root_node_id'],'expected_parent_revision':1,'title':'cross'}]).status_code in (403,422)

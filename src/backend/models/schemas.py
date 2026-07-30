@@ -52,6 +52,14 @@ class NodeCreate(BaseModel):
     description: str = ""
     tags: list[str] = []
 
+    @field_validator("title")
+    @classmethod
+    def normalize_nonblank_title(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("title cannot be blank")
+        return value
+
     @model_validator(mode="after")
     def parent_cas_is_mandatory(self):
         if self.parent_id is not None and self.expected_parent_revision is None:
