@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-function slash(value) { return String(value).replaceAll("\\", "/"); }
+function slash(value) { return String(value).replaceAll("\\", "/").replace(/%5c/gi, "%2F"); }
 function windowsRoot(root) { return /^[A-Za-z]:\//.test(root); }
 function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function encodedEscape(value) {
@@ -12,7 +12,7 @@ function rootPatterns(root) {
   // mix literal and encoded path separators, as emitted by loader composition.
   const variants = [root, encodeURI(root), encodeURIComponent(root)];
   const component = root.split("/").map((part) => encodedEscape(encodeURIComponent(part)))
-    .join("(?:/|%[2][fF])");
+    .join("(?:/|%[2][fF]|%[5][cC])");
   return [...new Set([...variants.map(encodedEscape), component])]
     .sort((a, b) => b.length - a.length || compareTotal(a, b));
 }
@@ -30,7 +30,7 @@ function replaceRoot(value, root) {
     // preserved boundary after a complete loader-chain segment. The lookahead
     // prevents lexical-prefix redaction while retaining exact-root matches.
     const pattern = new RegExp(`${source}(?:\/|%2[fF])|${source}(?=!|$)`, windowsRoot(root) ? "gi" : "g");
-    out = out.replace(pattern, (match) => `<PROJECT_ROOT>${/(?:\/|%2f)$/i.test(match) ? "/" : ""}`);
+    out = out.replace(pattern, (match) => `<PROJECT_ROOT>${/(?:\/|%2f|%5c)$/i.test(match) ? "/" : ""}`);
   }
   return out;
 }

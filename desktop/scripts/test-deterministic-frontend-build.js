@@ -16,7 +16,7 @@ try{
     const frontend=path.join(dir,'src','frontend');fs.mkdirSync(path.dirname(frontend),{recursive:true});
     fs.cpSync(source,frontend,{recursive:true,filter:(entry)=>!['node_modules','.next','out','tsconfig.tsbuildinfo'].includes(path.basename(entry))});
     const scripts=path.join(dir,'desktop','scripts');fs.mkdirSync(scripts,{recursive:true});
-    for(const file of ['csp-manifest.js','generate-csp-manifest.js'])fs.copyFileSync(path.join(__dirname,file),path.join(scripts,file));
+    for(const file of ['csp-manifest.js','generate-csp-manifest.js','verify-client-reference-boundary.js'])fs.copyFileSync(path.join(__dirname,file),path.join(scripts,file));
     const run=(command,args)=>{const r=spawnSync(command,args,{cwd:frontend,stdio:'inherit',shell:process.platform==='win32'});if(r.status!==0)throw new Error(`${command} failed`);};
     run('npm',['ci']);run('npm',['run','build']);
   }

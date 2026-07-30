@@ -8,7 +8,7 @@ const test = require('node:test');
 const { scanPublicBundle, stableModuleIds, stageAppPageChunk } = require('../scripts/stage-app-page-chunk-diagnostic');
 
 test('extracts only allowlisted stable module IDs in rendered order', () => {
-  assert.deepEqual(stableModuleIds('x.push({c546470e5ca77f8d:1,"not-an-id":2,35a84c1952d2be21:3})'), [
+  assert.deepEqual(stableModuleIds('x.push({c546470e5ca77f8d:1,"35a84c1952d2be21":2,"not-an-id":3})'), [
     'c546470e5ca77f8d', '35a84c1952d2be21',
   ]);
 });
@@ -27,11 +27,11 @@ test('stages exactly one scanned app/page public bundle with bounded metadata', 
   const next = path.join(root, '.next'), chunks = path.join(next, 'static', 'chunks', 'app');
   const out = path.join(root, 'artifact');
   fs.mkdirSync(chunks, { recursive: true });
-  const source = 'self.webpackChunk_N_E.push([["app/page"],{c546470e5ca77f8d:()=>{}}]);';
+  const source = 'self.webpackChunk_N_E.push([["app/page"],{c546470e5ca77f8d:()=>{},"35a84c1952d2be21":()=>{}}]);';
   fs.writeFileSync(path.join(chunks, 'page-a82e37eee192a225.js'), source);
   const metadata = stageAppPageChunk(next, out);
   assert.equal(metadata.size, Buffer.byteLength(source));
-  assert.equal(metadata.stableModuleIds.count, 1);
+  assert.equal(metadata.stableModuleIds.count, 2);
   assert.deepEqual(fs.readdirSync(out).sort(), ['metadata.json', 'page-a82e37eee192a225.js']);
   assert.equal(fs.readFileSync(path.join(out, 'page-a82e37eee192a225.js'), 'utf8'), source);
 });

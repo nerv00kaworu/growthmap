@@ -26,8 +26,8 @@ function parseArgs(argv) {
 // metadata, so paths, source text, and credentials cannot leak through it.
 function stableModuleIds(source) {
   const ids = [];
-  const expression = /(?:^|[,{])([a-f0-9]{16})(?=[:,])/g;
-  for (const match of source.matchAll(expression)) ids.push(match[1]);
+  const expression = /(?:^|[,{])(?:"([a-f0-9]{16})"|([a-f0-9]{16}))(?=:)/g;
+  for (const match of source.matchAll(expression)) ids.push(match[1] || match[2]);
   return ids;
 }
 

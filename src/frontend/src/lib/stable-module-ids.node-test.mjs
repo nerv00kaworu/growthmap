@@ -151,3 +151,19 @@ test("total ordering includes every metadata field and chunk identity",()=>{
  const chunks=(value)=>({key:value,use:value,identifier(){return `${root}/same.ts`}});
  assert.deepEqual(run([chunks("z"),chunks("a")]),run([chunks("a"),chunks("z")]));
 });
+
+test("virtual entry IDs normalize POSIX and percent-encoded Windows requests",()=>{
+ const posixRoot="/home/runner/work/growthmap/src/frontend";
+ const windowsRoot="D:/a/growthmap/src/frontend";
+ const posixIdentifier=`javascript/auto|${posixRoot}/node_modules/next/dist/entry-loader.js?modules=%7B%22request%22%3A%22%2Fhome%2Frunner%2Fwork%2Fgrowthmap%2Fsrc%2Ffrontend%2Fsrc%2Fapp%2Fpage.tsx%22%7D!|app-pages-browser`;
+ const windowsIdentifier="javascript/auto|D:\\a\\growthmap\\src\\frontend\\node_modules\\next\\dist\\entry-loader.js?modules=%7B%22request%22%3A%22D%3A%5Ca%5Cgrowthmap%5Csrc%5Cfrontend%5Csrc%5Capp%5Cpage.tsx%22%7D!|app-pages-browser";
+ const make=(key,identifier)=>({key,identifier(){return identifier;}});
+ const posix=make("entry",posixIdentifier),windows=make("entry",windowsIdentifier);
+ assignStableModuleIds([posix],posixRoot);
+ assignStableModuleIds([windows],windowsRoot);
+ assert.equal(posix.id,windows.id);
+ const identity=normalizeModuleIdentifier(posixIdentifier,posixRoot);
+ assert.equal(identity,normalizeModuleIdentifier(windowsIdentifier,windowsRoot));
+ assert.ok(!identity.includes("runner")&&!identity.includes("D:")&&!/%5c/i.test(identity));
+ assert.equal(posix.id,crypto.createHash("sha256").update(identity).digest("hex").slice(0,16));
+});
