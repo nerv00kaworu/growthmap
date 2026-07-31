@@ -17,7 +17,7 @@ if os.environ.get("GROWTHMAP_DELETE_EDGE_CHILD") == "1":
     def batch(c,h,p,key,ops,rev):return c.post('/agent/v1/batch',headers=h,json={'expected_project_revision':rev,'idempotency_key':key,'operations':ops})
     async def logs(p):
      async with async_session() as db:return (await db.execute(select(ActionLog).where(ActionLog.project_id==p,ActionLog.action_type=='graph_relation_deleted'))).scalars().all()
-    
+
     def test_gui_agent_parity_history_endpoint_no_touch_and_replay():
      with TestClient(app) as c:
       for mode in ('gui','agent'):
@@ -27,7 +27,7 @@ if os.environ.get("GROWTHMAP_DELETE_EDGE_CHILD") == "1":
         h=grant(c,p);op={'op':'delete_edge','edge_id':e['id'],'expected_revision':e['revision']};out=batch(c,h,p,'delete-edge', [op],pr);assert out.json()['results']==[{'op':'delete_edge','id':e['id']}];assert batch(c,h,p,'delete-edge',[op],pr).json()==out.json()
        assert out.status_code in (200,204),out.text;assert c.get('/api/projects/'+p).json()['revision']==pr+1;assert e['id'] not in {row['id'] for row in c.get('/api/projects/'+p+'/edges').json()};assert {x:c.get('/api/nodes/'+x).json()['revision'] for x in (a,b)}==before
        history=asyncio.run(logs(p));assert len(history)==1 and set(history[0].payload)<= {'edge_id','from_node_id','to_node_id','relation_type','provenance'} and 'note' not in str(history[0].payload).lower()
-    
+
     def test_strict_scope_child_stale_and_prewrite_conflicts():
      with TestClient(app) as c:
       p,a,b,e=mk(c,'bounds');pr=c.get('/api/projects/'+p).json()['revision'];h=grant(c,p,node_scope_id=a);op={'op':'delete_edge','edge_id':e['id'],'expected_revision':1}
