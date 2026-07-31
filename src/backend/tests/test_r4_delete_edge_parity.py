@@ -59,12 +59,13 @@ if os.environ.get("GROWTHMAP_DELETE_EDGE_CHILD") == "1":
        def gui():bar.wait();return c.request('DELETE','/api/edges/'+e['id'],json={'expected_project_revision':rev,'expected_revision':1})
        def agent():bar.wait();return batch(c,h,p,'delete-race-'+str(round),[{'op':'delete_edge','edge_id':e['id'],'expected_revision':1}],rev)
        with ThreadPoolExecutor(max_workers=2) as pool:r1,r2=pool.submit(gui),pool.submit(agent);responses=[r1.result(),r2.result()]
-       statuses=sorted(x.status_code for x in responses);assert statuses in ([200,409],[204,409],[204,404]),statuses
+       statuses=sorted(x.status_code for x in responses)
+       # Either GUI (204) or Agent batch (200) wins. The loser sees stale CAS
+       # (409) or observes the committed deletion before entity load (404).
+       assert sum(x.status_code in (200,204) for x in responses)==1,statuses
+       assert sum(x.status_code in (404,409) for x in responses)==1,statuses
        pr,ed,ls,_,receipts=asyncio.run(state(p,e['id']));assert pr.revision==rev+1 and ed is None and len(ls)==1
-       # A 404 loser is semantically equivalent to stale 409 when it observes
-       # the winner's committed delete before loading the entity. Never accept
-       # double success/double write: exactly one receipt/log/project bump.
-       assert sum(x.status_code in (200,204) for x in responses)==1
+       # Never accept double success/double write: exactly one receipt/log/project bump.
        assert len([x for x in receipts if x.idempotency_key=='delete-race-'+str(round)])<=1
 else:
     def test_delete_edge_shared_acceptance_isolated():
