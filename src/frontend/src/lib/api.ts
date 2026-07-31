@@ -60,6 +60,14 @@ export class ApiError extends Error {
   }
 }
 
+export class MalformedAuthoritativeResponseError extends Error {
+  readonly code = "MALFORMED_AUTHORITATIVE_RESPONSE";
+  constructor(public readonly operation: string) {
+    super(`Malformed authoritative response for ${operation}`);
+    this.name = "MalformedAuthoritativeResponseError";
+  }
+}
+
 export class ContentBlockReorderError extends Error {
   constructor(message: string, public readonly partialSuccess: boolean, options?: { cause?: unknown }) {
     super(message, options);
@@ -258,16 +266,22 @@ export const api = {
     }) });
     const projectRevision = value.authoritative_project_revision;
     const edgeRevision = value.authoritative_edge_revision;
-    if (projectRevision === expectedProject + 1 && edgeRevision === edge.revision + 1 &&
-        value.id === edgeId && value.project_id === edge.projectId && value.revision === edgeRevision) {
-      const currentEdge = revisionCache.edges.get(edgeId);
-      if (revisionCache.projects.get(edge.projectId) === expectedProject &&
-          currentEdge?.projectId === edge.projectId && currentEdge.revision === edge.revision) {
-        revisionCache.projects.set(edge.projectId, projectRevision);
-        revisionCache.edges.set(edgeId, { projectId: edge.projectId, revision: edgeRevision });
-      } else {
+    const currentEdge = revisionCache.edges.get(edgeId);
+    const snapshotUnchanged = revisionCache.projects.get(edge.projectId) === expectedProject &&
+      currentEdge?.projectId === edge.projectId && currentEdge.revision === edge.revision;
+    const valid = projectRevision === expectedProject + 1 && edgeRevision === edge.revision + 1 &&
+      value.id === edgeId && value.project_id === edge.projectId && value.revision === edgeRevision;
+    if (!valid) {
+      if (!snapshotUnchanged) {
         revisionCache.projects.delete(edge.projectId); revisionCache.edges.delete(edgeId);
       }
+      throw new MalformedAuthoritativeResponseError("update_edge");
+    }
+    if (snapshotUnchanged) {
+      revisionCache.projects.set(edge.projectId, projectRevision);
+      revisionCache.edges.set(edgeId, { projectId: edge.projectId, revision: edgeRevision });
+    } else {
+      revisionCache.projects.delete(edge.projectId); revisionCache.edges.delete(edgeId);
     }
     return value;
   },
