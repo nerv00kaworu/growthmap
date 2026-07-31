@@ -69,3 +69,23 @@ test("real deepen block conflict does not replay, refreshes once, and preserves 
     assert.equal(useStore.getState().deepenResult?.content_blocks.length, 1);
   } finally { api.createBlock = originalCreate; api.getSubtree = originalSubtree; }
 });
+
+test("promote mainline caller does not consume a malformed authoritative result", async () => {
+  const originalList = api.listEdges;
+  const originalPromote = api.promoteChildMainline;
+  const rootRow = root as unknown as Record<string, unknown>;
+  const before = { ...rootRow, children: [
+    { ...rootRow, id: "old", title: "old", is_mainline: true },
+    { ...rootRow, id: "new", title: "new", is_mainline: false },
+  ] } as never;
+  api.listEdges = (async () => []) as typeof api.listEdges;
+  api.promoteChildMainline = (async () => { throw new (await import("@/lib/api")).MalformedAuthoritativeResponseError("promote_mainline"); }) as typeof api.promoteChildMainline;
+  try {
+    reset({ rootNode: before });
+    await assert.rejects(useStore.getState().promoteMainlineChild("root", "new"), /Malformed authoritative response/);
+    assert.equal(useStore.getState().currentProject?.revision, 7);
+    assert.equal(useStore.getState().rootNode, before);
+    assert.equal(useStore.getState().rootNode?.children?.[0].is_mainline, true);
+    assert.equal(useStore.getState().rootNode?.children?.[1].is_mainline, false);
+  } finally { api.listEdges = originalList; api.promoteChildMainline = originalPromote; }
+});

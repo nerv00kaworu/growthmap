@@ -187,32 +187,51 @@ type PromoteResult = { ok: boolean; project_id: string; edge_id: string; parent_
 async function promoteMainlineRequest(path: string, edgeId: string): Promise<PromoteResult> {
   const target = revisionCache.edges.get(edgeId);
   if (!target || target.relationType !== "child_of") throw new Error("Target edge revision unavailable; refresh edges and retry");
-  const union = [...revisionCache.edges.entries()].filter(([, edge]) => edge.projectId === target.projectId &&
+  const siblingUnion = [...revisionCache.edges.entries()].filter(([, edge]) => edge.projectId === target.projectId &&
     edge.fromNodeId === target.fromNodeId && edge.relationType === "child_of");
-  const siblings = Object.fromEntries(union.filter(([id, edge]) => id !== edgeId && edge.isMainline)
-    .map(([id, edge]) => [id, edge.revision]));
-  const expectedProject = projectExpected(target.projectId);
-  const expectedUnion = new Map(union.map(([id, edge]) => [id, edge.revision]));
+  const demotedSiblings = siblingUnion.filter(([id, edge]) => id !== edgeId && edge.isMainline);
+  const coupledEdges = [[edgeId, target] as const, ...demotedSiblings];
+  const endpointIds = new Set(coupledEdges.flatMap(([, edge]) => [edge.fromNodeId, edge.toNodeId]));
+  const invalidate = () => {
+    revisionCache.projects.delete(target.projectId);
+    coupledEdges.forEach(([id]) => revisionCache.edges.delete(id));
+    endpointIds.forEach(id => revisionCache.nodes.delete(id));
+  };
+  const malformed = (): never => { invalidate(); throw new MalformedAuthoritativeResponseError("promote_mainline"); };
+  const expectedNodes = new Map<string, number>();
+  for (const id of endpointIds) {
+    const node = revisionCache.nodes.get(id);
+    if (!node || node.projectId !== target.projectId) malformed();
+    expectedNodes.set(id, node!.revision);
+  }
+  let expectedProject: number;
+  try { expectedProject = projectExpected(target.projectId); } catch { return malformed(); }
+  const siblings = Object.fromEntries(demotedSiblings.map(([id, edge]) => [id, edge.revision]));
+  const expectedEdges = new Map(coupledEdges.map(([id, edge]) => [id, edge.revision]));
   const value = await request<PromoteResult>(path, { method: "POST", body: JSON.stringify({
     expected_project_revision: expectedProject, expected_revision: target.revision,
     expected_sibling_revisions: siblings,
   }) });
-  const same = revisionCache.projects.get(target.projectId) === expectedProject &&
-    [...expectedUnion].every(([id, revision]) => revisionCache.edges.get(id)?.revision === revision);
+  const snapshotUnchanged = revisionCache.projects.get(target.projectId) === expectedProject &&
+    [...expectedEdges].every(([id, revision]) => revisionCache.edges.get(id)?.revision === revision) &&
+    [...expectedNodes].every(([id, revision]) => {
+      const node = revisionCache.nodes.get(id);
+      return node?.projectId === target.projectId && node.revision === revision;
+    });
   const expectedTouched = new Set(Object.keys(siblings));
   const responseTouched = value?.touched_sibling_revisions;
   const validTouched = responseTouched && Object.keys(responseTouched).length === expectedTouched.size &&
-    Object.entries(responseTouched).every(([id, revision]) => expectedTouched.has(id) && revision === (expectedUnion.get(id) ?? 0) + 1);
+    Object.entries(responseTouched).every(([id, revision]) => expectedTouched.has(id) && revision === (expectedEdges.get(id) ?? 0) + 1);
+  const responseNodes = value?.touched_node_revisions;
+  const validNodes = responseNodes && Object.keys(responseNodes).length === endpointIds.size &&
+    Object.entries(responseNodes).every(([id, revision]) => endpointIds.has(id) && revision === expectedNodes.get(id));
   const valid = value?.ok === true && value.project_id === target.projectId && value.edge_id === edgeId &&
     value.parent_node_id === target.fromNodeId && value.child_node_id === target.toNodeId &&
-    value.project_revision === expectedProject + 1 && value.target_revision === target.revision + 1 && validTouched &&
-    value.touched_node_revisions && Object.values(value.touched_node_revisions).every(r => Number.isInteger(r) && r >= 1);
-  const invalidate = () => { revisionCache.projects.delete(target.projectId); union.forEach(([id]) => revisionCache.edges.delete(id)); };
-  if (!valid) { invalidate(); throw new MalformedAuthoritativeResponseError("promote_mainline"); }
-  if (!same) { invalidate(); return value; }
+    value.project_revision === expectedProject + 1 && value.target_revision === target.revision + 1 && validTouched && validNodes;
+  if (!valid || !snapshotUnchanged) malformed();
   revisionCache.projects.set(target.projectId, value.project_revision);
-  union.forEach(([id, edge]) => revisionCache.edges.set(id, { ...edge,
-    revision: id === edgeId ? value.target_revision : responseTouched[id] ?? edge.revision,
+  coupledEdges.forEach(([id, edge]) => revisionCache.edges.set(id, { ...edge,
+    revision: id === edgeId ? value.target_revision : responseTouched[id],
     isMainline: id === edgeId }));
   return value;
 }

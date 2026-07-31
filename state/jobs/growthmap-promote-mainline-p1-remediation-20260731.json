@@ -1,0 +1,26 @@
+{
+  "job_id": "growthmap-promote-mainline-p1-remediation-20260731",
+  "status": "remediation_complete_pending_rereview",
+  "baseline": "ad3b3705f6c028aba0e4ede43bd777939549c840",
+  "scope": "frontend promote-mainline exact endpoint node revision validation and coupled cache invalidation",
+  "live_db_accessed": false,
+  "ci_run": false,
+  "pushed": false,
+  "verification": {
+    "frontend_focused": 13,
+    "frontend_ts_tests": 53,
+    "frontend_node_tests": 28,
+    "frontend_lint": "pass",
+    "frontend_typecheck": "pass",
+    "production_build_client_boundary_csp": "pass",
+    "distinct_clean_roots": 3,
+    "csp_manifest_sha256": "a885703731ac3a76c6810558d053dd4f0220ae43905fe86761984bfca35470dd",
+    "physical_frontend_export_sha256": "443e1a87f96d5f6fb402a1920d10a4e05f3fcb55369fd93bef1885d8585d1584",
+    "desktop_tests": 120,
+    "backend_focused": 1,
+    "backend_full": 146,
+    "payments": 31,
+    "diff_check": "pass"
+  },
+  "report": "reports/growthmap-promote-mainline-p1-remediation-20260731.md"
+}
