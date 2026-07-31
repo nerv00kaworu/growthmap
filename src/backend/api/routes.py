@@ -796,16 +796,9 @@ async def update_edge(edge_id: str, data: EdgeUpdate, db: AsyncSession = Depends
 
 
 async def _promote_mainline_gui(edge: Edge, data: PromoteMainlineRequest, db: AsyncSession) -> PromoteMainlineOut:
-    sibling_revisions = data.expected_sibling_revisions
-    if sibling_revisions is None:
-        # Backward-compatible GUI wire only. Agent Port requires the exact map.
-        siblings = (await db.execute(select(Edge).where(Edge.project_id == edge.project_id,
-            Edge.from_node_id == edge.from_node_id, Edge.relation_type == "child_of",
-            Edge.is_mainline == True, Edge.id != edge.id))).scalars().all()
-        sibling_revisions = {s.id: s.revision or 1 for s in siblings}
     spec = PromoteMainlineInput(project_id=edge.project_id, edge_id=edge.id,
         expected_revision=data.expected_revision,
-        expected_sibling_revisions=sibling_revisions,
+        expected_sibling_revisions=data.expected_sibling_revisions,
         actor_type="human", provenance={"entry": "gui_rest"})
     validated = await validate_promote_mainline(db, spec)
     project = await claim_project_revision(db, edge.project_id, data.expected_project_revision)

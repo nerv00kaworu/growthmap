@@ -72,6 +72,7 @@ def test_mainline_promotion_bumps_only_promoted_and_actually_demoted_sibling():
         before_first, before_second = by_child[first["id"]], by_child[second["id"]]
         promoted = client.post(f"/api/edges/{before_second['id']}/promote-mainline", json={
             "expected_project_revision": project["revision"], "expected_revision": before_second["revision"],
+            "expected_sibling_revisions": {before_first["id"]: before_first["revision"]},
         })
         assert promoted.status_code == 200, promoted.text
         project2 = client.get(f"/api/projects/{project['id']}").json()
@@ -84,6 +85,7 @@ def test_mainline_promotion_bumps_only_promoted_and_actually_demoted_sibling():
         # explicitly addressed edge remains the canonical promoted entity.
         again = client.post(f"/api/edges/{before_second['id']}/promote-mainline", json={
             "expected_project_revision": project2["revision"], "expected_revision": edges2[second["id"]]["revision"],
+            "expected_sibling_revisions": {},
         })
         assert again.status_code == 200
         edges3 = {e["to_node_id"]: e for e in client.get(f"/api/projects/{project['id']}/edges?relation_type=child_of").json()}
