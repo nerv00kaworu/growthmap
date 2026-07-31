@@ -25,7 +25,8 @@ from services.canonical_nodes import CreateNodeInput, validate_create_node, appl
 from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
     validate_update_node, apply_update_node)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
-    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge)
+    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge,
+    DeleteEdgeInput, validate_delete_edge, apply_delete_edge)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -839,11 +840,12 @@ async def delete_edge(edge_id: str, data: EntityRevisionRequest, db: AsyncSessio
     edge = await db.get(Edge, edge_id)
     if not edge:
         raise HTTPException(404, "Edge not found")
-    if edge.relation_type == "child_of":
-        raise HTTPException(400, "Tree parent relations must be changed through node move actions")
+    spec = DeleteEdgeInput(project_id=edge.project_id, edge_id=edge.id,
+        actor_type="human", actor_id=None, provenance={"entry": "gui_rest"})
+    validated = await validate_delete_edge(db, spec)
     await claim_project_revision(db, edge.project_id, data.expected_project_revision)
     check_entity_revision(edge, data.expected_revision, kind="edge")
-    await db.delete(edge)
+    await apply_delete_edge(db, validated)
     await db.commit()
 
 

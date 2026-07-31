@@ -55,6 +55,21 @@ class ValidatedUpdateEdge:
     changes: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class DeleteEdgeInput:
+    project_id: str
+    edge_id: str
+    actor_type: str = "human"
+    actor_id: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ValidatedDeleteEdge:
+    data: DeleteEdgeInput
+    edge: Edge
+
+
 def _safe_provenance(value: dict[str, Any]) -> dict[str, Any]:
     """Small explicit allowlist: history must never become a secret sink."""
     out: dict[str, Any] = {}
@@ -186,3 +201,32 @@ async def apply_update_edge(
                      action_type="graph_relation_updated", payload=payload))
     await db.flush()
     return edge
+
+
+async def validate_delete_edge(db: AsyncSession, data: DeleteEdgeInput) -> ValidatedDeleteEdge:
+    edge = await db.get(Edge, data.edge_id)
+    if not edge or edge.project_id != data.project_id:
+        raise HTTPException(404, "Edge not found")
+    if edge.relation_type == "child_of":
+        raise HTTPException(400, "Tree parent relations must be changed through node move actions")
+    return ValidatedDeleteEdge(data=data, edge=edge)
+
+
+async def apply_delete_edge(db: AsyncSession, validated: ValidatedDeleteEdge) -> None:
+    """Stage a graph-relation delete and sanitized history; never commit or touch endpoints."""
+    d, edge = validated.data, validated.edge
+    payload: dict[str, Any] = {
+        "edge_id": edge.id,
+        "from_node_id": edge.from_node_id,
+        "to_node_id": edge.to_node_id,
+        "relation_type": edge.relation_type,
+    }
+    provenance = _safe_provenance(d.provenance)
+    if provenance:
+        payload["provenance"] = provenance
+    db.add(ActionLog(project_id=d.project_id, node_id=edge.from_node_id,
+                     actor_type=d.actor_type,
+                     actor_id=d.actor_id if d.actor_id is not None else null(),
+                     action_type="graph_relation_deleted", payload=payload))
+    await db.delete(edge)
+    await db.flush()

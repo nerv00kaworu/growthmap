@@ -10,7 +10,8 @@ from services.canonical_nodes import CreateNodeInput, validate_create_node, appl
 from services.canonical_node_updates import (UpdateNodeInput, validate_update_node,
     apply_update_node, finalize_update_maturity)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
-    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge)
+    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge,
+    DeleteEdgeInput, validate_delete_edge, apply_delete_edge)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -116,8 +117,15 @@ async def validate_operations(db,grant,operations):
         Edge.project_id==project_id))).all())
     created_edge_ids={op["id"] for op in normalized if op["op"]=="create_edge"}
     updated_edge_ids={op["edge_id"] for op in normalized if op["op"]=="update_edge"}
+    deleted_edge_ids=[op["edge_id"] for op in normalized if op["op"]=="delete_edge"]
     if created_edge_ids & updated_edge_ids:
         raise HTTPException(422,{"code":"NEW_EDGE_UPDATE_UNSUPPORTED","message":"update_edge supports pre-existing edges only"})
+    if created_edge_ids & set(deleted_edge_ids):
+        raise HTTPException(422,{"code":"NEW_EDGE_DELETE_UNSUPPORTED","message":"delete_edge supports pre-existing edges only"})
+    if len(deleted_edge_ids)!=len(set(deleted_edge_ids)):
+        raise HTTPException(422,{"code":"DUPLICATE_EDGE_DELETE","message":"Edge may be deleted only once per batch"})
+    if updated_edge_ids & set(deleted_edge_ids):
+        raise HTTPException(422,{"code":"EDGE_DELETE_CONFLICT","message":"Edge cannot be updated and deleted in one batch"})
     created_block_ids={op["id"] for op in normalized if op["op"]=="create_content_block"}
     block_operation_kinds={}
     delete_counts={}
@@ -174,6 +182,12 @@ async def validate_operations(db,grant,operations):
             refs += [edge.from_node_id,edge.to_node_id]
             if op["expected_revision"]!=edge.revision: conflict("Entity revision is stale",entity_id=edge.id,expected=op["expected_revision"],current=edge.revision)
             if not op["fields"]: raise HTTPException(422,{"code":"INVALID_EDGE_UPDATE","message":"update_edge fields cannot be empty"})
+        elif kind=="delete_edge":
+            edge=await db.get(Edge,op["edge_id"])
+            if not edge or edge.project_id!=project_id: raise HTTPException(404,"Edge not found")
+            if edge.relation_type=="child_of": raise HTTPException(422,{"code":"INVALID_EDGE_DELETE","message":"Containment edges must be changed through move/reparent"})
+            refs += [edge.from_node_id,edge.to_node_id]
+            if op["expected_revision"]!=edge.revision: conflict("Entity revision is stale",entity_id=edge.id,expected=op["expected_revision"],current=edge.revision)
         elif kind=="create_content_block":
             n=node_ref(op["node_id"]);refs.append(op["node_id"])
             check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
@@ -222,7 +236,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     for op in ops:
         kind=op["op"]
         if kind=="update_node": remember(op["node_id"],op["expected_revision"],"expected_revision")
-        elif kind=="update_edge": remember(op["edge_id"],op["expected_revision"],"expected_revision")
+        elif kind in {"update_edge","delete_edge"}: remember(op["edge_id"],op["expected_revision"],"expected_revision")
         elif kind=="create_node" and op.get("parent_id"): remember(op["parent_id"],op["expected_parent_revision"],"expected_parent_revision")
         elif kind=="create_edge":
             remember(op["from_node_id"],op["expected_from_revision"],"expected_from_revision")
@@ -330,6 +344,14 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             e=await apply_update_edge(db,validated,touched=canonical_touched)
             ordered_results[op_index]={"op":kind,"id":e.id,"revision":e.revision}
             result_entities[op_index]=e
+        elif kind=="delete_edge":
+            identity=actor or grant.agent_identity
+            spec=DeleteEdgeInput(project_id=project.id,edge_id=op["edge_id"],
+                actor_type="human" if actor else "agent",actor_id=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_delete_edge(db,spec)
+            await apply_delete_edge(db,validated)
+            ordered_results[op_index]={"op":kind,"id":op["edge_id"]}
         elif kind=="create_content_block":
             identity=actor or grant.agent_identity
             spec=CreateContentBlockInput(project_id=project.id,node_id=op["node_id"],

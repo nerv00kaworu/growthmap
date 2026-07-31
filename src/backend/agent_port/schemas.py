@@ -72,6 +72,10 @@ class UpdateEdge(Strict):
     edge_id: Id
     expected_revision: Annotated[int,Field(ge=1)]
     fields: EdgeFields
+class DeleteEdge(Strict):
+    op: Literal["delete_edge"]
+    edge_id: Id
+    expected_revision: Annotated[int,Field(ge=1)]
 AgentBlockType = Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"]
 AgentBlockContent = dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=16384)]]
 
@@ -112,7 +116,7 @@ class CreateBranch(Strict):
     expected_source_revision: Annotated[int,Field(ge=1)]
     name: Annotated[str,Field(min_length=1,max_length=255)]; description: Annotated[str,Field(max_length=4000)]=""
 
-Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,UpdateEdge,CreateBlock,UpdateBlock,DeleteBlock,CreateBranch],Field(discriminator="op")]
+Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,UpdateEdge,DeleteEdge,CreateBlock,UpdateBlock,DeleteBlock,CreateBranch],Field(discriminator="op")]
 OperationList=Annotated[list[Operation],Field(min_length=1,max_length=50)]
 
 class Batch(Strict):

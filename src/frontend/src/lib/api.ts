@@ -164,6 +164,18 @@ function blockExpected(blockId: string) {
   return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
 }
 
+function applySuccessfulEdgeDelete(edgeId: string, projectId: string, expectedProjectRevision: number, expectedRevision: number): void {
+  const edge = revisionCache.edges.get(edgeId);
+  if (revisionCache.projects.get(projectId) === expectedProjectRevision &&
+      edge?.projectId === projectId && edge.revision === expectedRevision) {
+    revisionCache.projects.set(projectId, expectedProjectRevision + 1);
+    revisionCache.edges.delete(edgeId);
+    return;
+  }
+  revisionCache.projects.delete(projectId);
+  revisionCache.edges.delete(edgeId);
+}
+
 function applySuccessfulBlockDelete(blockId: string, nodeId: string, projectId: string, expected: {
   expected_project_revision: number; expected_node_revision: number; expected_revision: number;
 }): void {
@@ -285,9 +297,12 @@ export const api = {
     }
     return value;
   },
-  deleteEdge: (edgeId: string, expectedProjectRevision?: number, expectedRevision?: number) => {
+  deleteEdge: async (edgeId: string, expectedProjectRevision?: number, expectedRevision?: number) => {
     const edge = revisionCache.edges.get(edgeId); if (!edge) throw new Error("Edge revision unavailable; refresh and retry");
-    return request<void>(`/edges/${edgeId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision ?? projectExpected(edge.projectId), expected_revision: expectedRevision ?? edge.revision }) });
+    const projectRevision = expectedProjectRevision ?? projectExpected(edge.projectId);
+    const edgeRevision = expectedRevision ?? edge.revision;
+    await request<void>(`/edges/${edgeId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: projectRevision, expected_revision: edgeRevision }) });
+    applySuccessfulEdgeDelete(edgeId, edge.projectId, projectRevision, edgeRevision);
   },
   deleteNode: (nodeId: string, expectedProjectRevision: number, expectedRevision: number) =>
     request<void>(`/nodes/${nodeId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
