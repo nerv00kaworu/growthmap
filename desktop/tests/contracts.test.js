@@ -125,5 +125,9 @@ test('authoritative database readiness receives an explicit safe basename',()=>{
  assert.match(main,/authoritativeDatabaseReadiness\(expected,databaseBasename\)/);
  assert.match(main,/path\.basename\(databaseBasename\)!==databaseBasename/);
  assert.match(main,/authoritativeReadiness:expected=>authoritativeDatabaseReadiness\(expected,path\.basename\(databasePath\)\)/);
+ assert.match(main,/project\.root_node_id/);
+ assert.match(main,/\/api\/nodes\/\$\{encodeURIComponent\(project\.root_node_id\)\}\/subtree/);
+ assert.match(main,/subtree\.project_id!==project\.id\|\|subtree\.id!==project\.root_node_id/);
+ assert.doesNotMatch(main,/\/api\/projects\/\$\{encodeURIComponent\(id\)\}\/subtree/);
  assert.doesNotMatch(main,/path\.basename\(databasePath\).*managed=/);
 });
