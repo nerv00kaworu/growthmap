@@ -22,7 +22,7 @@ CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,actor_type TEXT,action_type TEXT,created_at TEXT);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key TEXT DEFAULT '');
-CREATE TABLE agent_grants(id VARCHAR(36) PRIMARY KEY);
+CREATE TABLE agent_grants(id VARCHAR(36) PRIMARY KEY,token_prefix VARCHAR(20),token_salt VARCHAR(64),token_hash VARCHAR(128),project_id VARCHAR(36),permission VARCHAR(10),node_scope_id VARCHAR(36),branch_root_id VARCHAR(36),label VARCHAR(120),agent_identity VARCHAR(120),status VARCHAR(12),expires_at DATETIME,revoked_at DATETIME,last_used_at DATETIME,created_at DATETIME);
 CREATE TABLE agent_readbacks(id VARCHAR(36) NOT NULL PRIMARY KEY,grant_id VARCHAR(36) NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,project_id VARCHAR(36) NOT NULL REFERENCES projects(id) ON DELETE CASCADE,target_node_id VARCHAR(36) REFERENCES nodes(id) ON DELETE SET NULL,based_on_project_revision INTEGER NOT NULL DEFAULT '1',context_snapshot_digest VARCHAR(64) NOT NULL DEFAULT '',objective TEXT NOT NULL DEFAULT '',current_project_revision INTEGER NOT NULL DEFAULT '1',context_stale BOOLEAN NOT NULL DEFAULT '1',commit_refs JSON NOT NULL,files JSON NOT NULL,tests JSON NOT NULL,decisions JSON NOT NULL,risks JSON NOT NULL,todos JSON NOT NULL,evidence JSON NOT NULL,summary TEXT,created_at DATETIME);
 CREATE INDEX ix_agent_readbacks_grant_id ON agent_readbacks(grant_id);
 CREATE INDEX ix_agent_readbacks_project_id ON agent_readbacks(project_id);
@@ -36,4 +36,10 @@ PRAGMA user_version=2;
 project_id="11111111-1111-4111-8111-111111111111"; root_id="22222222-2222-4222-8222-222222222222"; now="2026-07-30T00:00:00+00:00"
 c.execute("INSERT INTO projects(id,name,description,goal,root_node_id,status,settings,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,1)",(project_id,"Desktop Fixture","","",root_id,"active","{}",now,now))
 c.execute("INSERT INTO nodes(id,project_id,title,node_type,status,maturity,workflow_status,file_paths,revision) VALUES(?,?,?,?,?,?,?,?,1)",(root_id,project_id,"Desktop Fixture Root","root","active","seed","draft","[]"))
+grant_id="33333333-3333-4333-8333-333333333333"; stale_grant_id="66666666-6666-4666-8666-666666666666"
+for gid,prefix in [(grant_id,"gm_seed"),(stale_grant_id,"gm_stale")]:c.execute("INSERT INTO agent_grants(id,token_prefix,token_salt,token_hash,project_id,permission,label,agent_identity,status,expires_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(gid,prefix,"salt","hash",project_id,"propose","Packaged fixture agent","fixture-agent","active","2099-01-01T00:00:00+00:00",now))
+readback_sql="""INSERT INTO agent_readbacks(id,grant_id,project_id,target_node_id,based_on_project_revision,context_snapshot_digest,objective,current_project_revision,context_stale,commit_refs,files,tests,decisions,risks,todos,evidence,summary,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+evidence=("[\"abc123\"]","[\"src/feature.py\"]",'[{"name":"packaged integration","status":"passed"}]','["reuse strict v1 wire"]','["platform availability"]','["fresh review"]','[{"name":"diff","status":"verified","detail":"clean"}]')
+for readback_id,stale,current,summary in [("44444444-4444-4444-8444-444444444444",0,1,"Packaged current implementation"),("55555555-5555-4555-8555-555555555555",1,2,"Packaged stale implementation")]:
+ c.execute(readback_sql,(readback_id,stale_grant_id if stale else grant_id,project_id,root_id,1,"a"*64,"ship",current,stale,*evidence,summary,now))
 c.commit();c.close()

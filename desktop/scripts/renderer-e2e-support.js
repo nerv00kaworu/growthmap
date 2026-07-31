@@ -1,4 +1,5 @@
 'use strict';
+function assertReadbackText(text,{summary,state,target}){for(const semantic of [summary,state,`target ${target}`,'digest aaaaaaaaaaaa','commits: ["abc123"]','files: ["src/feature.py"]','tests: [{"name":"packaged integration","status":"passed"}]','decisions: ["reuse strict v1 wire"]','risks: ["platform availability"]','todos: ["fresh review"]','evidence: [{"name":"diff","status":"verified","detail":"clean"}]'])if(!text.includes(semantic))throw Error(`agent-readback: ${summary} missing ${semantic}: ${text}`);return true;}
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
 function launchArgs({userData,debugPort,logPath}){return [`--user-data-dir=${userData}`,`--remote-debugging-port=${debugPort}`,'--enable-logging',`--log-file=${logPath}`];}
 function processTree(rootPid){
@@ -36,4 +37,4 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
  return {metadata,config};
 }
-module.exports={launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
+module.exports={assertReadbackText,launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};

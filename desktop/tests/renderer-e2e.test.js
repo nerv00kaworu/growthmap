@@ -29,6 +29,15 @@ test('import polling tolerates only the sidecar replacement window',()=>{
  assert.match(block,/資料庫操作失敗|原有資料未變更/);
 });
 
+test('packaged Agent Port fixture and harness semantically assert selectable current/stale implementation evidence',()=>{
+ const {assertReadbackText}=require('../scripts/renderer-e2e-support'),target='22222222-2222-4222-8222-222222222222';
+ const evidence=['digest aaaaaaaaaaaa','commits: ["abc123"]','files: ["src/feature.py"]','tests: [{"name":"packaged integration","status":"passed"}]','decisions: ["reuse strict v1 wire"]','risks: ["platform availability"]','todos: ["fresh review"]','evidence: [{"name":"diff","status":"verified","detail":"clean"}]'].join('\n');
+ for(const [summary,state] of [['Packaged current implementation','current r1'],['Packaged stale implementation','stale · current r2']])assert.equal(assertReadbackText(`${summary}\n${state}\ntarget ${target}\n${evidence}`,{summary,state,target}),true);
+ assert.throws(()=>assertReadbackText(`Packaged current implementation\ncurrent r1\ntarget ${target}`,{summary:'Packaged current implementation',state:'current r1',target}),/missing digest/);
+ const fixture=fs.readFileSync(path.join(__dirname,'../scripts/create-e2e-fixture.py'),'utf8'),source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(fixture,/Packaged current implementation/);assert.match(fixture,/Packaged stale implementation/);assert.match(source,/getByTestId\('agent-port-panel'\)/);assert.match(source,/getByRole\('button',\{name:'22222222-2222-4222-8222-222222222222'\}\)\.click/);assert.match(source,/assertReadbackText/);
+});
+
 test('CDP version probe records HTTP response and connection errors',async()=>{
  const server=http.createServer((request,response)=>{assert.equal(request.url,'/json/version');response.writeHead(200,{'content-type':'application/json'});response.end('{"Browser":"test"}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
