@@ -22,7 +22,8 @@ test('import waits for production reload and authenticated replacement lifecycle
  const start=source.indexOf("const oldSessionRequest");
  const end=source.indexOf("const agentPortEntry",start);
  const block=source.slice(start,end);
- assert.match(block,/waitForEvent\('domcontentloaded'/);
+ assert.doesNotMatch(block,/waitForEvent\('domcontentloaded'/);
+ assert.match(block,/await run\.page\.getByTestId\('database-import'\)\.click\(\);/);
  assert.match(block,/import-rebootstrap/);
  assert.match(block,/new-session projects HTTP/);
  assert.match(block,/new-session subtree HTTP/);
