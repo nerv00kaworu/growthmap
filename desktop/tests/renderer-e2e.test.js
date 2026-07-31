@@ -23,6 +23,8 @@ test('import waits for production reload and authenticated replacement lifecycle
  const end=source.indexOf("const agentPortEntry",start);
  const block=source.slice(start,end);
  assert.doesNotMatch(block,/waitForEvent\('domcontentloaded'/);
+ assert.match(block,/preImportDocumentOrigin/);
+ assert.match(block,/performance\.timeOrigin===beforeOrigin/);
  assert.match(block,/await run\.page\.getByTestId\('database-import'\)\.click\(\);/);
  assert.match(block,/import-rebootstrap/);
  assert.match(block,/new-session projects HTTP/);
