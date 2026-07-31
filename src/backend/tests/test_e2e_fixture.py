@@ -79,12 +79,13 @@ def test_e2e_fixture_serves_root_subtree_and_agent_activity_through_real_api(tmp
 from fastapi.testclient import TestClient
 from main import app
 with TestClient(app) as client:
-    response = client.get('/api/nodes/22222222-2222-4222-8222-222222222222/subtree')
+    headers = {'Authorization': 'Bearer fixture-session-token'}
+    response = client.get('/api/nodes/22222222-2222-4222-8222-222222222222/subtree', headers=headers)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['id'] == '22222222-2222-4222-8222-222222222222'
     assert body['project_id'] == '11111111-1111-4111-8111-111111111111'
-    activity = client.get('/api/agent-port/activity?project_id=11111111-1111-4111-8111-111111111111')
+    activity = client.get('/api/agent-port/activity?project_id=11111111-1111-4111-8111-111111111111', headers=headers)
     assert activity.status_code == 200, activity.text
     payload = activity.json()
     assert payload['proposals'] == []
@@ -94,6 +95,11 @@ with TestClient(app) as client:
 """
     env = dict(__import__('os').environ)
     env['DATABASE_URL'] = f"sqlite+aiosqlite:///{fixture}"
+    env['GROWTHMAP_DESKTOP_MODE'] = '1'
+    env['GROWTHMAP_SESSION_TOKEN'] = 'fixture-session-token'
+    env['GROWTHMAP_STARTUP_VERDICT_MODE'] = 'fresh'
+    env['GROWTHMAP_STARTUP_VERDICT_NONCE'] = 'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN'
+    env['GROWTHMAP_STARTUP_VERDICT_MAC'] = '54e8b06bfded81a38763b02f2056c887ea2ed62225ab51a807a663ade5d79ab8'
     result = subprocess.run([sys.executable, '-c', code], cwd=backend, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
 
