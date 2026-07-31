@@ -54,6 +54,7 @@
       "startup-policy.js",
       "startup-verdict.js",
       "commercial-config.js",
+      "manual-payment.js",
       "product-identity.json",
       "commercial-config.json",
       "!e2e-main.js",

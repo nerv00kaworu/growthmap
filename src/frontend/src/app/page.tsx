@@ -176,9 +176,21 @@ export default function HomePage() {
     } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
-  const openPurchase = async (rail: "x402" | "paypal") => {
+  const [manualPayment, setManualPayment] = useState<Awaited<ReturnType<NonNullable<typeof window.growthmapDesktop>["purchase"]["info"]>> | null>(null);
+  const loadManualPayment = useCallback(async () => {
+    if (!window.growthmapDesktop) return;
+    try { setManualPayment(await window.growthmapDesktop.purchase.info()); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  }, []);
+  useEffect(() => { if (window.growthmapDesktop && entitlement?.state !== "paid") loadManualPayment(); }, [entitlement?.state, loadManualPayment]);
+  const openPurchase = async (rail: "paypal" | "email" | "x") => {
     if (!window.growthmapDesktop) { setToast("購買僅在桌面版提供"); return; }
     try { await window.growthmapDesktop.purchase.open(rail); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  };
+  const copyBaseAddress = async () => {
+    if (!window.growthmapDesktop) return;
+    try { await window.growthmapDesktop.purchase.copyBaseAddress(); setToast("✅ Base USDC 收款地址已複製"); }
     catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
@@ -423,7 +435,7 @@ export default function HomePage() {
               </button>
               <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">⚙️ LLM 設定</button>
               <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
-              {entitlement?.state !== "paid" && <section data-testid="purchase-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>購買 v1 永久授權</strong><p className="text-[10px] text-amber-200/70">首 50 筆確認付款 10；其後 29。永久、同主版本更新、2 部個人裝置、無專案上限。</p><button type="button" onClick={() => openPurchase("x402")} className="mr-2 rounded border border-amber-600 px-2 py-1">USDC on Base（安全入口）</button><button type="button" onClick={() => openPurchase("paypal")} className="rounded border border-amber-600 px-2 py-1">PayPal manual</button><p className="text-[10px] text-gray-400">PayPal 交易 ID 須人工核對；截圖不構成付款證明。付款後下載的 JSON 仍須按「匯入 License」由本機驗證。</p></section>}
+              {entitlement?.state !== "paid" && <section data-testid="purchase-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>購買 v1 永久授權</strong><p className="text-[10px] text-amber-200/70">首 50 筆確認付款 10 USDC／USD；其後 29。永久、同主版本更新、2 部個人裝置、無專案上限。</p>{manualPayment && <><div className="rounded border border-amber-800/50 p-2"><div className="font-medium">Base 原生 USDC</div><code data-testid="base-payment-address" className="break-all text-[10px]">{manualPayment.basePayee}</code><button type="button" onClick={copyBaseAddress} className="mt-1 rounded border border-amber-600 px-2 py-1">複製收款地址</button><p className="mt-1 text-[10px] text-red-300">只接受 Base（eip155:8453）上的 Circle USDC；請勿轉 ETH 或其他鏈／代幣。</p></div><button type="button" onClick={() => openPurchase("paypal")} className="mr-2 rounded border border-amber-600 px-2 py-1">開啟 PayPal</button><button type="button" onClick={() => openPurchase("email")} className="mr-2 rounded border border-amber-600 px-2 py-1">Email 回報付款</button><button type="button" onClick={() => openPurchase("x")} className="rounded border border-amber-600 px-2 py-1">X 聯絡</button><p className="text-[10px] text-gray-400">付款後請提供付款方式、PayPal transaction ID 或 Base tx hash、License 名稱及聯絡 Email。交易須人工核對；截圖不構成付款證明。收到簽章 JSON 後請使用「匯入 License」。</p></>}</section>}
               {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
               <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>

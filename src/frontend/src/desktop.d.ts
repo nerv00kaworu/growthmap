@@ -1,6 +1,7 @@
 export {};
 export interface DesktopDatabaseStatus { basename:string; size:number; projects:number; lastBackup:string|null; busy:boolean }
 export interface DesktopBackup { id:string; createdAt:string; size:number; projects:number; sha256:string }
+export interface ManualPaymentInfo { mode:'manual'; issuer:string; baseNetwork:'eip155:8453'; baseUsdc:string; basePayee:string; earlyLimit:50; earlyPriceMicros:10000000; regularPriceMicros:29000000; paypalUrl:string; supportEmail:string; supportXUrl:string }
 declare global {
   interface Window {
     growthmapDesktop?: {
@@ -8,7 +9,7 @@ declare global {
       readonly agentPortControl: true;
       readonly secrets: { has(id:string):Promise<boolean>; set(id:string,value:string):Promise<boolean>; delete(id:string):Promise<boolean> };
       readonly license: { import():Promise<unknown | null> };
-      readonly purchase: { open(rail:'x402'|'paypal'):Promise<boolean> };
+      readonly purchase: { info():Promise<ManualPaymentInfo>; copyBaseAddress():Promise<boolean>; open(rail:'paypal'|'email'|'x'):Promise<boolean> };
       readonly entitlement: { onChanged(callback:()=>void):()=>void };
       readonly updates: { check():Promise<unknown> };
       readonly database: {
