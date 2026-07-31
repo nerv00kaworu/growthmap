@@ -407,7 +407,7 @@ export default function HomePage() {
       </header>
 
       {showMoreMenu && currentProject && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowMoreMenu(false)}>
+        <div data-testid="more-actions-dialog" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowMoreMenu(false)}>
           <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
@@ -416,7 +416,7 @@ export default function HomePage() {
                   {currentBranch ? `目前方案線：${currentBranch.name}` : "匯入匯出、復原與方案線管理"}
                 </p>
               </div>
-              <button type="button" onClick={() => setShowMoreMenu(false)} className="text-gray-500 hover:text-gray-300 text-lg">×</button>
+              <button data-testid="more-actions-close" type="button" onClick={() => setShowMoreMenu(false)} className="text-gray-500 hover:text-gray-300 text-lg">×</button>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
