@@ -60,6 +60,40 @@ test('Agent Port harness fails closed when no imported project was selected',asy
  await assert.rejects(activateProjectForAgentPort({}, {projectId:'',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'}),/requires an imported project selection/);
 });
 
+test('Agent Port harness times out before More when the selected fixture root never becomes visible',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';
+ const forbidden=operation=>()=>{throw Error(`forbidden bypass: ${operation}`);};
+ const entry={waitFor:async()=>{},isEnabled:async()=>true,click:forbidden('disabled entry click'),evaluate:forbidden('entry evaluate')};
+ const page={
+  getByRole:(role,options)=>{assert.equal(role,'combobox');assert.deepEqual(options,{name:'選擇專案'});return {selectOption:async option=>{assert.deepEqual(option,{value:projectId});calls.push('select');},inputValue:async()=>{calls.push('value-match');return projectId;},evaluate:forbidden('selector evaluate')};},
+  getByText:(text,options)=>{assert.equal(text,'Desktop Fixture Root');assert.deepEqual(options,{exact:true});return {first:()=>({waitFor:async waitOptions=>{assert.deepEqual(waitOptions,{state:'visible',timeout:7});calls.push('root-timeout');throw Error('fixture root visibility timeout');},evaluate:forbidden('root evaluate')})};},
+  getByTitle:title=>{assert.equal(title,'更多操作');return {click:async()=>calls.push('more-click'),evaluate:forbidden('More evaluate')};},
+  getByTestId:testId=>{assert.equal(testId,'agent-port-menu-entry');calls.push('entry-located');return entry;},
+  evaluate:forbidden('page evaluate'),
+ };
+ await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root',timeout:7}),/fixture root visibility timeout/);
+ assert.deepEqual(calls,['select','root-timeout']);
+});
+
+test('Agent Port harness times out without clicking or bypassing a disabled menu entry',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';let now=0;
+ const forbidden=operation=>()=>{throw Error(`forbidden bypass: ${operation}`);};
+ const entry={
+  waitFor:async options=>{assert.deepEqual(options,{state:'visible',timeout:5});calls.push('entry-visible');},
+  isEnabled:async()=>{calls.push('entry-disabled');return false;},
+  click:forbidden('disabled entry click'),evaluate:forbidden('entry evaluate'),
+ };
+ const page={
+  getByRole:()=>({selectOption:async option=>{assert.deepEqual(option,{value:projectId});calls.push('select');},inputValue:async()=>{calls.push('value-match');return projectId;},evaluate:forbidden('selector evaluate')}),
+  getByText:()=>({first:()=>({waitFor:async options=>{assert.deepEqual(options,{state:'visible',timeout:5});calls.push('root-visible');},evaluate:forbidden('root evaluate')})}),
+  getByTitle:()=>({click:async options=>{assert.equal(options,undefined);calls.push('more-click');},evaluate:forbidden('More evaluate')}),
+  getByTestId:()=>entry,evaluate:forbidden('page evaluate'),
+ };
+ const clock={now:()=>now,sleep:async ms=>{assert.equal(ms,100);calls.push('bounded-sleep');now+=ms;}};
+ await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root',timeout:5,clock}),/did not load the selected project root/);
+ assert.deepEqual(calls,['select','root-visible','value-match','more-click','entry-visible','entry-disabled','bounded-sleep']);
+});
+
 test('CDP version probe records HTTP response and connection errors',async()=>{
  const server=http.createServer((request,response)=>{assert.equal(request.url,'/json/version');response.writeHead(200,{'content-type':'application/json'});response.end('{"Browser":"test"}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

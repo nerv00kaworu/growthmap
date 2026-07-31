@@ -1,7 +1,7 @@
 'use strict';
 function assertReadbackText(text,{summary,state,target}){for(const semantic of [summary,state,`target ${target}`,'digest aaaaaaaaaaaa','commits: ["abc123"]','files: ["src/feature.py"]','tests: [{"name":"packaged integration","status":"passed"}]','decisions: ["reuse strict v1 wire"]','risks: ["platform availability"]','todos: ["fresh review"]','evidence: [{"name":"diff","status":"verified","detail":"clean"}]'])if(!text.includes(semantic))throw Error(`agent-readback: ${summary} missing ${semantic}: ${text}`);return true;}
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function activateProjectForAgentPort(page,{projectId,projectName,rootTitle,timeout=30000}){
+async function activateProjectForAgentPort(page,{projectId,projectName,rootTitle,timeout=30000,clock={now:Date.now,sleep}}){
  if(!projectId)throw Error('agent-port activation requires an imported project selection');
  const projectSelector=page.getByRole('combobox',{name:'選擇專案'});
  await projectSelector.selectOption({value:projectId});
@@ -10,8 +10,8 @@ async function activateProjectForAgentPort(page,{projectId,projectName,rootTitle
  await page.getByTitle('更多操作').click();
  const entry=page.getByTestId('agent-port-menu-entry');
  await entry.waitFor({state:'visible',timeout});
- const deadline=Date.now()+timeout;
- while(Date.now()<deadline){if(await entry.isEnabled())return entry;await sleep(100);}
+ const deadline=clock.now()+timeout;
+ while(clock.now()<deadline){if(await entry.isEnabled())return entry;await clock.sleep(100);}
  throw Error(`agent-port activation did not load the selected project root: ${projectName} (${projectId})`);
 }
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
