@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),net=require('node:net'),os=require('node:os'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process'),{chromium}=require('playwright-core');
-const {launchArgs,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage,assertReadbackText}=require('./renderer-e2e-support');
+const {launchArgs,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage,assertReadbackText,activateProjectForAgentPort}=require('./renderer-e2e-support');
 if(process.platform!=='win32')throw new Error('Packaged renderer E2E must run on Windows');
 if(process.env.CI!=='true')throw new Error('Renderer E2E is CI-only');
 const root=path.resolve(__dirname,'..');
@@ -31,7 +31,7 @@ async function close(run){await run.page.close();const deadline=Date.now()+20000
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-import').click();
   try{await stageWait(run,'import',async()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture'))return true;const e=[...document.querySelectorAll('div')].map(x=>x.textContent||'').find(x=>x.includes('資料庫操作失敗')||x.includes('原有資料未變更'));if(e)return {error:e.slice(0,300)};try{const response=await fetch('/api/projects');if(response.ok){await response.json();return false;}if(response.status>=400&&response.status<500)return {error:`projects HTTP ${response.status}`};}catch{}return false;},90000);}catch(error){error.message+=`; database=${JSON.stringify({managed:fileEvidence(path.join(userData,'growthmap.db')),fixture:fileEvidence(fixture)})}`;throw error;}
-  const moreButton=run.page.getByTitle('更多操作');await moreButton.click();await run.page.getByTestId('agent-port-menu-entry').click();await run.page.getByTestId('agent-port-panel').waitFor();
+  const agentPortEntry=await activateProjectForAgentPort(run.page,{projectId:'11111111-1111-4111-8111-111111111111',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'});await agentPortEntry.click();await run.page.getByTestId('agent-port-panel').waitFor();
   const cards=run.page.getByTestId('agent-readback-card');if(await cards.count()!==2)throw Error(`agent-readback: expected current+stale cards; count=${await cards.count()}`);
   for(const [summary,state] of [['Packaged current implementation','current r1'],['Packaged stale implementation','stale · current r2']]){const card=cards.filter({hasText:summary});await card.getByRole('button',{name:'22222222-2222-4222-8222-222222222222'}).click();const text=await card.innerText();assertReadbackText(text,{summary,state,target:'22222222-2222-4222-8222-222222222222'});}
   await run.page.getByRole('button',{name:'×'}).last().click();

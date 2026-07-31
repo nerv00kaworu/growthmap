@@ -38,6 +38,28 @@ test('packaged Agent Port fixture and harness semantically assert selectable cur
  assert.match(fixture,/Packaged current implementation/);assert.match(fixture,/Packaged stale implementation/);assert.match(source,/getByTestId\('agent-port-panel'\)/);assert.match(source,/getByRole\('button',\{name:'22222222-2222-4222-8222-222222222222'\}\)\.click/);assert.match(source,/assertReadbackText/);
 });
 
+test('Agent Port harness activates the imported project through the visible selector before opening More',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[];
+ const entry={waitFor:async()=>calls.push('entry-visible'),isEnabled:async()=>{calls.push('entry-enabled');return true;}};
+ const page={
+  getByRole:(role,options)=>{assert.equal(role,'combobox');assert.deepEqual(options,{name:'選擇專案'});return {selectOption:async option=>calls.push(`select:${option.value}`),inputValue:async()=>{calls.push('selected-value');return '11111111-1111-4111-8111-111111111111';}};},
+  getByText:(text,options)=>{assert.equal(text,'Desktop Fixture Root');assert.deepEqual(options,{exact:true});return {first:()=>({waitFor:async()=>calls.push('root-visible')})};},
+  getByTitle:title=>{assert.equal(title,'更多操作');return {click:async()=>calls.push('more-click')};},
+  getByTestId:testId=>{assert.equal(testId,'agent-port-menu-entry');return entry;},
+ };
+ assert.equal(await activateProjectForAgentPort(page,{projectId:'11111111-1111-4111-8111-111111111111',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'}),entry);
+ assert.deepEqual(calls,['select:11111111-1111-4111-8111-111111111111','root-visible','selected-value','more-click','entry-visible','entry-enabled']);
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),importAt=source.indexOf("stageWait(run,'import'"),activateAt=source.indexOf('activateProjectForAgentPort(run.page');
+ assert.ok(importAt>=0&&activateAt>importAt,'database import must precede visible project activation');
+ const activationBlock=source.slice(activateAt,source.indexOf("getByTestId('agent-port-panel')",activateAt));
+ assert.match(source,/projectId:'11111111-1111-4111-8111-111111111111'/);assert.doesNotMatch(activationBlock,/force:\s*true|removeAttribute\(['"]disabled|\.evaluate\(/);
+});
+
+test('Agent Port harness fails closed when no imported project was selected',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support');
+ await assert.rejects(activateProjectForAgentPort({}, {projectId:'',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'}),/requires an imported project selection/);
+});
+
 test('CDP version probe records HTTP response and connection errors',async()=>{
  const server=http.createServer((request,response)=>{assert.equal(request.url,'/json/version');response.writeHead(200,{'content-type':'application/json'});response.end('{"Browser":"test"}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

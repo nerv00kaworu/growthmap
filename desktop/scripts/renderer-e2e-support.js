@@ -1,5 +1,19 @@
 'use strict';
 function assertReadbackText(text,{summary,state,target}){for(const semantic of [summary,state,`target ${target}`,'digest aaaaaaaaaaaa','commits: ["abc123"]','files: ["src/feature.py"]','tests: [{"name":"packaged integration","status":"passed"}]','decisions: ["reuse strict v1 wire"]','risks: ["platform availability"]','todos: ["fresh review"]','evidence: [{"name":"diff","status":"verified","detail":"clean"}]'])if(!text.includes(semantic))throw Error(`agent-readback: ${summary} missing ${semantic}: ${text}`);return true;}
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function activateProjectForAgentPort(page,{projectId,projectName,rootTitle,timeout=30000}){
+ if(!projectId)throw Error('agent-port activation requires an imported project selection');
+ const projectSelector=page.getByRole('combobox',{name:'選擇專案'});
+ await projectSelector.selectOption({value:projectId});
+ await page.getByText(rootTitle,{exact:true}).first().waitFor({state:'visible',timeout});
+ if(await projectSelector.inputValue()!==projectId)throw Error(`agent-port activation selected the wrong project; expected ${projectName} (${projectId})`);
+ await page.getByTitle('更多操作').click();
+ const entry=page.getByTestId('agent-port-menu-entry');
+ await entry.waitFor({state:'visible',timeout});
+ const deadline=Date.now()+timeout;
+ while(Date.now()<deadline){if(await entry.isEnabled())return entry;await sleep(100);}
+ throw Error(`agent-port activation did not load the selected project root: ${projectName} (${projectId})`);
+}
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
 function launchArgs({userData,debugPort,logPath}){return [`--user-data-dir=${userData}`,`--remote-debugging-port=${debugPort}`,'--enable-logging',`--log-file=${logPath}`];}
 function processTree(rootPid){
@@ -37,4 +51,4 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
  return {metadata,config};
 }
-module.exports={assertReadbackText,launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
+module.exports={assertReadbackText,activateProjectForAgentPort,launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
