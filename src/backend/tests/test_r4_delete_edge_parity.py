@@ -2,13 +2,16 @@
 import os, subprocess, sys
 if os.environ.get("GROWTHMAP_DELETE_EDGE_CHILD") == "1":
     import asyncio,os,tempfile
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
     from datetime import datetime,timedelta,timezone
     os.environ['DATABASE_URL']=f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/delete-edge.db";os.environ['APP_ENV']='test';os.environ['GROWTHMAP_HUMAN_CONTROL_TOKEN']='human'
     from fastapi.testclient import TestClient
     from sqlalchemy import select
     from main import app
     from db.database import async_session
-    from models.models import ActionLog,Edge,Node
+    from models.models import ActionLog,AgentProposal,AgentReceipt,Edge,Node,Project
+    import agent_port.service as service
     H={'Authorization':'Bearer human'}
     def grant(c,p,**scope):
      x=c.post('/api/agent-port/grants',headers=H,json={'project_id':p,'permission':'write','expires_at':(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),'label':'d','agent_identity':'agent',**scope}).json();return {'Authorization':'Bearer '+x['token']}
@@ -38,6 +41,26 @@ if os.environ.get("GROWTHMAP_DELETE_EDGE_CHILD") == "1":
       for ops,code,key in (([op,op],'DUPLICATE_EDGE_DELETE','duplicate'),([{'op':'update_edge','edge_id':e['id'],'expected_revision':1,'fields':{'note':'x'}},op],'EDGE_DELETE_CONFLICT','mixed-key')):
        for reverse in (False,True):r=batch(c,h,p,key+str(reverse),list(reversed(ops)) if reverse else ops,pr);assert r.status_code==422 and r.json()['detail']['code']==code and c.get('/api/projects/'+p).json()['revision']==pr
       pc,_,_,_=mk(c,'child');ec=next(x for x in c.get('/api/projects/'+pc+'/edges').json() if x['relation_type']=='child_of');rev=c.get('/api/projects/'+pc).json()['revision'];assert c.request('DELETE','/api/edges/'+ec['id'],json={'expected_project_revision':rev,'expected_revision':ec['revision']}).status_code==400;assert batch(c,grant(c,pc),pc,'child-del',[{'op':'delete_edge','edge_id':ec['id'],'expected_revision':ec['revision']}],rev).status_code==422
+
+    async def state(p,eid,pid=None):
+     async with async_session() as db:
+      return await db.get(Project,p),await db.get(Edge,eid),(await db.execute(select(ActionLog).where(ActionLog.project_id==p,ActionLog.action_type=='graph_relation_deleted'))).scalars().all(),await db.get(AgentProposal,pid) if pid else None,(await db.execute(select(AgentReceipt).where(AgentReceipt.project_id==p))).scalars().all()
+
+    def test_proposal_rollback_mismatch_and_three_file_races():
+     with TestClient(app) as c:
+      # Proposal creation is no-write; approval applies. A stale approval remains pending without receipt.
+      p,a,b,e=mk(c,'proposal');rev=c.get('/api/projects/'+p).json()['revision'];ph=grant(c,p);op={'op':'delete_edge','edge_id':e['id'],'expected_revision':1};made=c.post('/agent/v1/proposals',headers=ph,json={'expected_project_revision':rev,'idempotency_key':'proposal-delete','title':'delete','operations':[op]});assert made.status_code==201;pid=made.json()['proposal_id'];pr,ed,ls,q,rs=asyncio.run(state(p,e['id'],pid));assert pr.revision==rev and ed and not ls and q.status=='pending';approved=c.post('/api/agent-port/proposals/'+pid+'/approve',headers=H,json={'review_note':'ok'});assert approved.status_code==200;pr,ed,ls,q,rs=asyncio.run(state(p,e['id'],pid));assert ed is None and pr.revision==rev+1 and len(ls)==1 and q.status=='approved'
+      p,a,b,e=mk(c,'proposal-stale');rev=c.get('/api/projects/'+p).json()['revision'];ph=grant(c,p);made=c.post('/agent/v1/proposals',headers=ph,json={'expected_project_revision':rev,'idempotency_key':'proposal-stale-delete','title':'delete','operations':[{'op':'delete_edge','edge_id':e['id'],'expected_revision':1}]});pid=made.json()['proposal_id'];c.patch('/api/edges/'+e['id'],json={'expected_project_revision':rev,'expected_revision':1,'note':'winner'});assert c.post('/api/agent-port/proposals/'+pid+'/approve',headers=H,json={'review_note':'stale'}).status_code==409;_,ed,ls,q,rs=asyncio.run(state(p,e['id'],pid));assert ed and q.status=='pending' and not ls and not [x for x in rs if x.idempotency_key=='proposal:'+pid]
+      # Changed payload under the same key is a stable mismatch.
+      p,a,b,e=mk(c,'mismatch');rev=c.get('/api/projects/'+p).json()['revision'];h=grant(c,p);op={'op':'delete_edge','edge_id':e['id'],'expected_revision':1};ok=batch(c,h,p,'delete-mismatch', [op],rev);assert ok.status_code==200;bad=batch(c,h,p,'delete-mismatch',[{**op,'expected_revision':2}],rev);assert bad.status_code==409 and bad.json()['detail']['code']=='IDEMPOTENCY_MISMATCH'
+      # Independent file-backed sessions race on the shared project CAS.
+      for round in range(3):
+       p,a,b,e=mk(c,'race'+str(round));rev=c.get('/api/projects/'+p).json()['revision'];h=grant(c,p);bar=Barrier(2)
+       def gui():bar.wait();return c.request('DELETE','/api/edges/'+e['id'],json={'expected_project_revision':rev,'expected_revision':1})
+       def agent():bar.wait();return batch(c,h,p,'delete-race-'+str(round),[{'op':'delete_edge','edge_id':e['id'],'expected_revision':1}],rev)
+       with ThreadPoolExecutor(max_workers=2) as pool:r1,r2=pool.submit(gui),pool.submit(agent);responses=[r1.result(),r2.result()]
+       assert sorted(x.status_code for x in responses)==[200,409] or sorted(x.status_code for x in responses)==[204,409]
+       pr,ed,ls,_,_=asyncio.run(state(p,e['id']));assert pr.revision==rev+1 and ed is None and len(ls)==1
 else:
     def test_delete_edge_shared_acceptance_isolated():
         env={**os.environ,"GROWTHMAP_DELETE_EDGE_CHILD":"1","PYTHONPATH":os.path.dirname(os.path.dirname(__file__)),"APP_ENV":"test","GROWTHMAP_HUMAN_CONTROL_TOKEN":"human"}

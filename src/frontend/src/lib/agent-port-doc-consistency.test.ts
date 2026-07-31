@@ -13,5 +13,5 @@ test("content-block and edge-update capabilities and shared/deferred documentati
   assert.match(docs, /update-content-block, and delete-content-block are shared/);
   assert.doesNotMatch(docs, /update\/delete edge\/block/);
   assert.match(docs, /P0 `update_edge` is restricted/);
-  assert.match(docs, /`delete_edge` and full graph\/context/);
+  assert.match(docs, /P0 `delete_edge` accepts only pre-existing non-`child_of` relations/);
 });
