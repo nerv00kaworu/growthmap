@@ -1,0 +1,2 @@
+# Trust material hashes exact bytes; never rewrite line endings on checkout.
+src/backend/desktop/license_public_key.pem -text

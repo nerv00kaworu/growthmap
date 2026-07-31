@@ -27,6 +27,7 @@ test('license import and extraction-to-trial transitions revalidate authoritativ
  assert.match(hook,/onChanged\(\(\) =>/);assert.match(hook,/api\.getEntitlement\(\)/);
  assert.doesNotMatch(hook,/setInterval|setTimeout/);
 });
+test('production license key is exact-byte checkout material with its pinned hash',()=>{const attrs=fs.readFileSync(path.resolve(__dirname,'../../.gitattributes'),'utf8'),config=require('../commercial-config.json'),key=fs.readFileSync(path.resolve(__dirname,'../../src/backend/desktop/license_public_key.pem'));assert.match(attrs,/src\/backend\/desktop\/license_public_key\.pem -text/);assert.equal(require('node:crypto').createHash('sha256').update(key).digest('hex'),config.licensePublicKeySha256);});
 test('production package verifier uses a CRLF fixture and checks actual ASAR/resource boundaries',()=>{
  const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/verify-production-asar.ps1'),'utf8');
  const fixture=JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/fixtures/production-package-layout.json'),'utf8'));
