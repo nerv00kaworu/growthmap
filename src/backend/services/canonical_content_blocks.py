@@ -56,6 +56,22 @@ class ValidatedUpdateContentBlock:
     changes: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class DeleteContentBlockInput:
+    project_id: str
+    block_id: str
+    actor_type: str
+    actor_id: str | None
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ValidatedDeleteContentBlock:
+    data: DeleteContentBlockInput
+    block: ContentBlock
+    node: Node
+
+
 def _safe_provenance(value: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key in ("entry", "operation_index"):
@@ -95,6 +111,37 @@ async def validate_update_content_block(
     if unknown:
         raise HTTPException(422, {"code": "INVALID_CONTENT_BLOCK_UPDATE", "message": "Unknown or immutable fields"})
     return ValidatedUpdateContentBlock(data, block, node, deepcopy(data.changes))
+
+
+async def validate_delete_content_block(
+    db: AsyncSession, data: DeleteContentBlockInput
+) -> ValidatedDeleteContentBlock:
+    block = await db.get(ContentBlock, data.block_id)
+    if not block:
+        raise HTTPException(404, "Block not found")
+    node = await db.get(Node, block.node_id)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    if node.project_id != data.project_id:
+        raise HTTPException(422, {"code": "INVALID_REFERENCE", "message": "Block owner must exist in project"})
+    return ValidatedDeleteContentBlock(data, block, node)
+
+
+async def apply_delete_content_block(
+    db: AsyncSession, validated: ValidatedDeleteContentBlock, *, touched: TouchedEntities
+) -> None:
+    """Stage deletion, owner touch, and IDs-only history; never commits."""
+    data, block, node = validated.data, validated.block, validated.node
+    payload: dict[str, Any] = {"block_id": block.id, "node_id": node.id}
+    provenance = _safe_provenance(data.provenance)
+    if provenance:
+        payload["provenance"] = provenance
+    db.add(ActionLog(project_id=data.project_id, node_id=node.id,
+                     actor_type=data.actor_type, actor_id=data.actor_id,
+                     action_type="delete_content_block", payload=payload))
+    touched.add(node)
+    await db.delete(block)
+    await db.flush()
 
 
 async def apply_update_content_block(

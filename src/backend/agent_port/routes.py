@@ -76,7 +76,7 @@ def require(grant,permission):
     if PERMISSIONS[grant.permission]<PERMISSIONS[permission]: raise HTTPException(403,{"code":"PERMISSION_DENIED","message":f"{permission} permission required"})
 
 @router.get("/capabilities",dependencies=[Depends(local_limit)])
-async def capabilities(): return {"protocol":"growthmap-agent-port","version":"1.0","auth":"bearer","provider_neutral":True,"limits":{"request_bytes":1048576,"operations_per_batch":50,"requests_per_minute":120},"permissions":["read","propose","write"],"operations":["create_node","update_node","create_edge","create_content_block","update_content_block","create_branch"],"endpoints":["project","graph","context","proposals","batch","events","readbacks"]}
+async def capabilities(): return {"protocol":"growthmap-agent-port","version":"1.0","auth":"bearer","provider_neutral":True,"limits":{"request_bytes":1048576,"operations_per_batch":50,"requests_per_minute":120},"permissions":["read","propose","write"],"operations":["create_node","update_node","create_edge","create_content_block","update_content_block","delete_content_block","create_branch"],"endpoints":["project","graph","context","proposals","batch","events","readbacks"]}
 
 @router.get("/project")
 async def project_read(grant=Depends(auth),db:AsyncSession=Depends(get_db)):

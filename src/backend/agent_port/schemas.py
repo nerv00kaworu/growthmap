@@ -83,12 +83,18 @@ class UpdateBlock(Strict):
     expected_revision: Annotated[int,Field(ge=1)]
     expected_node_revision: Annotated[int,Field(ge=1)]
     fields: BlockFields
+class DeleteBlock(Strict):
+    op: Literal["delete_content_block"]
+    block_id: Id
+    expected_revision: Annotated[int,Field(ge=1)]
+    expected_node_revision: Annotated[int,Field(ge=1)]
+
 class CreateBranch(Strict):
     op: Literal["create_branch"]; id: Id|None=None; source_node_id: Id
     expected_source_revision: Annotated[int,Field(ge=1)]
     name: Annotated[str,Field(min_length=1,max_length=255)]; description: Annotated[str,Field(max_length=4000)]=""
 
-Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,UpdateBlock,CreateBranch],Field(discriminator="op")]
+Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,UpdateBlock,DeleteBlock,CreateBranch],Field(discriminator="op")]
 OperationList=Annotated[list[Operation],Field(min_length=1,max_length=50)]
 
 class Batch(Strict):

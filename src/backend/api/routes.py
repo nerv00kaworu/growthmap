@@ -29,7 +29,8 @@ from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
-    apply_update_content_block, finalize_content_block_maturity)
+    apply_update_content_block, DeleteContentBlockInput, validate_delete_content_block,
+    apply_delete_content_block, finalize_content_block_maturity)
 from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
@@ -1116,11 +1117,16 @@ async def delete_block(block_id: str, data: NodeEntityRevisionRequest, db: Async
     node = await db.get(Node, block.node_id)
     if not node:
         raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    spec = DeleteContentBlockInput(project_id=node.project_id, block_id=block_id,
+        actor_type="human", actor_id=None, provenance={"entry": "gui_rest"})
+    validated = await validate_delete_content_block(db, spec)
     check_entity_revision(block, data.expected_revision, kind="block")
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    bump_existing(node)
-    await db.delete(block)
+    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    touched = TouchedEntities()
+    await apply_delete_content_block(db, validated, touched=touched)
+    await finalize_content_block_maturity(db, {node.id}, touched=touched)
+    touched.apply()
     await db.commit()
 
 

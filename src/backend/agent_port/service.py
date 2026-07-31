@@ -14,7 +14,9 @@ from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
-    apply_update_content_block, finalize_content_block_maturity)
+    apply_update_content_block, DeleteContentBlockInput,
+    validate_delete_content_block, apply_delete_content_block,
+    finalize_content_block_maturity)
 from services.revisions import TouchedEntities
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
@@ -112,6 +114,8 @@ async def validate_operations(db,grant,operations):
             conflict("Entity revision is stale",entity_id=n.id if isinstance(n,Node) else n["id"],expected=expected,current=current,field=field)
     edge_keys=set((await db.execute(select(Edge.from_node_id,Edge.to_node_id,Edge.relation_type).where(
         Edge.project_id==project_id))).all())
+    created_block_ids={op["id"] for op in normalized if op["op"]=="create_content_block"}
+    deleted_block_ids=set()
     for op in normalized:
         kind=op["op"]
         refs=[]
@@ -160,6 +164,19 @@ async def validate_operations(db,grant,operations):
             if op["expected_revision"]!=block.revision: conflict("Entity revision is stale",entity_id=block.id,expected=op["expected_revision"],current=block.revision)
             check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
             if not op["fields"]: raise HTTPException(422,{"code":"INVALID_CONTENT_BLOCK_UPDATE","message":"update_content_block fields cannot be empty"})
+        elif kind=="delete_content_block":
+            if op["block_id"] in created_block_ids:
+                raise HTTPException(422,{"code":"NEW_BLOCK_DELETE_UNSUPPORTED","message":"delete_content_block supports pre-existing blocks only"})
+            if op["block_id"] in deleted_block_ids:
+                raise HTTPException(422,{"code":"DUPLICATE_CONTENT_BLOCK_DELETE","message":"Content block may be deleted only once per batch"})
+            deleted_block_ids.add(op["block_id"])
+            block=await db.get(ContentBlock,op["block_id"])
+            if not block: raise HTTPException(404,"Block not found")
+            n=known.get(block.node_id)
+            if not n: raise HTTPException(404,"Node not found")
+            refs.append(n.id)
+            if op["expected_revision"]!=block.revision: conflict("Entity revision is stale",entity_id=block.id,expected=op["expected_revision"],current=block.revision)
+            check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
         elif kind=="create_branch":
             n=node_ref(op["source_node_id"]);refs.append(op["source_node_id"])
             check_ref_revision(n,op["expected_source_revision"],"expected_source_revision")
@@ -191,7 +208,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             remember(op["from_node_id"],op["expected_from_revision"],"expected_from_revision")
             remember(op["to_node_id"],op["expected_to_revision"],"expected_to_revision")
         elif kind=="create_content_block": remember(op["node_id"],op["expected_node_revision"],"expected_node_revision")
-        elif kind=="update_content_block":
+        elif kind in {"update_content_block","delete_content_block"}:
             remember(op["block_id"],op["expected_revision"],"expected_revision")
             block=await db.get(ContentBlock,op["block_id"])
             if block: remember(block.node_id,op["expected_node_revision"],"expected_node_revision")
@@ -235,7 +252,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
         elif kind=="create_node" and op.get("parent_id"): touched_node_ids.add(op["parent_id"])
         elif kind=="create_edge": touched_node_ids.update((op["from_node_id"],op["to_node_id"]))
         elif kind=="create_content_block": touched_node_ids.add(op["node_id"])
-        elif kind=="update_content_block":
+        elif kind in {"update_content_block","delete_content_block"}:
             block=await db.get(ContentBlock,op["block_id"])
             if block: touched_node_ids.add(block.node_id)
     touched_node_ids &= existing_node_ids
@@ -250,7 +267,8 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
                               if op["op"] == "update_node" and "maturity" in op["fields"]}
     content_block_owner_ids={op["node_id"] for op in ops
                              if op["op"] == "create_content_block"}
-    existing_block_ids={op["block_id"] for op in ops if op["op"] == "update_content_block"}
+    existing_block_ids={op["block_id"] for op in ops
+                        if op["op"] in {"update_content_block","delete_content_block"}}
     existing_blocks={b.id:b for b in (await db.execute(select(ContentBlock).where(
         ContentBlock.id.in_(existing_block_ids)))).scalars().all()} if existing_block_ids else {}
     content_block_owner_ids.update(b.node_id for b in existing_blocks.values())
@@ -303,6 +321,15 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":b.revision}
             result_entities[op_index]=b
             result_owner_entities[op_index]=validated.node
+        elif kind=="delete_content_block":
+            identity=actor or grant.agent_identity
+            spec=DeleteContentBlockInput(project_id=project.id,block_id=op["block_id"],
+                actor_type="human" if actor else "agent",actor_id=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_delete_content_block(db,spec)
+            await apply_delete_content_block(db,validated,touched=canonical_touched)
+            ordered_results[op_index]={"op":kind,"id":op["block_id"]}
+            result_owner_entities[op_index]=validated.node
         else:
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
@@ -317,9 +344,9 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     # a node created earlier in the batch later becomes a parent or is updated.
     for index, entity in result_entities.items():
         ordered_results[index]["revision"]=entity.revision or 1
-        if index in result_owner_entities:
-            ordered_results[index]["node_id"]=result_owner_entities[index].id
-            ordered_results[index]["node_revision"]=result_owner_entities[index].revision or 1
+    for index, owner in result_owner_entities.items():
+        ordered_results[index]["node_id"]=owner.id
+        ordered_results[index]["node_revision"]=owner.revision or 1
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))
