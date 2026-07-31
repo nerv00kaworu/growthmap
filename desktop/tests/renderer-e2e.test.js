@@ -17,16 +17,19 @@ test('packaged E2E keeps import input outside the fresh profile and verifies tri
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
 });
 
-test('import polling tolerates only the sidecar replacement window',()=>{
+test('import waits for production reload and authenticated replacement lifecycle',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- const start=source.indexOf("stageWait(run,'import'");
- const end=source.indexOf("await run.page.getByTestId('desktop-settings-button').click()",start);
+ const start=source.indexOf("const oldSessionRequest");
+ const end=source.indexOf("const agentPortEntry",start);
  const block=source.slice(start,end);
- assert.match(block,/if\(response\.ok\)\{await response\.json\(\);return false;\}/);
- assert.match(block,/response\.status>=400&&response\.status<500/);
- assert.match(block,/catch\{\}return false/);
- assert.doesNotMatch(block,/projects fetch .*error|catch\(error\)\{return \{error/);
- assert.match(block,/資料庫操作失敗|原有資料未變更/);
+ assert.match(block,/waitForEvent\('domcontentloaded'/);
+ assert.match(block,/import-rebootstrap/);
+ assert.match(block,/new-session projects HTTP/);
+ assert.match(block,/new-session subtree HTTP/);
+ assert.match(block,/retired projects=401/);
+ assert.match(block,/current projects=200/);
+ assert.match(block,/post-import-fresh-trial/);
+ assert.doesNotMatch(block,/force:\s*true|removeAttribute\(['"]disabled|document\.cookie|sessionStorage|localStorage|Authorization/);
 });
 
 test('packaged Agent Port fixture and harness semantically assert selectable current/stale implementation evidence',()=>{

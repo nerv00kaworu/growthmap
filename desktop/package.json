@@ -41,6 +41,7 @@
       "lifecycle.js",
       "database-manager.js",
       "request-policy.js",
+      "session-authority.js",
       "update-policy.js",
       "updater.js",
       "update-recovery.js",
