@@ -38,6 +38,16 @@ Open PayPal independently. Match the submitted transaction ID, Goods & Services/
 
 Use the issuer tool on a trusted offline/operator machine. The Ed25519 private key, settlement MAC key and checkpoint must live outside the repository/workspace and must never be pasted into chat, logged, bundled, emailed, or copied into the desktop database. Confirming an order atomically allocates the next sale ordinal and signs the License JSON. Deliver only the License JSON and retain the recovery code through a private channel.
 
+The approved local operator paths for this installation are:
+
+- Private signing key: `~/.local/share/growthmap-secrets/license-signing-private.pem` (mode 0600)
+- Public signing key backup: `~/.local/share/growthmap-secrets/license-signing-public.pem`
+- Settlement MAC key: `~/.local/share/growthmap-secrets/settlement-mac-key.bin` (mode 0600)
+- Production ledger: `~/.local/share/growthmap-secrets/manual-payments.sqlite`
+- External authenticated checkpoint: `~/.local/share/growthmap-secrets/manual-payments.checkpoint.json`
+
+The packaged public key SHA-256 is `1b2050b8b416261e54d748b752f3e8aa6d4c30276378a5ea77dc07ab7d18fab6`. Before every issuance session, verify this hash against `src/backend/desktop/license_public_key.pem`. The production ledger/checkpoint are intentionally not initialized by a smoke test; the first real order creates them together under the issuer service's fail-closed checkpoint protocol.
+
 ## Refunds and revocation
 
 Never delete ledger evidence. Record refund/chargeback, issue the signed revocation assertion, and deliver/import it or make it available at the next authenticated check-in. Offline copies remain usable until they receive verified revocation/check-in evidence; this limitation must be disclosed.

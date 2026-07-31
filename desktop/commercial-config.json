@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
   "productMajor": 1,
-  "licensePublicKeyResource": "commercial/REPLACE_WITH_PRODUCTION_PUBLIC_KEY.pem",
-  "licensePublicKeySha256": "REPLACE_WITH_PRODUCTION_PUBLIC_KEY_SHA256",
+  "licensePublicKeyResource": "commercial/license_public_key.pem",
+  "licensePublicKeySha256": "1b2050b8b416261e54d748b752f3e8aa6d4c30276378a5ea77dc07ab7d18fab6",
   "paymentApiOrigin": "",
   "purchasePortalOrigin": "",
   "purchasePortalUrl": "",
