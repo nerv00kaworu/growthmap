@@ -71,7 +71,7 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
     )
 
 
-def test_e2e_fixture_serves_root_subtree_through_real_api(tmp_path):
+def test_e2e_fixture_serves_root_subtree_and_agent_activity_through_real_api(tmp_path):
     fixture = tmp_path / "fixture.sqlite"
     subprocess.run([sys.executable, str(SCRIPT), str(fixture)], check=True)
     backend = Path(__file__).resolve().parents[1]
@@ -84,6 +84,13 @@ with TestClient(app) as client:
     body = response.json()
     assert body['id'] == '22222222-2222-4222-8222-222222222222'
     assert body['project_id'] == '11111111-1111-4111-8111-111111111111'
+    activity = client.get('/api/agent-port/activity?project_id=11111111-1111-4111-8111-111111111111')
+    assert activity.status_code == 200, activity.text
+    payload = activity.json()
+    assert payload['proposals'] == []
+    assert payload['events'] == []
+    assert len(payload['readbacks']) == 2
+    assert {row['summary'] for row in payload['readbacks']} == {'Packaged current implementation', 'Packaged stale implementation'}
 """
     env = dict(__import__('os').environ)
     env['DATABASE_URL'] = f"sqlite+aiosqlite:///{fixture}"
