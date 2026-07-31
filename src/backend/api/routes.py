@@ -25,7 +25,7 @@ from services.canonical_nodes import CreateNodeInput, validate_create_node, appl
 from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
     validate_update_node, apply_update_node)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
-    apply_create_edge)
+    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -768,22 +768,29 @@ async def update_edge(edge_id: str, data: EdgeUpdate, db: AsyncSession = Depends
         raise HTTPException(404, "Edge not found")
     if edge.relation_type == "child_of":
         raise HTTPException(400, "Tree parent relations cannot be edited as graph relations")
-    await claim_project_revision(db, edge.project_id, data.expected_project_revision)
-    check_entity_revision(edge, data.expected_revision, kind="edge")
     values = data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_revision"})
     if not values:
         raise HTTPException(400, "No edge fields provided")
+    if any(value is None for value in values.values()):
+        raise HTTPException(400, "Edge fields cannot be null")
     if "weight" in values and not 0 <= values["weight"] <= 1:
         raise HTTPException(400, "Weight must be between 0 and 1")
     if "note" in values and len(values["note"]) > 2000:
         raise HTTPException(400, "Note is too long")
-    for key, value in values.items():
-        setattr(edge, key, value)
-    bump_existing(edge)
-    db.add(ActionLog(project_id=edge.project_id, node_id=edge.from_node_id, actor_type="human", action_type="graph_relation_updated", payload={"edge_id": edge.id, "changes": values}))
+    spec = UpdateEdgeInput(project_id=edge.project_id, edge_id=edge.id, changes=values,
+        actor_type="human", actor_id=None, provenance={"entry": "gui_rest"})
+    validated = await validate_update_edge(db, spec)
+    await claim_project_revision(db, edge.project_id, data.expected_project_revision)
+    check_entity_revision(edge, data.expected_revision, kind="edge")
+    touched = TouchedEntities()
+    edge = await apply_update_edge(db, validated, touched=touched)
+    touched.apply()
     await db.commit()
     await db.refresh(edge)
-    return edge
+    return EdgeOut.model_validate(edge).model_copy(update={
+        "authoritative_project_revision": data.expected_project_revision + 1,
+        "authoritative_edge_revision": edge.revision,
+    })
 
 
 @router.post("/edges/{edge_id}/promote-mainline", response_model=EdgeOut)

@@ -76,6 +76,7 @@ export interface Edge {
   created_at: string;
   revision: number;
   authoritative_project_revision?: number;
+  authoritative_edge_revision?: number;
   authoritative_from_revision?: number;
   authoritative_to_revision?: number;
   touched_edge_revisions?: Record<string, number>;

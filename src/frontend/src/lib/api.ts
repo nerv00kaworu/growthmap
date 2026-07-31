@@ -129,9 +129,10 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const value = await res.json() as T;
   const row = value && typeof value === "object" ? value as Record<string, unknown> : undefined;
   const isBlockPatch = options?.method === "PATCH" && path.startsWith("/blocks/");
-  if (!isBlockPatch || (typeof row?.authoritative_project_revision === "number" &&
+  const isEdgePatch = options?.method === "PATCH" && path.startsWith("/edges/");
+  if (!isEdgePatch && (!isBlockPatch || (typeof row?.authoritative_project_revision === "number" &&
       typeof row?.authoritative_node_revision === "number" &&
-      typeof row?.authoritative_block_revision === "number")) remember(value);
+      typeof row?.authoritative_block_revision === "number"))) remember(value);
   return value;
 }
 
@@ -246,9 +247,29 @@ export const api = {
   },
   updateNode: (nodeId: string, data: Partial<GNode> & { expected_project_revision?: number; expected_revision?: number }) =>
     request<GNode>(`/nodes/${nodeId}`, { method: "PATCH", body: JSON.stringify({ ...nodeExpected(nodeId), ...data }) }),
-  updateEdge: (edgeId: string, data: { expected_project_revision?: number; expected_revision?: number; weight?: number; note?: string }) => {
+  updateEdge: async (edgeId: string, data: { expected_project_revision?: number; expected_revision?: number; weight?: number; note?: string }) => {
     const edge = revisionCache.edges.get(edgeId); if (!edge) throw new Error("Edge revision unavailable; refresh and retry");
-    return request<Edge>(`/edges/${edgeId}`, { method: "PATCH", body: JSON.stringify({ expected_project_revision: projectExpected(edge.projectId), expected_revision: edge.revision, ...data }) });
+    const expectedProject = projectExpected(edge.projectId);
+    const fields: { weight?: number; note?: string } = {};
+    if (data.weight !== undefined) fields.weight = data.weight;
+    if (data.note !== undefined) fields.note = data.note;
+    const value = await request<Edge>(`/edges/${edgeId}`, { method: "PATCH", body: JSON.stringify({
+      ...fields, expected_project_revision: expectedProject, expected_revision: edge.revision,
+    }) });
+    const projectRevision = value.authoritative_project_revision;
+    const edgeRevision = value.authoritative_edge_revision;
+    if (projectRevision === expectedProject + 1 && edgeRevision === edge.revision + 1 &&
+        value.id === edgeId && value.project_id === edge.projectId && value.revision === edgeRevision) {
+      const currentEdge = revisionCache.edges.get(edgeId);
+      if (revisionCache.projects.get(edge.projectId) === expectedProject &&
+          currentEdge?.projectId === edge.projectId && currentEdge.revision === edge.revision) {
+        revisionCache.projects.set(edge.projectId, projectRevision);
+        revisionCache.edges.set(edgeId, { projectId: edge.projectId, revision: edgeRevision });
+      } else {
+        revisionCache.projects.delete(edge.projectId); revisionCache.edges.delete(edgeId);
+      }
+    }
+    return value;
   },
   deleteEdge: (edgeId: string, expectedProjectRevision?: number, expectedRevision?: number) => {
     const edge = revisionCache.edges.get(edgeId); if (!edge) throw new Error("Edge revision unavailable; refresh and retry");

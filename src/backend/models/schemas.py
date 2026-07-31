@@ -201,6 +201,8 @@ class EdgeUpdate(BaseModel):
     weight: Optional[float] = None
     note: Optional[str] = None
 
+    model_config = {"extra": "forbid"}
+
 
 class EdgeOut(BaseModel):
     id: str
@@ -214,6 +216,7 @@ class EdgeOut(BaseModel):
     created_at: datetime
     revision: int = 1
     authoritative_project_revision: Optional[int] = None
+    authoritative_edge_revision: Optional[int] = None
     authoritative_from_revision: Optional[int] = None
     authoritative_to_revision: Optional[int] = None
     touched_edge_revisions: dict[str, int] = Field(default_factory=dict)

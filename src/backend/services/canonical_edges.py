@@ -1,9 +1,10 @@
-"""Entry-point-neutral canonical edge creation.
+"""Entry-point-neutral canonical edge creation and metadata updates.
 
 Adapters own authorization, vocabulary/field bounds, project/entity CAS,
-idempotency, commit and rollback.  This module owns canonical validation, rows,
-endpoint/sibling touches and per-edge history.
+idempotency, commit and rollback. This module owns canonical validation, rows,
+touches and sanitized per-edge history.
 """
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,23 @@ class ValidatedCreateEdge:
     data: CreateEdgeInput
     from_node: Node
     to_node: Node
+
+
+@dataclass(frozen=True)
+class UpdateEdgeInput:
+    project_id: str
+    edge_id: str
+    changes: dict[str, Any]
+    actor_type: str = "human"
+    actor_id: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ValidatedUpdateEdge:
+    data: UpdateEdgeInput
+    edge: Edge
+    changes: dict[str, Any]
 
 
 def _safe_provenance(value: dict[str, Any]) -> dict[str, Any]:
@@ -127,3 +145,44 @@ async def apply_create_edge(
                      actor_id=d.actor_id if d.actor_id is not None else null(),
                      action_type="graph_relation_created", payload=payload))
     return edge, siblings
+
+
+async def validate_update_edge(db: AsyncSession, data: UpdateEdgeInput) -> ValidatedUpdateEdge:
+    edge = await db.get(Edge, data.edge_id)
+    if not edge:
+        raise HTTPException(404, "Edge not found")
+    if edge.project_id != data.project_id:
+        raise HTTPException(404, "Edge not found")
+    if edge.relation_type == "child_of":
+        raise HTTPException(400, "Tree parent relations cannot be edited as graph relations")
+    changes = deepcopy(data.changes)
+    if not changes:
+        raise HTTPException(400, "No edge fields provided")
+    unknown = sorted(set(changes) - {"weight", "note"})
+    if unknown:
+        raise HTTPException(422, {"code": "INVALID_EDGE_UPDATE", "message": "Only weight and note may be updated", "fields": unknown})
+    return ValidatedUpdateEdge(data=data, edge=edge, changes=changes)
+
+
+async def apply_update_edge(
+    db: AsyncSession, validated: ValidatedUpdateEdge, *, touched: TouchedEntities
+) -> Edge:
+    d, edge = validated.data, validated.edge
+    for key, value in validated.changes.items():
+        setattr(edge, key, deepcopy(value))
+    touched.add(edge)
+    payload: dict[str, Any] = {
+        "edge_id": edge.id,
+        "from_node_id": edge.from_node_id,
+        "to_node_id": edge.to_node_id,
+        "changed_fields": sorted(validated.changes),
+    }
+    provenance = _safe_provenance(d.provenance)
+    if provenance:
+        payload["provenance"] = provenance
+    db.add(ActionLog(project_id=d.project_id, node_id=edge.from_node_id,
+                     actor_type=d.actor_type,
+                     actor_id=d.actor_id if d.actor_id is not None else null(),
+                     action_type="graph_relation_updated", payload=payload))
+    await db.flush()
+    return edge

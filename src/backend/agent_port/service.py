@@ -10,7 +10,7 @@ from services.canonical_nodes import CreateNodeInput, validate_create_node, appl
 from services.canonical_node_updates import (UpdateNodeInput, validate_update_node,
     apply_update_node, finalize_update_maturity)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
-    apply_create_edge)
+    apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -81,7 +81,7 @@ async def validate_operations(db,grant,operations):
         # Proposal persistence from older builds materialized omitted optional
         # NodeFields as null. Wire-level explicit null is rejected by Pydantic;
         # discard only this trusted legacy representation here.
-        if op.get("op") in {"update_node", "update_content_block"} and isinstance(op.get("fields"), dict):
+        if op.get("op") in {"update_node", "update_edge", "update_content_block"} and isinstance(op.get("fields"), dict):
             op["fields"] = {key: value for key, value in op["fields"].items() if value is not None}
         if op["op"].startswith("create_"):
             oid=op.get("id") or str(uuid.uuid4());op["id"]=oid
@@ -114,6 +114,10 @@ async def validate_operations(db,grant,operations):
             conflict("Entity revision is stale",entity_id=n.id if isinstance(n,Node) else n["id"],expected=expected,current=current,field=field)
     edge_keys=set((await db.execute(select(Edge.from_node_id,Edge.to_node_id,Edge.relation_type).where(
         Edge.project_id==project_id))).all())
+    created_edge_ids={op["id"] for op in normalized if op["op"]=="create_edge"}
+    updated_edge_ids={op["edge_id"] for op in normalized if op["op"]=="update_edge"}
+    if created_edge_ids & updated_edge_ids:
+        raise HTTPException(422,{"code":"NEW_EDGE_UPDATE_UNSUPPORTED","message":"update_edge supports pre-existing edges only"})
     created_block_ids={op["id"] for op in normalized if op["op"]=="create_content_block"}
     block_operation_kinds={}
     delete_counts={}
@@ -163,6 +167,13 @@ async def validate_operations(db,grant,operations):
             if edge_key in edge_keys:raise HTTPException(409,{"code":"DUPLICATE_RELATION","message":"Duplicate relation"})
             edge_keys.add(edge_key)
             if op["relation_type"]=="child_of" and node_branch(a)!=node_branch(b):raise HTTPException(422,{"code":"BRANCH_MISMATCH","message":"Containment endpoints must share branch"})
+        elif kind=="update_edge":
+            edge=await db.get(Edge,op["edge_id"])
+            if not edge or edge.project_id!=project_id: raise HTTPException(404,"Edge not found")
+            if edge.relation_type=="child_of": raise HTTPException(422,{"code":"INVALID_EDGE_UPDATE","message":"Containment edges are immutable"})
+            refs += [edge.from_node_id,edge.to_node_id]
+            if op["expected_revision"]!=edge.revision: conflict("Entity revision is stale",entity_id=edge.id,expected=op["expected_revision"],current=edge.revision)
+            if not op["fields"]: raise HTTPException(422,{"code":"INVALID_EDGE_UPDATE","message":"update_edge fields cannot be empty"})
         elif kind=="create_content_block":
             n=node_ref(op["node_id"]);refs.append(op["node_id"])
             check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
@@ -211,6 +222,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     for op in ops:
         kind=op["op"]
         if kind=="update_node": remember(op["node_id"],op["expected_revision"],"expected_revision")
+        elif kind=="update_edge": remember(op["edge_id"],op["expected_revision"],"expected_revision")
         elif kind=="create_node" and op.get("parent_id"): remember(op["parent_id"],op["expected_parent_revision"],"expected_parent_revision")
         elif kind=="create_edge":
             remember(op["from_node_id"],op["expected_from_revision"],"expected_from_revision")
@@ -309,6 +321,15 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             e,_=await apply_create_edge(db,validated,touched=canonical_touched,
                 touch_endpoint_ids=existing_node_ids)
             ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
+        elif kind=="update_edge":
+            identity=actor or grant.agent_identity
+            spec=UpdateEdgeInput(project_id=project.id,edge_id=op["edge_id"],
+                changes=op["fields"],actor_type="human" if actor else "agent",actor_id=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_update_edge(db,spec)
+            e=await apply_update_edge(db,validated,touched=canonical_touched)
+            ordered_results[op_index]={"op":kind,"id":e.id,"revision":e.revision}
+            result_entities[op_index]=e
         elif kind=="create_content_block":
             identity=actor or grant.agent_identity
             spec=CreateContentBlockInput(project_id=project.id,node_id=op["node_id"],
