@@ -115,7 +115,20 @@ async def validate_operations(db,grant,operations):
     edge_keys=set((await db.execute(select(Edge.from_node_id,Edge.to_node_id,Edge.relation_type).where(
         Edge.project_id==project_id))).all())
     created_block_ids={op["id"] for op in normalized if op["op"]=="create_content_block"}
-    deleted_block_ids=set()
+    block_operation_kinds={}
+    delete_counts={}
+    for op in normalized:
+        if op["op"] in {"update_content_block","delete_content_block"}:
+            block_operation_kinds.setdefault(op["block_id"],set()).add(op["op"])
+        if op["op"]=="delete_content_block":
+            delete_counts[op["block_id"]]=delete_counts.get(op["block_id"],0)+1
+    for block_id,count in delete_counts.items():
+        if block_id in created_block_ids:
+            raise HTTPException(422,{"code":"NEW_BLOCK_DELETE_UNSUPPORTED","message":"delete_content_block supports pre-existing blocks only"})
+        if count>1:
+            raise HTTPException(422,{"code":"DUPLICATE_CONTENT_BLOCK_DELETE","message":"Content block may be deleted only once per batch"})
+        if block_operation_kinds[block_id]=={"update_content_block","delete_content_block"}:
+            raise HTTPException(422,{"code":"CONTENT_BLOCK_DELETE_CONFLICT","message":"Content block cannot be updated and deleted in one batch"})
     for op in normalized:
         kind=op["op"]
         refs=[]
@@ -165,11 +178,6 @@ async def validate_operations(db,grant,operations):
             check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
             if not op["fields"]: raise HTTPException(422,{"code":"INVALID_CONTENT_BLOCK_UPDATE","message":"update_content_block fields cannot be empty"})
         elif kind=="delete_content_block":
-            if op["block_id"] in created_block_ids:
-                raise HTTPException(422,{"code":"NEW_BLOCK_DELETE_UNSUPPORTED","message":"delete_content_block supports pre-existing blocks only"})
-            if op["block_id"] in deleted_block_ids:
-                raise HTTPException(422,{"code":"DUPLICATE_CONTENT_BLOCK_DELETE","message":"Content block may be deleted only once per batch"})
-            deleted_block_ids.add(op["block_id"])
             block=await db.get(ContentBlock,op["block_id"])
             if not block: raise HTTPException(404,"Block not found")
             n=known.get(block.node_id)

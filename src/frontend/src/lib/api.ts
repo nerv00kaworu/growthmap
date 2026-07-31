@@ -155,6 +155,27 @@ function blockExpected(blockId: string) {
   return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
 }
 
+function applySuccessfulBlockDelete(blockId: string, nodeId: string, projectId: string, expected: {
+  expected_project_revision: number; expected_node_revision: number; expected_revision: number;
+}): void {
+  const projectRevision = revisionCache.projects.get(projectId);
+  const node = revisionCache.nodes.get(nodeId);
+  const block = revisionCache.blocks.get(blockId);
+  if (projectRevision === expected.expected_project_revision &&
+      node?.projectId === projectId && node.revision === expected.expected_node_revision &&
+      block?.nodeId === nodeId && block.revision === expected.expected_revision) {
+    revisionCache.projects.set(projectId, expected.expected_project_revision + 1);
+    revisionCache.nodes.set(nodeId, { projectId, revision: expected.expected_node_revision + 1 });
+    revisionCache.blocks.delete(blockId);
+    return;
+  }
+  // A concurrent read/write changed the snapshot while DELETE was in flight.
+  // Invalidate the coupled entries instead of overwriting newer truth.
+  revisionCache.projects.delete(projectId);
+  revisionCache.nodes.delete(nodeId);
+  revisionCache.blocks.delete(blockId);
+}
+
 
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
 import type { Entitlement } from "./entitlement";
@@ -265,9 +286,19 @@ export const api = {
   },
   updateBlock: (blockId: string, data: { content?: unknown; block_type?: string; order_index?: number }) =>
     request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...data, ...blockExpected(blockId) }) }),
-  deleteBlock: (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
-    const expected = blockExpected(blockId);
-    return request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify({ ...expected, expected_project_revision: expectedProjectRevision ?? expected.expected_project_revision, expected_node_revision: expectedNodeRevision ?? expected.expected_node_revision, expected_revision: expectedRevision ?? expected.expected_revision }) });
+  deleteBlock: async (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
+    const cachedBlock = revisionCache.blocks.get(blockId);
+    if (!cachedBlock) throw new Error("Block revision unavailable; refresh and retry");
+    const cachedNode = revisionCache.nodes.get(cachedBlock.nodeId);
+    if (!cachedNode) throw new Error("Node revision unavailable; refresh and retry");
+    const cached = blockExpected(blockId);
+    const expected = {
+      expected_project_revision: expectedProjectRevision ?? cached.expected_project_revision,
+      expected_node_revision: expectedNodeRevision ?? cached.expected_node_revision,
+      expected_revision: expectedRevision ?? cached.expected_revision,
+    };
+    await request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify(expected) });
+    applySuccessfulBlockDelete(blockId, cachedBlock.nodeId, cachedNode.projectId, expected);
   },
 
   // History

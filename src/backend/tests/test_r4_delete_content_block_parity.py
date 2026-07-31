@@ -93,3 +93,22 @@ def test_file_backed_gui_agent_race_three_rounds():
    with TestClient(app) as c: barrier.wait(); return batch(c,h,p,f'race-delete-{i}',[op(n,b)]).status_code
   with ThreadPoolExecutor(max_workers=2) as pool: codes=[x.result() for x in (pool.submit(gui),pool.submit(agent))]
   assert sorted(codes)==[204,409],codes; P,N,B,L,R=arun(snap(p['id'],b['id'])); assert B is None and P.revision==p['revision']+1 and next(x for x in N if x.id==n['id']).revision==n['revision']+1 and len([x for x in L if x.action_type=='delete_content_block'])==1
+
+async def proposal_count(pid):
+ async with async_session() as db:
+  return len((await db.execute(select(AgentProposal).where(AgentProposal.project_id==pid))).scalars().all())
+
+def update_op(n,b):
+ return {'op':'update_content_block','block_id':b['id'],'expected_revision':b['revision'],'expected_node_revision':n['revision'],'fields':{'order_index':4}}
+
+def test_update_delete_conflict_is_order_independent_direct_and_proposal_no_write():
+ with TestClient(app) as c:
+  for index,operations in enumerate((lambda n,b:[update_op(n,b),op(n,b)],lambda n,b:[op(n,b),update_op(n,b)])):
+   p,n,b=setup(c,f'conflict-direct-{index}'); h=grant(c,p['id']); before=sig(p['id'],b['id'])
+   r=batch(c,h,p,f'conflict-direct-key-{index}',operations(n,b))
+   assert r.status_code==422 and r.json()['detail']['code']=='CONTENT_BLOCK_DELETE_CONFLICT'
+   assert sig(p['id'],b['id'])==before and arun(proposal_count(p['id']))==0
+   p,n,b=setup(c,f'conflict-proposal-{index}'); h=grant(c,p['id'],'propose'); before=sig(p['id'],b['id'])
+   r=c.post('/agent/v1/proposals',headers=h,json={'expected_project_revision':p['revision'],'idempotency_key':f'conflict-proposal-key-{index}','title':'conflict','operations':operations(n,b)})
+   assert r.status_code==422 and r.json()['detail']['code']=='CONTENT_BLOCK_DELETE_CONFLICT'
+   assert sig(p['id'],b['id'])==before and arun(proposal_count(p['id']))==0
