@@ -38,60 +38,37 @@ test('packaged Agent Port fixture and harness semantically assert selectable cur
  assert.match(fixture,/Packaged current implementation/);assert.match(fixture,/Packaged stale implementation/);assert.match(source,/getByTestId\('agent-port-panel'\)/);assert.match(source,/getByRole\('button',\{name:'22222222-2222-4222-8222-222222222222'\}\)\.click/);assert.match(source,/assertReadbackText/);
 });
 
-test('Agent Port harness activates the imported project through the visible selector before opening More',async()=>{
- const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[];
- const entry={waitFor:async()=>calls.push('entry-visible'),isEnabled:async()=>{calls.push('entry-enabled');return true;}};
- const page={
-  getByRole:(role,options)=>{assert.equal(role,'combobox');assert.deepEqual(options,{name:'選擇專案'});return {selectOption:async option=>calls.push(`select:${option.value}`),inputValue:async()=>{calls.push('selected-value');return '11111111-1111-4111-8111-111111111111';}};},
-  getByText:(text,options)=>{assert.equal(text,'Desktop Fixture Root');assert.deepEqual(options,{exact:true});return {first:()=>({waitFor:async()=>calls.push('root-visible')})};},
-  getByTitle:title=>{assert.equal(title,'更多操作');return {click:async()=>calls.push('more-click')};},
-  getByTestId:testId=>{assert.equal(testId,'agent-port-menu-entry');return entry;},
- };
- assert.equal(await activateProjectForAgentPort(page,{projectId:'11111111-1111-4111-8111-111111111111',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'}),entry);
- assert.deepEqual(calls,['select:11111111-1111-4111-8111-111111111111','root-visible','selected-value','more-click','entry-visible','entry-enabled']);
- const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),importAt=source.indexOf("stageWait(run,'import'"),activateAt=source.indexOf('activateProjectForAgentPort(run.page');
- assert.ok(importAt>=0&&activateAt>importAt,'database import must precede visible project activation');
- const activationBlock=source.slice(activateAt,source.indexOf("getByTestId('agent-port-panel')",activateAt));
- assert.match(source,/projectId:'11111111-1111-4111-8111-111111111111'/);assert.doesNotMatch(activationBlock,/force:\s*true|removeAttribute\(['"]disabled|\.evaluate\(/);
+test('Agent Port harness accepts enabled production root invariant when root text is absent',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';
+ const entry={waitFor:async options=>{assert.deepEqual(options,{state:'visible',timeout:30000});calls.push('entry-visible');},isEnabled:async()=>{calls.push('entry-enabled');return true;}};
+ const page={getByRole:()=>({selectOption:async option=>calls.push(`select:${option.value}`),inputValue:async()=>{calls.push('selected-value');return projectId;}}),getByText:()=>{throw Error('root absent');},getByTitle:()=>({click:async()=>calls.push('more-click')}),getByTestId:()=>entry};
+ assert.equal(await activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture'}),entry);
+ assert.deepEqual(calls,[`select:${projectId}`,'selected-value','more-click','entry-visible','entry-enabled']);
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),activateAt=source.indexOf('activateProjectForAgentPort(run.page'),activationBlock=source.slice(activateAt,source.indexOf("getByTestId('agent-port-panel')",activateAt));
+ assert.ok(source.indexOf("stageWait(run,'import'")<activateAt);assert.doesNotMatch(activationBlock,/force:\s*true|removeAttribute\(['"]disabled|\.evaluate\(/);
 });
 
 test('Agent Port harness fails closed when no imported project was selected',async()=>{
- const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support');
- await assert.rejects(activateProjectForAgentPort({}, {projectId:'',projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root'}),/requires an imported project selection/);
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support');await assert.rejects(activateProjectForAgentPort({}, {projectId:'',projectName:'Desktop Fixture'}),/requires an imported project selection/);
 });
 
-test('Agent Port harness times out before More when the selected fixture root never becomes visible',async()=>{
- const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';
- const forbidden=operation=>()=>{throw Error(`forbidden bypass: ${operation}`);};
- const entry={waitFor:async()=>{},isEnabled:async()=>true,click:forbidden('disabled entry click'),evaluate:forbidden('entry evaluate')};
- const page={
-  getByRole:(role,options)=>{assert.equal(role,'combobox');assert.deepEqual(options,{name:'選擇專案'});return {selectOption:async option=>{assert.deepEqual(option,{value:projectId});calls.push('select');},inputValue:async()=>{calls.push('value-match');return projectId;},evaluate:forbidden('selector evaluate')};},
-  getByText:(text,options)=>{assert.equal(text,'Desktop Fixture Root');assert.deepEqual(options,{exact:true});return {first:()=>({waitFor:async waitOptions=>{assert.deepEqual(waitOptions,{state:'visible',timeout:7});calls.push('root-timeout');throw Error('fixture root visibility timeout');},evaluate:forbidden('root evaluate')})};},
-  getByTitle:title=>{assert.equal(title,'更多操作');return {click:async()=>calls.push('more-click'),evaluate:forbidden('More evaluate')};},
-  getByTestId:testId=>{assert.equal(testId,'agent-port-menu-entry');calls.push('entry-located');return entry;},
-  evaluate:forbidden('page evaluate'),
- };
- await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root',timeout:7}),/fixture root visibility timeout/);
- assert.deepEqual(calls,['select','root-timeout']);
-});
+function diagnosticPage({projectId,entry,calls,projectsStatus=200,projectsBody,subtreeStatus=200,subtreeBody='{"id":"root"}'}){
+ const response=(status,body)=>({status:()=>status,text:async()=>body,ok:()=>status>=200&&status<300});
+ return {getByRole:()=>({selectOption:async()=>calls.push('select'),inputValue:async()=>{calls.push('value-match');return projectId;}}),getByTitle:()=>({click:async()=>calls.push('more-click')}),getByTestId:id=>id==='agent-port-menu-entry'?entry:{allTextContents:async()=>{calls.push('visible-errors');return ['⚠️ API 503'];}},url:()=> 'http://127.0.0.1:43123/',request:{get:async url=>{if(url.endsWith('/api/projects')){calls.push('projects-diagnostic');return response(projectsStatus,projectsBody);}calls.push('subtree-diagnostic');return response(subtreeStatus,subtreeBody);}}};
+}
 
-test('Agent Port harness times out without clicking or bypassing a disabled menu entry',async()=>{
+test('Agent Port harness diagnoses failing subtree without clicking disabled entry',async()=>{
  const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';let now=0;
- const forbidden=operation=>()=>{throw Error(`forbidden bypass: ${operation}`);};
- const entry={
-  waitFor:async options=>{assert.deepEqual(options,{state:'visible',timeout:5});calls.push('entry-visible');},
-  isEnabled:async()=>{calls.push('entry-disabled');return false;},
-  click:forbidden('disabled entry click'),evaluate:forbidden('entry evaluate'),
- };
- const page={
-  getByRole:()=>({selectOption:async option=>{assert.deepEqual(option,{value:projectId});calls.push('select');},inputValue:async()=>{calls.push('value-match');return projectId;},evaluate:forbidden('selector evaluate')}),
-  getByText:()=>({first:()=>({waitFor:async options=>{assert.deepEqual(options,{state:'visible',timeout:5});calls.push('root-visible');},evaluate:forbidden('root evaluate')})}),
-  getByTitle:()=>({click:async options=>{assert.equal(options,undefined);calls.push('more-click');},evaluate:forbidden('More evaluate')}),
-  getByTestId:()=>entry,evaluate:forbidden('page evaluate'),
- };
- const clock={now:()=>now,sleep:async ms=>{assert.equal(ms,100);calls.push('bounded-sleep');now+=ms;}};
- await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',rootTitle:'Desktop Fixture Root',timeout:5,clock}),/did not load the selected project root/);
- assert.deepEqual(calls,['select','root-visible','value-match','more-click','entry-visible','entry-disabled','bounded-sleep']);
+ const entry={waitFor:async()=>calls.push('entry-visible'),isEnabled:async()=>{calls.push('entry-disabled');return false;},click:()=>{throw Error('disabled entry clicked');}};
+ const projectsBody=JSON.stringify([{id:projectId,root_node_id:'22222222-2222-4222-8222-222222222222'}]),page=diagnosticPage({projectId,entry,calls,projectsBody,subtreeStatus:503,subtreeBody:'sidecar unavailable'}),clock={now:()=>now,sleep:async ms=>{calls.push('bounded-sleep');now+=ms;}};
+ await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',timeout:5,clock}),error=>{assert.match(error.message,/"selectedProject":"11111111/);assert.match(error.message,/API 503/);assert.match(error.message,/"subtree":\{"status":503,"body":"sidecar unavailable"/);return true;});
+ assert.deepEqual(calls,['select','value-match','more-click','entry-visible','entry-disabled','bounded-sleep','value-match','visible-errors','projects-diagnostic','subtree-diagnostic']);
+});
+
+test('Agent Port harness boundedly rejects when subtree succeeds but root invariant stays disabled',async()=>{
+ const {activateProjectForAgentPort}=require('../scripts/renderer-e2e-support'),calls=[],projectId='11111111-1111-4111-8111-111111111111';let now=0;
+ const entry={waitFor:async()=>{},isEnabled:async()=>false,click:()=>{throw Error('disabled entry clicked');}},projectsBody=JSON.stringify([{id:projectId,root_node_id:'22222222-2222-4222-8222-222222222222'}]),page=diagnosticPage({projectId,entry,calls,projectsBody,subtreeBody:'{"id":"22222222-2222-4222-8222-222222222222","title":"Desktop Fixture Root"}'}),clock={now:()=>now,sleep:async ms=>{now+=ms;}};
+ await assert.rejects(activateProjectForAgentPort(page,{projectId,projectName:'Desktop Fixture',timeout:5,clock}),error=>{assert.match(error.message,/"subtree":\{"status":200/);assert.match(error.message,/Desktop Fixture Root/);return true;});
 });
 
 test('CDP version probe records HTTP response and connection errors',async()=>{

@@ -20,6 +20,8 @@ export function Toast({ message, onDismiss }: ToastProps) {
 
   return (
     <div
+      role="alert"
+      data-testid="error-toast"
       className={`fixed bottom-6 right-6 z-50 max-w-sm transition-all duration-300 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"}`}
     >
       <div className="bg-red-900/90 border border-red-700 rounded-lg px-4 py-3 shadow-xl flex items-start gap-3">

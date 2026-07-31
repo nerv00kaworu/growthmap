@@ -1,18 +1,41 @@
 'use strict';
 function assertReadbackText(text,{summary,state,target}){for(const semantic of [summary,state,`target ${target}`,'digest aaaaaaaaaaaa','commits: ["abc123"]','files: ["src/feature.py"]','tests: [{"name":"packaged integration","status":"passed"}]','decisions: ["reuse strict v1 wire"]','risks: ["platform availability"]','todos: ["fresh review"]','evidence: [{"name":"diff","status":"verified","detail":"clean"}]'])if(!text.includes(semantic))throw Error(`agent-readback: ${summary} missing ${semantic}: ${text}`);return true;}
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-async function activateProjectForAgentPort(page,{projectId,projectName,rootTitle,timeout=30000,clock={now:Date.now,sleep}}){
+function diagnosticBody(value,max=500){return String(value??'').replace(/\s+/g,' ').trim().slice(0,max);}
+async function responseDiagnostic(response){
+ const status=response.status();let body='';
+ try{body=diagnosticBody(await response.text());}catch(error){body=`<unavailable: ${error?.name||'Error'}>`;}
+ return {status,body};
+}
+async function agentPortActivationDiagnostic(page,projectSelector,projectId){
+ const diagnostic={selectedProject:null,visibleErrors:[],projects:null,subtree:null};
+ try{diagnostic.selectedProject=await projectSelector.inputValue();}catch(error){diagnostic.selectedProject=`<unavailable: ${error?.name||'Error'}>`;}
+ try{diagnostic.visibleErrors=(await page.getByTestId('error-toast').allTextContents()).map(value=>diagnosticBody(value)).filter(Boolean).slice(0,5);}catch(error){diagnostic.visibleErrors=[`<unavailable: ${error?.name||'Error'}>`];}
+ try{
+  const origin=new URL(page.url()).origin,projectsResponse=await page.request.get(`${origin}/api/projects`),projectsText=await projectsResponse.text();
+  diagnostic.projects={status:projectsResponse.status(),body:diagnosticBody(projectsText)};
+  if(projectsResponse.ok()){
+   try{
+    const rows=JSON.parse(projectsText),project=Array.isArray(rows)?rows.find(row=>row?.id===projectId):null,rootId=typeof project?.root_node_id==='string'?project.root_node_id:null;
+    diagnostic.projects={status:projectsResponse.status(),count:Array.isArray(rows)?rows.length:null,ids:Array.isArray(rows)?rows.map(row=>row?.id).filter(id=>typeof id==='string').slice(0,20):[],selectedRootNodeId:rootId};
+    if(rootId)diagnostic.subtree=await responseDiagnostic(await page.request.get(`${origin}/api/nodes/${encodeURIComponent(rootId)}/subtree`));
+    else diagnostic.subtree={error:'selected project/root missing from projects response'};
+   }catch(error){diagnostic.projects={...diagnostic.projects,parseError:error?.name||'Error'};}
+  }
+ }catch(error){diagnostic.projects={error:error?.name||'Error'};}
+ return diagnostic;
+}
+async function activateProjectForAgentPort(page,{projectId,projectName,timeout=30000,clock={now:Date.now,sleep}}){
  if(!projectId)throw Error('agent-port activation requires an imported project selection');
  const projectSelector=page.getByRole('combobox',{name:'選擇專案'});
  await projectSelector.selectOption({value:projectId});
- await page.getByText(rootTitle,{exact:true}).first().waitFor({state:'visible',timeout});
- if(await projectSelector.inputValue()!==projectId)throw Error(`agent-port activation selected the wrong project; expected ${projectName} (${projectId})`);
+ if(await projectSelector.inputValue()!==projectId)throw Error(`agent-port activation selected the wrong project; expected ${projectName} (${projectId}); diagnostic=${JSON.stringify(await agentPortActivationDiagnostic(page,projectSelector,projectId))}`);
  await page.getByTitle('更多操作').click();
  const entry=page.getByTestId('agent-port-menu-entry');
  await entry.waitFor({state:'visible',timeout});
  const deadline=clock.now()+timeout;
  while(clock.now()<deadline){if(await entry.isEnabled())return entry;await clock.sleep(100);}
- throw Error(`agent-port activation did not load the selected project root: ${projectName} (${projectId})`);
+ throw Error(`agent-port activation did not load the selected project root: ${projectName} (${projectId}); diagnostic=${JSON.stringify(await agentPortActivationDiagnostic(page,projectSelector,projectId))}`);
 }
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
 function launchArgs({userData,debugPort,logPath}){return [`--user-data-dir=${userData}`,`--remote-debugging-port=${debugPort}`,'--enable-logging',`--log-file=${logPath}`];}
@@ -51,4 +74,4 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
  return {metadata,config};
 }
-module.exports={assertReadbackText,activateProjectForAgentPort,launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
+module.exports={assertReadbackText,activateProjectForAgentPort,agentPortActivationDiagnostic,launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
