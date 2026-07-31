@@ -26,7 +26,8 @@ from services.canonical_node_updates import (GUI_UPDATE_FIELDS, UpdateNodeInput,
     validate_update_node, apply_update_node)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
     apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge,
-    DeleteEdgeInput, validate_delete_edge, apply_delete_edge)
+    DeleteEdgeInput, validate_delete_edge, apply_delete_edge,
+    PromoteMainlineInput, validate_promote_mainline, apply_promote_mainline)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -36,7 +37,7 @@ from api.branching import deep_copy_branch
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
-    EdgeCreate, EdgeUpdate, EdgeOut,
+    EdgeCreate, EdgeUpdate, EdgeOut, PromoteMainlineRequest, PromoteMainlineOut,
     ContentBlockCreate, ContentBlockUpdate, ContentBlockOut,
     NodeMoveRequest, AncestorNode, MainlinePathOut, BranchInfo,
     BranchCreate, BranchOut, ProjectRevisionRequest, EntityRevisionRequest,
@@ -794,45 +795,49 @@ async def update_edge(edge_id: str, data: EdgeUpdate, db: AsyncSession = Depends
     })
 
 
-@router.post("/edges/{edge_id}/promote-mainline", response_model=EdgeOut)
-async def promote_mainline(edge_id: str, data: EntityRevisionRequest, db: AsyncSession = Depends(get_db)):
+async def _promote_mainline_gui(edge: Edge, data: PromoteMainlineRequest, db: AsyncSession) -> PromoteMainlineOut:
+    sibling_revisions = data.expected_sibling_revisions
+    if sibling_revisions is None:
+        # Backward-compatible GUI wire only. Agent Port requires the exact map.
+        siblings = (await db.execute(select(Edge).where(Edge.project_id == edge.project_id,
+            Edge.from_node_id == edge.from_node_id, Edge.relation_type == "child_of",
+            Edge.is_mainline == True, Edge.id != edge.id))).scalars().all()
+        sibling_revisions = {s.id: s.revision or 1 for s in siblings}
+    spec = PromoteMainlineInput(project_id=edge.project_id, edge_id=edge.id,
+        expected_revision=data.expected_revision,
+        expected_sibling_revisions=sibling_revisions,
+        actor_type="human", provenance={"entry": "gui_rest"})
+    validated = await validate_promote_mainline(db, spec)
+    project = await claim_project_revision(db, edge.project_id, data.expected_project_revision)
+    touched = TouchedEntities()
+    target, siblings = await apply_promote_mainline(db, validated, touched=touched)
+    touched.apply()
+    await db.commit()
+    return PromoteMainlineOut(project_id=project.id, edge_id=target.id,
+        parent_node_id=target.from_node_id, child_node_id=target.to_node_id,
+        project_revision=data.expected_project_revision + 1,
+        target_revision=target.revision,
+        touched_sibling_revisions={s.id: s.revision for s in siblings},
+        touched_node_revisions={n.id: n.revision for n in validated.endpoint_nodes})
+
+
+@router.post("/edges/{edge_id}/promote-mainline", response_model=PromoteMainlineOut)
+async def promote_mainline(edge_id: str, data: PromoteMainlineRequest, db: AsyncSession = Depends(get_db)):
     edge = await db.get(Edge, edge_id)
     if not edge:
         raise HTTPException(404, "Edge not found")
-    if edge.relation_type != "child_of":
-        raise HTTPException(400, "Only child_of edges can be promoted")
-    await claim_project_revision(db, edge.project_id, data.expected_project_revision)
-    check_entity_revision(edge, data.expected_revision, kind="edge")
-
-    await demote_mainline_siblings(db, edge.from_node_id, except_edge_id=edge.id)
-    edge.is_mainline = True
-    bump_existing(edge)
-    await db.commit()
-    await db.refresh(edge)
-    return edge
+    return await _promote_mainline_gui(edge, data, db)
 
 
-@router.post("/nodes/{parent_id}/promote-child/{child_id}")
-async def promote_child_mainline(parent_id: str, child_id: str, data: EntityRevisionRequest, db: AsyncSession = Depends(get_db)):
-    """Promote a child node to mainline by parent+child ids."""
-    result = await db.execute(
-        select(Edge).where(
-            Edge.from_node_id == parent_id,
-            Edge.to_node_id == child_id,
-            Edge.relation_type == "child_of"
-        )
-    )
-    edge = result.scalar_one_or_none()
+@router.post("/nodes/{parent_id}/promote-child/{child_id}", response_model=PromoteMainlineOut)
+async def promote_child_mainline(parent_id: str, child_id: str, data: PromoteMainlineRequest, db: AsyncSession = Depends(get_db)):
+    edge = (await db.execute(select(Edge).where(
+        Edge.from_node_id == parent_id, Edge.to_node_id == child_id,
+        Edge.relation_type == "child_of"
+    ))).scalar_one_or_none()
     if not edge:
         raise HTTPException(404, "Edge not found")
-    await claim_project_revision(db, edge.project_id, data.expected_project_revision)
-    check_entity_revision(edge, data.expected_revision, kind="edge")
-
-    await demote_mainline_siblings(db, parent_id, except_edge_id=edge.id)
-    edge.is_mainline = True
-    bump_existing(edge)
-    await db.commit()
-    return {"ok": True}
+    return await _promote_mainline_gui(edge, data, db)
 
 
 @router.delete("/edges/{edge_id}", status_code=204)

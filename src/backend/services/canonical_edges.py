@@ -70,6 +70,29 @@ class ValidatedDeleteEdge:
     edge: Edge
 
 
+@dataclass(frozen=True)
+class PromoteMainlineInput:
+    project_id: str
+    edge_id: str
+    expected_revision: int
+    expected_sibling_revisions: dict[str, int]
+    actor_type: str = "human"
+    actor_id: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ValidatedPromoteMainline:
+    data: PromoteMainlineInput
+    edge: Edge
+    mainline_siblings: list[Edge]
+    endpoint_nodes: list[Node]
+
+
+def _revision_conflict(message: str, **extra: Any) -> None:
+    raise HTTPException(409, {"code": "REVISION_CONFLICT", "message": message, **extra})
+
+
 def _safe_provenance(value: dict[str, Any]) -> dict[str, Any]:
     """Small explicit allowlist: history must never become a secret sink."""
     out: dict[str, Any] = {}
@@ -210,6 +233,70 @@ async def validate_delete_edge(db: AsyncSession, data: DeleteEdgeInput) -> Valid
     if edge.relation_type == "child_of":
         raise HTTPException(400, "Tree parent relations must be changed through node move actions")
     return ValidatedDeleteEdge(data=data, edge=edge)
+
+
+async def validate_promote_mainline(
+    db: AsyncSession, data: PromoteMainlineInput
+) -> ValidatedPromoteMainline:
+    edge = await db.get(Edge, data.edge_id)
+    if not edge or edge.project_id != data.project_id:
+        raise HTTPException(404, "Edge not found")
+    if edge.relation_type != "child_of":
+        raise HTTPException(422, {"code": "INVALID_MAINLINE_TARGET", "message": "Only existing child_of edges can be promoted"})
+    if data.expected_revision != (edge.revision or 1):
+        _revision_conflict("Target edge revision is stale", entity_id=edge.id,
+                           expected=data.expected_revision, current=edge.revision or 1)
+    siblings = list((await db.execute(select(Edge).where(
+        Edge.project_id == data.project_id,
+        Edge.from_node_id == edge.from_node_id,
+        Edge.relation_type == "child_of",
+        Edge.is_mainline == True,
+        Edge.id != edge.id,
+    ).order_by(Edge.id))).scalars())
+    authoritative = {str(s.id): s.revision or 1 for s in siblings}
+    if data.expected_sibling_revisions != authoritative:
+        _revision_conflict("Mainline sibling revision union is stale",
+                           expected_sibling_revisions=data.expected_sibling_revisions,
+                           current_sibling_revisions=authoritative)
+    endpoint_ids = {edge.from_node_id, edge.to_node_id}
+    for sibling in siblings:
+        endpoint_ids.update((sibling.from_node_id, sibling.to_node_id))
+    nodes = list((await db.execute(select(Node).where(
+        Node.project_id == data.project_id, Node.id.in_(endpoint_ids)
+    ))).scalars())
+    if {n.id for n in nodes} != endpoint_ids:
+        raise HTTPException(409, {"code": "INVALID_GRAPH_SCOPE", "message": "Containment endpoint is missing or cross-project"})
+    return ValidatedPromoteMainline(data, edge, siblings, nodes)
+
+
+async def apply_promote_mainline(
+    db: AsyncSession, validated: ValidatedPromoteMainline, *, touched: TouchedEntities
+) -> tuple[Edge, list[Edge]]:
+    """Stage promotion, persisted endpoint touches and IDs-only history."""
+    d, edge = validated.data, validated.edge
+    for sibling in validated.mainline_siblings:
+        sibling.is_mainline = False
+    # SQLite's uniqueness trigger is row-ordered; persist demotions before the
+    # target promotion while retaining one surrounding transaction.
+    if validated.mainline_siblings:
+        await db.flush(validated.mainline_siblings)
+    edge.is_mainline = True
+    touched.add(edge, *validated.mainline_siblings)
+    payload: dict[str, Any] = {
+        "edge_id": edge.id,
+        "parent_node_id": edge.from_node_id,
+        "child_node_id": edge.to_node_id,
+        "demoted_edge_ids": [s.id for s in validated.mainline_siblings],
+    }
+    provenance = _safe_provenance(d.provenance)
+    if provenance:
+        payload["provenance"] = provenance
+    db.add(ActionLog(project_id=d.project_id, node_id=edge.from_node_id,
+                     actor_type=d.actor_type,
+                     actor_id=d.actor_id if d.actor_id is not None else null(),
+                     action_type="mainline_promoted", payload=payload))
+    await db.flush()
+    return edge, validated.mainline_siblings
 
 
 async def apply_delete_edge(db: AsyncSession, validated: ValidatedDeleteEdge) -> None:

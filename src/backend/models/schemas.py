@@ -204,6 +204,35 @@ class EdgeUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class PromoteMainlineRequest(BaseModel):
+    expected_project_revision: int
+    expected_revision: int
+    expected_sibling_revisions: Optional[dict[str, int]] = None
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("expected_sibling_revisions")
+    @classmethod
+    def validate_sibling_revisions(cls, value):
+        if value is None:
+            return value
+        if len(value) > 5000 or any(not isinstance(revision, int) or isinstance(revision, bool) or revision < 1 for revision in value.values()):
+            raise ValueError("Sibling revisions must be positive integers")
+        return value
+
+
+class PromoteMainlineOut(BaseModel):
+    ok: bool = True
+    project_id: str
+    edge_id: str
+    parent_node_id: str
+    child_node_id: str
+    project_revision: int
+    target_revision: int
+    touched_sibling_revisions: dict[str, int]
+    touched_node_revisions: dict[str, int]
+
+
 class EdgeOut(BaseModel):
     id: str
     project_id: str

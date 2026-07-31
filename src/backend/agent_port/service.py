@@ -11,7 +11,8 @@ from services.canonical_node_updates import (UpdateNodeInput, validate_update_no
     apply_update_node, finalize_update_maturity)
 from services.canonical_edges import (CreateEdgeInput, validate_create_edge,
     apply_create_edge, UpdateEdgeInput, validate_update_edge, apply_update_edge,
-    DeleteEdgeInput, validate_delete_edge, apply_delete_edge)
+    DeleteEdgeInput, validate_delete_edge, apply_delete_edge,
+    PromoteMainlineInput, validate_promote_mainline, apply_promote_mainline)
 from services.canonical_content_blocks import (CreateContentBlockInput,
     validate_create_content_block, apply_create_content_block,
     UpdateContentBlockInput, validate_update_content_block,
@@ -118,6 +119,7 @@ async def validate_operations(db,grant,operations):
     created_edge_ids={op["id"] for op in normalized if op["op"]=="create_edge"}
     updated_edge_ids={op["edge_id"] for op in normalized if op["op"]=="update_edge"}
     deleted_edge_ids=[op["edge_id"] for op in normalized if op["op"]=="delete_edge"]
+    promoted_edge_ids=[op["edge_id"] for op in normalized if op["op"]=="promote_mainline"]
     if created_edge_ids & updated_edge_ids:
         raise HTTPException(422,{"code":"NEW_EDGE_UPDATE_UNSUPPORTED","message":"update_edge supports pre-existing edges only"})
     if created_edge_ids & set(deleted_edge_ids):
@@ -126,6 +128,19 @@ async def validate_operations(db,grant,operations):
         raise HTTPException(422,{"code":"DUPLICATE_EDGE_DELETE","message":"Edge may be deleted only once per batch"})
     if updated_edge_ids & set(deleted_edge_ids):
         raise HTTPException(422,{"code":"EDGE_DELETE_CONFLICT","message":"Edge cannot be updated and deleted in one batch"})
+    if created_edge_ids & set(promoted_edge_ids):
+        raise HTTPException(422,{"code":"NEW_EDGE_PROMOTE_UNSUPPORTED","message":"promote_mainline supports pre-existing edges only"})
+    collisions=(updated_edge_ids | set(deleted_edge_ids)) & set(promoted_edge_ids)
+    if collisions or len(promoted_edge_ids) != len(set(promoted_edge_ids)):
+        raise HTTPException(422,{"code":"EDGE_PROMOTE_CONFLICT","message":"Edge cannot be promoted with another mutation in one batch"})
+    promotion_parents=set()
+    for op in normalized:
+        if op["op"] != "promote_mainline": continue
+        candidate=await db.get(Edge,op["edge_id"])
+        if candidate and candidate.project_id==project_id and candidate.relation_type=="child_of":
+            if candidate.from_node_id in promotion_parents:
+                raise HTTPException(422,{"code":"MULTIPLE_PARENT_PROMOTIONS","message":"A parent may have only one promotion per batch"})
+            promotion_parents.add(candidate.from_node_id)
     created_block_ids={op["id"] for op in normalized if op["op"]=="create_content_block"}
     block_operation_kinds={}
     delete_counts={}
@@ -188,6 +203,18 @@ async def validate_operations(db,grant,operations):
             if edge.relation_type=="child_of": raise HTTPException(422,{"code":"INVALID_EDGE_DELETE","message":"Containment edges must be changed through move/reparent"})
             refs += [edge.from_node_id,edge.to_node_id]
             if op["expected_revision"]!=edge.revision: conflict("Entity revision is stale",entity_id=edge.id,expected=op["expected_revision"],current=edge.revision)
+        elif kind=="promote_mainline":
+            edge=await db.get(Edge,op["edge_id"])
+            if not edge or edge.project_id!=project_id: raise HTTPException(404,"Edge not found")
+            if edge.relation_type!="child_of": raise HTTPException(422,{"code":"INVALID_MAINLINE_TARGET","message":"Only child_of edges can be promoted"})
+            siblings=list((await db.execute(select(Edge).where(Edge.project_id==project_id,
+                Edge.from_node_id==edge.from_node_id,Edge.relation_type=="child_of",
+                Edge.is_mainline==True,Edge.id!=edge.id))).scalars())
+            refs += [edge.from_node_id,edge.to_node_id]
+            for sibling in siblings: refs += [sibling.from_node_id,sibling.to_node_id]
+            if op["expected_revision"]!=edge.revision: conflict("Entity revision is stale",entity_id=edge.id,expected=op["expected_revision"],current=edge.revision)
+            current={s.id:s.revision or 1 for s in siblings}
+            if op["expected_sibling_revisions"]!=current: conflict("Mainline sibling revision union is stale",expected_sibling_revisions=op["expected_sibling_revisions"],current_sibling_revisions=current)
         elif kind=="create_content_block":
             n=node_ref(op["node_id"]);refs.append(op["node_id"])
             check_ref_revision(n,op["expected_node_revision"],"expected_node_revision")
@@ -236,7 +263,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     for op in ops:
         kind=op["op"]
         if kind=="update_node": remember(op["node_id"],op["expected_revision"],"expected_revision")
-        elif kind in {"update_edge","delete_edge"}: remember(op["edge_id"],op["expected_revision"],"expected_revision")
+        elif kind in {"update_edge","delete_edge","promote_mainline"}: remember(op["edge_id"],op["expected_revision"],"expected_revision")
         elif kind=="create_node" and op.get("parent_id"): remember(op["parent_id"],op["expected_parent_revision"],"expected_parent_revision")
         elif kind=="create_edge":
             remember(op["from_node_id"],op["expected_from_revision"],"expected_from_revision")
@@ -352,6 +379,19 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
             validated=await validate_delete_edge(db,spec)
             await apply_delete_edge(db,validated)
             ordered_results[op_index]={"op":kind,"id":op["edge_id"]}
+        elif kind=="promote_mainline":
+            identity=actor or grant.agent_identity
+            spec=PromoteMainlineInput(project_id=project.id,edge_id=op["edge_id"],
+                expected_revision=op["expected_revision"],
+                expected_sibling_revisions=op["expected_sibling_revisions"],
+                actor_type="human" if actor else "agent",actor_id=identity,
+                provenance={"entry":"agent_port","operation_index":op_index})
+            validated=await validate_promote_mainline(db,spec)
+            edge,siblings=await apply_promote_mainline(db,validated,touched=canonical_touched)
+            ordered_results[op_index]={"op":kind,"id":edge.id,"revision":edge.revision,
+                "touched_sibling_revisions":{s.id:s.revision for s in siblings},
+                "touched_node_revisions":{n.id:n.revision for n in validated.endpoint_nodes}}
+            result_entities[op_index]=edge
         elif kind=="create_content_block":
             identity=actor or grant.agent_identity
             spec=CreateContentBlockInput(project_id=project.id,node_id=op["node_id"],
@@ -398,6 +438,15 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     for index, owner in result_owner_entities.items():
         ordered_results[index]["node_id"]=owner.id
         ordered_results[index]["node_revision"]=owner.revision or 1
+    for index, op in enumerate(ops):
+        if op["op"] == "promote_mainline":
+            edge = result_entities[index]
+            siblings = list((await db.execute(select(Edge).where(Edge.project_id==project.id,
+                Edge.from_node_id==edge.from_node_id,Edge.id.in_(ordered_results[index]["touched_sibling_revisions"] or ["-"])))).scalars())
+            endpoint_ids=set(ordered_results[index]["touched_node_revisions"])
+            nodes=list((await db.execute(select(Node).where(Node.id.in_(endpoint_ids)))).scalars())
+            ordered_results[index]["touched_sibling_revisions"]={s.id:s.revision for s in siblings}
+            ordered_results[index]["touched_node_revisions"]={n.id:n.revision for n in nodes}
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))

@@ -260,9 +260,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   promoteMainlineChild: async (parentId, childId) => {
     const { rootNode, currentProject } = get();
     if (!rootNode || !currentProject) return;
-    const child = findNode(rootNode, childId);
-    const edgeRevision = typeof child?.meta?.edge_revision === "number" ? child.meta.edge_revision : 1;
-    await api.promoteChildMainline(parentId, childId, currentProject.revision, edgeRevision);
+    // Promotion CAS is cache-owned and requires the complete authoritative
+    // sibling union. A fresh edge read also removes the old revision=1 fallback.
+    await api.listEdges(currentProject.id, "child_of");
+    await api.promoteChildMainline(parentId, childId);
     advanceProjectRevision(set, currentProject);
     const updated = markMainlineChild(rootNode, parentId, childId);
     set({ rootNode: updated });

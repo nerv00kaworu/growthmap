@@ -4,7 +4,7 @@ const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "
 const revisionCache = {
   projects: new Map<string, number>(),
   nodes: new Map<string, { projectId: string; revision: number }>(),
-  edges: new Map<string, { projectId: string; revision: number }>(),
+  edges: new Map<string, { projectId: string; revision: number; fromNodeId: string; toNodeId: string; relationType: string; isMainline: boolean }>(),
   blocks: new Map<string, { nodeId: string; revision: number }>(),
   branches: new Map<string, { projectId: string; revision: number }>(),
 };
@@ -45,7 +45,11 @@ function remember(value: unknown): void {
         revisionCache.nodes.set(row.node_id, { ...owner, revision: row.authoritative_node_revision });
     }
     if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
-    else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
+    else if (typeof row.from_node_id === "string" && typeof row.project_id === "string")
+      revisionCache.edges.set(id, { projectId: row.project_id, revision, fromNodeId: row.from_node_id,
+        toNodeId: typeof row.to_node_id === "string" ? row.to_node_id : "",
+        relationType: typeof row.relation_type === "string" ? row.relation_type : "",
+        isMainline: row.is_mainline === true });
     else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
     else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") revisionCache.branches.set(id, { projectId: row.project_id, revision });
     else if (typeof row.project_id === "string" && typeof row.node_type === "string") revisionCache.nodes.set(id, { projectId: row.project_id, revision });
@@ -176,6 +180,43 @@ function applySuccessfulEdgeDelete(edgeId: string, projectId: string, expectedPr
   revisionCache.edges.delete(edgeId);
 }
 
+type PromoteResult = { ok: boolean; project_id: string; edge_id: string; parent_node_id: string;
+  child_node_id: string; project_revision: number; target_revision: number;
+  touched_sibling_revisions: Record<string, number>; touched_node_revisions: Record<string, number> };
+
+async function promoteMainlineRequest(path: string, edgeId: string): Promise<PromoteResult> {
+  const target = revisionCache.edges.get(edgeId);
+  if (!target || target.relationType !== "child_of") throw new Error("Target edge revision unavailable; refresh edges and retry");
+  const union = [...revisionCache.edges.entries()].filter(([, edge]) => edge.projectId === target.projectId &&
+    edge.fromNodeId === target.fromNodeId && edge.relationType === "child_of");
+  const siblings = Object.fromEntries(union.filter(([id, edge]) => id !== edgeId && edge.isMainline)
+    .map(([id, edge]) => [id, edge.revision]));
+  const expectedProject = projectExpected(target.projectId);
+  const expectedUnion = new Map(union.map(([id, edge]) => [id, edge.revision]));
+  const value = await request<PromoteResult>(path, { method: "POST", body: JSON.stringify({
+    expected_project_revision: expectedProject, expected_revision: target.revision,
+    expected_sibling_revisions: siblings,
+  }) });
+  const same = revisionCache.projects.get(target.projectId) === expectedProject &&
+    [...expectedUnion].every(([id, revision]) => revisionCache.edges.get(id)?.revision === revision);
+  const expectedTouched = new Set(Object.keys(siblings));
+  const responseTouched = value?.touched_sibling_revisions;
+  const validTouched = responseTouched && Object.keys(responseTouched).length === expectedTouched.size &&
+    Object.entries(responseTouched).every(([id, revision]) => expectedTouched.has(id) && revision === (expectedUnion.get(id) ?? 0) + 1);
+  const valid = value?.ok === true && value.project_id === target.projectId && value.edge_id === edgeId &&
+    value.parent_node_id === target.fromNodeId && value.child_node_id === target.toNodeId &&
+    value.project_revision === expectedProject + 1 && value.target_revision === target.revision + 1 && validTouched &&
+    value.touched_node_revisions && Object.values(value.touched_node_revisions).every(r => Number.isInteger(r) && r >= 1);
+  const invalidate = () => { revisionCache.projects.delete(target.projectId); union.forEach(([id]) => revisionCache.edges.delete(id)); };
+  if (!valid) { invalidate(); throw new MalformedAuthoritativeResponseError("promote_mainline"); }
+  if (!same) { invalidate(); return value; }
+  revisionCache.projects.set(target.projectId, value.project_revision);
+  union.forEach(([id, edge]) => revisionCache.edges.set(id, { ...edge,
+    revision: id === edgeId ? value.target_revision : responseTouched[id] ?? edge.revision,
+    isMainline: id === edgeId }));
+  return value;
+}
+
 function applySuccessfulBlockDelete(blockId: string, nodeId: string, projectId: string, expected: {
   expected_project_revision: number; expected_node_revision: number; expected_revision: number;
 }): void {
@@ -291,7 +332,7 @@ export const api = {
     }
     if (snapshotUnchanged) {
       revisionCache.projects.set(edge.projectId, projectRevision);
-      revisionCache.edges.set(edgeId, { projectId: edge.projectId, revision: edgeRevision });
+      revisionCache.edges.set(edgeId, { ...edge, revision: edgeRevision });
     } else {
       revisionCache.projects.delete(edge.projectId); revisionCache.edges.delete(edgeId);
     }
@@ -322,10 +363,13 @@ export const api = {
       expected_to_revision: to.revision,
     }) });
   },
-  promoteMainline: (edgeId: string, expectedProjectRevision: number, expectedRevision: number) =>
-    request<Edge>(`/edges/${edgeId}/promote-mainline`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
-  promoteChildMainline: (parentId: string, childId: string, expectedProjectRevision: number, expectedRevision: number) =>
-    request(`/nodes/${parentId}/promote-child/${childId}`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
+  promoteMainline: (edgeId: string) => promoteMainlineRequest(`/edges/${edgeId}/promote-mainline`, edgeId),
+  promoteChildMainline: (parentId: string, childId: string) => {
+    const edgeId = [...revisionCache.edges.entries()].find(([, edge]) => edge.fromNodeId === parentId &&
+      edge.toNodeId === childId && edge.relationType === "child_of")?.[0];
+    if (!edgeId) throw new Error("Complete child edge revision union unavailable; refresh edges and retry");
+    return promoteMainlineRequest(`/nodes/${parentId}/promote-child/${childId}`, edgeId);
+  },
 
   // Content blocks
   getBlocks: (nodeId: string) =>
