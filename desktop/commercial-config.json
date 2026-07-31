@@ -13,8 +13,8 @@
   "earlyPriceMicros": 10000000,
   "regularPriceMicros": 29000000,
   "paypalUrl": "https://www.paypal.com/ncp/payment/R2M3YAQJNNCZA",
-  "updateUrl": "https://REPLACE_WITH_UPDATE_ORIGIN.invalid/updates",
-  "updateOrigin": "https://REPLACE_WITH_UPDATE_ORIGIN.invalid",
-  "publisher": "REPLACE_WITH_APPROVED_PUBLISHER",
-  "publisherStatus": "UNAPPROVED"
+  "updateUrl": "",
+  "updateOrigin": "",
+  "publisher": "月影塵 (nerv00kaworu)",
+  "publisherStatus": "UNSIGNED_BY_OWNER_CHOICE"
 }

@@ -1,5 +1,13 @@
 {
   "productMajor": 1,
-  "windowsPublisher": "GrowthMap Software Ltd.",
-  "status": "EXPECTED_IDENTITY_REQUIRES_LEGAL_AND_CERTIFICATE_VALIDATION"
+  "productName": "GrowthMap",
+  "creatorDisplayName": "月影塵 (nerv00kaworu)",
+  "creatorHandle": "nerv00kaworu",
+  "contactEmail": "nerv00kaworu@gmail.com",
+  "officialXUrl": "https://x.com/nerv00kaworu",
+  "releasePageUrl": "https://github.com/nerv00kaworu/growthmap/releases",
+  "copyright": "© 2026 月影塵. All rights reserved.",
+  "windowsPublisher": "月影塵 (nerv00kaworu)",
+  "status": "UNSIGNED_BY_OWNER_CHOICE",
+  "updateMode": "manual"
 }

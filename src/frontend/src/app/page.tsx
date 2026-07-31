@@ -47,6 +47,8 @@ export default function HomePage() {
   const [showAgentSessions, setShowAgentSessions] = useState(false);
   const [showAgentPort, setShowAgentPort] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
+  const [appInfo, setAppInfo] = useState<Awaited<ReturnType<NonNullable<typeof window.growthmapDesktop>["appInfo"]["get"]>> | null>(null);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showBranchHistory, setShowBranchHistory] = useState(false);
   const [branchHistory, setBranchHistory] = useState<{ id: string; action_type: string; created_at: string }[]>([]);
@@ -197,6 +199,11 @@ export default function HomePage() {
   const checkUpdates = async () => {
     if (!window.growthmapDesktop) return;
     try { await window.growthmapDesktop.updates.check(); }
+    catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+  };
+  const openAbout = async () => {
+    if (!window.growthmapDesktop) return;
+    try { setAppInfo(await window.growthmapDesktop.appInfo.get()); setShowAbout(true); setShowMoreMenu(false); }
     catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
@@ -386,6 +393,7 @@ export default function HomePage() {
           )}
         </div>
 
+        {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="top-about-growthmap-button" type="button" onClick={openAbout} className="rounded-md border border-cyan-800/50 bg-cyan-950/30 px-2.5 py-1.5 text-xs text-cyan-200 hover:text-cyan-100 shrink-0" title="關於 GrowthMap">ℹ️</button>}
         <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title="設定">⚙️</button>
         <button
           type="button"
@@ -436,7 +444,8 @@ export default function HomePage() {
               <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">⚙️ LLM 設定</button>
               <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
               {entitlement?.state !== "paid" && <section data-testid="purchase-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>購買 v1 永久授權</strong><p className="text-[10px] text-amber-200/70">首 50 筆確認付款 10 USDC／USD；其後 29。永久、同主版本更新、2 部個人裝置、無專案上限。</p>{manualPayment && <><div className="rounded border border-amber-800/50 p-2"><div className="font-medium">Base 原生 USDC</div><code data-testid="base-payment-address" className="break-all text-[10px]">{manualPayment.basePayee}</code><button type="button" onClick={copyBaseAddress} className="mt-1 rounded border border-amber-600 px-2 py-1">複製收款地址</button><p className="mt-1 text-[10px] text-red-300">只接受 Base（eip155:8453）上的 Circle USDC；請勿轉 ETH 或其他鏈／代幣。</p></div><button type="button" onClick={() => openPurchase("paypal")} className="mr-2 rounded border border-amber-600 px-2 py-1">開啟 PayPal</button><button type="button" onClick={() => openPurchase("email")} className="mr-2 rounded border border-amber-600 px-2 py-1">Email 回報付款</button><button type="button" onClick={() => openPurchase("x")} className="rounded border border-amber-600 px-2 py-1">X 聯絡</button><p className="text-[10px] text-gray-400">付款後請提供付款方式、PayPal transaction ID 或 Base tx hash、License 名稱及聯絡 Email。交易須人工核對；截圖不構成付款證明。收到簽章 JSON 後請使用「匯入 License」。</p></>}</section>}
-              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
+              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 前往下載新版</button>}
+              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="about-growthmap-button" type="button" onClick={openAbout} className="rounded-lg border border-cyan-800/40 bg-cyan-950/20 px-3 py-2.5 text-left text-xs text-cyan-200">ℹ️ 關於 GrowthMap</button>}
               <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
               {agentPortDesktopControl && <button data-testid="agent-port-menu-entry" type="button" onClick={() => { setShowAgentPort(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30 disabled:opacity-40">🔌 Agent Port</button>}
@@ -456,6 +465,16 @@ export default function HomePage() {
                 🗃️ {currentBranch ? `封存方案線：${currentBranch.name}` : "主線不可封存"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showAbout && appInfo && (
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/70 px-4" onClick={() => setShowAbout(false)}>
+          <div data-testid="about-growthmap-dialog" className="w-full max-w-lg rounded-xl border border-cyan-800/50 bg-gray-950 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between"><div><h2 className="text-lg font-semibold text-gray-100">{appInfo.productName}</h2><p className="mt-1 text-xs text-gray-500">版本 {appInfo.version}</p></div><button type="button" onClick={() => setShowAbout(false)} className="text-xl text-gray-500 hover:text-gray-300">×</button></div>
+            <div className="mt-5 space-y-3 text-sm text-gray-300"><p><strong>製作者：</strong>{appInfo.creator}</p><p>{appInfo.copyright}</p><p className="rounded border border-amber-800/50 bg-amber-950/20 p-3 text-xs text-amber-200">此版本依製作者選擇未使用 Authenticode簽章；Windows可能顯示「未知發行者」或 SmartScreen提示。請只從官方 Releases下載並核對 SHA-256。</p><p className="text-xs text-gray-400">更新模式：人工下載。GrowthMap不會在背景靜默下載或安裝更新。</p></div>
+            <div className="mt-5 flex flex-wrap gap-2"><button type="button" onClick={() => window.growthmapDesktop?.appInfo.open("releases")} className="rounded border border-blue-700 px-3 py-2 text-xs text-blue-200">官方 Releases</button><button type="button" onClick={() => window.growthmapDesktop?.appInfo.open("email")} className="rounded border border-gray-700 px-3 py-2 text-xs text-gray-200">Email</button><button type="button" onClick={() => window.growthmapDesktop?.appInfo.open("x")} className="rounded border border-gray-700 px-3 py-2 text-xs text-gray-200">X</button></div>
           </div>
         </div>
       )}

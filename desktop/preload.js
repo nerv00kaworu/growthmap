@@ -3,6 +3,7 @@ const {contextBridge,ipcRenderer}=require('electron');
 contextBridge.exposeInMainWorld('growthmapDesktop',Object.freeze({
  isDesktop:true,
  agentPortControl:true,
+ appInfo:Object.freeze({get:()=>ipcRenderer.invoke('app:info'),open:target=>ipcRenderer.invoke('app:open',target)}),
  secrets:Object.freeze({has:id=>ipcRenderer.invoke('secrets:has',id),set:(id,value)=>ipcRenderer.invoke('secrets:set',id,value),delete:id=>ipcRenderer.invoke('secrets:delete',id)}),
  license:Object.freeze({import:()=>ipcRenderer.invoke('license:import')}),
  revocation:Object.freeze({import:()=>ipcRenderer.invoke('revocation:import')}),

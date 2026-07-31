@@ -7,6 +7,7 @@ declare global {
     growthmapDesktop?: {
       readonly isDesktop: true;
       readonly agentPortControl: true;
+      readonly appInfo: { get():Promise<{productName:string;version:string;creator:string;copyright:string;contactEmail:string;officialXUrl:string;releasePageUrl:string;publisherStatus:'UNSIGNED_BY_OWNER_CHOICE'|'APPROVED';updateMode:'manual'|'automatic'}>; open(target:'releases'|'email'|'x'):Promise<boolean> };
       readonly secrets: { has(id:string):Promise<boolean>; set(id:string,value:string):Promise<boolean>; delete(id:string):Promise<boolean> };
       readonly license: { import():Promise<unknown | null> };
       readonly purchase: { info():Promise<ManualPaymentInfo>; copyBaseAddress():Promise<boolean>; open(rail:'paypal'|'email'|'x'):Promise<boolean> };

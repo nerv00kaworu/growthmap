@@ -7,7 +7,7 @@
     "test": "node --test tests/*.test.js",
     "start": "electron .",
     "pack:dir": "npm run preflight && electron-builder --dir",
-    "dist:win": "npm run preflight:win && electron-builder --win nsis --publish never",
+    "dist:win": "node scripts/build-unsigned-windows.js",
     "dist:win:e2e": "npm run preflight:win && electron-builder --win dir --config scripts/e2e-builder-config.js --publish never",
     "preflight": "node scripts/preflight.js",
     "preflight:win": "node scripts/preflight.js win32",
@@ -95,7 +95,7 @@
     "win": {
       "verifyUpdateCodeSignature": true,
       "signtoolOptions": {
-        "publisherName": "GrowthMap Software Ltd."
+        "publisherName": "月影塵 (nerv00kaworu)"
       },
       "target": [
         {
@@ -142,10 +142,11 @@
           "to": "sidecar/growthmap-sidecar"
         }
       ]
-    }
+    },
+    "copyright": "© 2026 月影塵. All rights reserved."
   },
-  "description": "Windows-first local GrowthMap authoring desktop application",
-  "author": "GrowthMap Project Contributors",
+  "description": "GrowthMap — local AI-neutral project growth and Agent Port workspace",
+  "author": "月影塵 (nerv00kaworu)",
   "dependencies": {
     "electron-updater": "^6.8.9"
   }
