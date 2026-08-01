@@ -43,6 +43,7 @@
       "database-manager.js",
       "request-policy.js",
       "update-policy.js",
+      "purchase-portal.js",
       "updater.js",
       "update-recovery.js",
       "managed-backup.js",

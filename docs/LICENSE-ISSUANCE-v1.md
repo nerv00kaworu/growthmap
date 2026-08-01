@@ -4,7 +4,9 @@
 
 Phase 1 is payment-independent. It proves that an administrator can create an entitlement identity, activate at most two random installation identities, and import a signed per-device certificate which the pinned desktop key verifies before authoring is unlocked. It does **not** implement checkout, x402, PayPal, payment evidence, or any transaction.
 
-The authority implementation (`src/backend/licensing/authority.py`) is an API/service candidate, not a public deployment. It requires an externally supplied Ed25519 PEM private-key file and fails closed without it. Tests generate temporary keys. No signing key belongs in the repository or desktop package.
+The authority implementation (`src/backend/licensing/authority.py`) is an API/service candidate, not a public deployment. Its current file-key constructor is isolated-test/candidate infrastructure; production must inject an external signer provider and must fail closed if the provider, declared key ID/generation, or matching reviewed public-key digest is missing. Provider methods return signatures only: private bytes must never enter the repository, desktop, payment service, DB, response, or logs. Tests generate explicitly isolated temporary fixture keys; they are not production inputs.
+
+The production key ceremony contract is: independently approve issuer purpose/domain, algorithm, key ID, monotonically increasing generation, activation time, predecessor generation, and public-key SHA-256; bind that exact public key into signed release metadata and the runtime ASAR path; require two-person approval before enabling the signer; record a non-secret provider attestation and rollback-resistant generation anchor; disable the predecessor only after genuine Windows verification and recovery rehearsal. Rotation may move only to a higher approved generation. A lower/unknown generation, key-ID/public-key mismatch, unavailable signer, or restored stale metadata blocks issuance. Emergency rollback restores code but never decrements key generation; compromised keys require revocation/reissue procedure, not silent reuse.
 
 ## Canonical documents
 
