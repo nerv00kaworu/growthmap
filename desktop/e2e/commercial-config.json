@@ -1,6 +1,9 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "productMajor": 1,
+  "licenseIssuer": "Growthmap E2E",
+  "supportEmail": "e2e@growthmap.test",
+  "supportUrl": "https://x.com/growthmap_e2e",
   "licensePublicKeyResource": "commercial/e2e-license-public-key.pem",
   "licensePublicKeySha256": "GENERATED_FROM_PACKAGED_KEY_BYTES",
   "paymentApiOrigin": "",

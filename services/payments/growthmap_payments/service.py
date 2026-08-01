@@ -24,9 +24,14 @@ class Facilitator(Protocol):
  def settle(self,signature:str,requirements:dict[str,Any])->dict[str,Any]:...
 @dataclass(frozen=True)
 class Config:
- db_path:Path;recipient:str;admin_secret_hash:str;signing_key:Ed25519PrivateKey|None;allowed_admin_origin:str="";csrf_secret:str="";purchase_resource_base:str="";quote_seconds:int=300;intent_seconds:int=60;production:bool=False;rate_limit:int=30;isolated_test:bool=False;settlement_mac_key:bytes|None=None;settlement_checkpoint_path:Path|None=None;environment:str="test";merchant_id:str="growthmap";authority_id:str="growthmap-authority-primary"
+ db_path:Path;recipient:str;admin_secret_hash:str;signing_key:Ed25519PrivateKey|None;allowed_admin_origin:str="";csrf_secret:str="";purchase_resource_base:str="";quote_seconds:int=300;intent_seconds:int=60;production:bool=False;rate_limit:int=30;isolated_test:bool=False;settlement_mac_key:bytes|None=None;settlement_checkpoint_path:Path|None=None;environment:str="test";merchant_id:str="growthmap";authority_id:str="growthmap-authority-primary";allow_live_payment_recipient:bool=False
  def validate(self):
   if not re.fullmatch(r"0x[0-9a-fA-F]{40}",self.recipient) or self.recipient.lower()=="0x"+"0"*40:raise RuntimeError("payment recipient missing/placeholder")
+  from .public_config import APPROVED_BASE_RECIPIENT
+  if self.production:
+   if self.allow_live_payment_recipient:raise RuntimeError("live payment recipient opt-in forbidden in production")
+   if self.recipient!=APPROVED_BASE_RECIPIENT:raise RuntimeError("production payment recipient missing or not approved")
+  elif self.recipient.lower()==APPROVED_BASE_RECIPIENT and not self.allow_live_payment_recipient:raise RuntimeError("approved live payment recipient forbidden outside production")
   if not isinstance(self.settlement_mac_key,bytes) or len(self.settlement_mac_key)<32:raise RuntimeError("external settlement MAC key missing/weak")
   if not isinstance(self.settlement_checkpoint_path,Path):raise RuntimeError("external settlement checkpoint path missing")
   if self.settlement_checkpoint_path.resolve()==self.db_path.resolve():raise RuntimeError("settlement checkpoint must be external to database")
@@ -199,6 +204,12 @@ class PaymentService:
    self._commit_trusted(db)
  @staticmethod
  def now():return datetime.now(timezone.utc).isoformat()
+ def _utc_now(self):
+  raw=self.now()
+  try:value=datetime.fromisoformat(raw.replace('Z','+00:00')) if isinstance(raw,str) else raw
+  except (AttributeError,ValueError,TypeError) as error:raise RuntimeError('invalid_payment_clock') from error
+  if not isinstance(value,datetime) or value.tzinfo is None or value.utcoffset() is None:raise RuntimeError('invalid_payment_clock')
+  return value.astimezone(timezone.utc)
  @staticmethod
  def _hash(value:str):return hashlib.sha256(value.encode()).hexdigest()
  @staticmethod
@@ -377,7 +388,11 @@ class PaymentService:
    if not r or r[0]!=transaction_id:raise ValueError("transaction does not match submitted claim")
    return self._confirm_payment_locked(db,oid,transaction_id,self.paypal_minor(a["amount"]),"USD",tx_hash=transaction_id,actor=actor)
  def _enqueue_revocation(self,db,entitlement,license_id,action,reason,created_at=None):
-  created_at=created_at or self.now();digest=self._outbox_payload_digest(entitlement);identity={"authority_id":self.config.authority_id,"source":entitlement["source"],"source_id":entitlement["source_id"],"payload_digest":digest,"license_id":license_id,"order_id":entitlement["order_id"],"action":action};event_id="gmr_"+hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+  service_now=self._utc_now();raw_created=created_at or service_now.isoformat()
+  try:event_time=datetime.fromisoformat(raw_created.replace('Z','+00:00'))
+  except (AttributeError,ValueError) as error:raise ValueError('invalid revocation event time') from error
+  if event_time.tzinfo is None or event_time<service_now-timedelta(minutes=5) or event_time>service_now+timedelta(minutes=5):raise ValueError('invalid revocation event time')
+  created_at=event_time.astimezone(timezone.utc).isoformat();digest=self._outbox_payload_digest(entitlement);identity={"authority_id":self.config.authority_id,"source":entitlement["source"],"source_id":entitlement["source_id"],"payload_digest":digest,"license_id":license_id,"order_id":entitlement["order_id"],"action":action};event_id="gmr_"+hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":")).encode()).hexdigest()
   db.execute("INSERT OR IGNORE INTO revocation_outbox(event_id,order_id,authority_id,source,source_id,entitlement_payload_digest,license_id,action,reason,proof_hash,tx_hash,evidence_hash,created_at,state,next_attempt_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)",(event_id,entitlement["order_id"],self.config.authority_id,entitlement["source"],entitlement["source_id"],digest,license_id,action,reason,entitlement["proof_hash"],entitlement["tx_hash"],entitlement["evidence_hash"],created_at,created_at));return dict(db.execute("SELECT * FROM revocation_outbox WHERE order_id=?",(entitlement["order_id"],)).fetchone())
  def _revocation(self,license_id,revoked_at,sequence,reason_code):
   if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
@@ -397,17 +412,17 @@ class PaymentService:
     event=db.execute("SELECT * FROM revocation_outbox WHERE order_id=?",(oid,)).fetchone() if action in {"refund","revoke"} else None
     self._audit(db,"admin",f"order.{action}.idempotent",oid,{"state":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":True,"revocation":json.loads(stored[0]) if stored else None,"revocation_event":dict(event) if event else None}
    if r[0] not in TRANSITIONS[action]:raise ValueError(f"illegal transition {r[0]} -> {target}")
-   now=self.now();assertion=None;event=None;entitlement=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(oid,)).fetchone()
+   service_now=self._utc_now();now=service_now.isoformat();assertion=None;event=None;entitlement=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(oid,)).fetchone()
    delivered=entitlement and entitlement["state"]=="delivered" and entitlement["license_id"]
    if action in {"refund","revoke"} and delivered:
-    reason="refund" if action=="refund" else (reason_code or "administrative");revoked_at=datetime.now(timezone.utc).isoformat().replace("+00:00","Z");assertion=self._revocation(entitlement["license_id"],revoked_at,1,reason);db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(entitlement["license_id"],oid,1,revoked_at,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now));event=self._enqueue_revocation(db,entitlement,entitlement["license_id"],action,reason,now)
+    reason="refund" if action=="refund" else (reason_code or "administrative");revoked_at=service_now.isoformat().replace("+00:00","Z");assertion=self._revocation(entitlement["license_id"],revoked_at,1,reason);db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(entitlement["license_id"],oid,1,revoked_at,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now));event=self._enqueue_revocation(db,entitlement,entitlement["license_id"],action,reason,now)
    elif action=="refund" and entitlement:
     # Cancellation is local-only because no authority license exists. Invalidating
     # an outstanding fence ensures a claimed worker cannot deliver afterward.
     db.execute("UPDATE entitlement_outbox SET state='quarantined',lease_owner=NULL,lease_expires_at=NULL,fencing_version=fencing_version+1,last_error_hash=? WHERE order_id=?",(self._hash("cancelled_by_refund_before_delivery"),oid))
    db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target,"license_id":entitlement["license_id"] if delivered else None,"revocation_enqueued":bool(event)});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False,"revocation":assertion,"revocation_event":event}
  def claim_revocation(self,worker_id,lease_seconds=30,order_id=None):
-  now=datetime.now(timezone.utc);expires=(now+timedelta(seconds=lease_seconds)).isoformat()
+  now=self._utc_now();expires=(now+timedelta(seconds=lease_seconds)).isoformat()
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT * FROM revocation_outbox WHERE ((state='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)) OR (state='leased' AND lease_expires_at<=?))";params=[now.isoformat(),now.isoformat()]
    if order_id is not None:sql+=" AND order_id=?";params.append(order_id)
@@ -420,12 +435,12 @@ class PaymentService:
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT * FROM revocation_outbox WHERE event_id=?",(row["event_id"],)).fetchone()
    if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();raise RuntimeError("revocation lease lost")
-   now=self.now();db.execute("UPDATE revocation_outbox SET state='delivered',delivered_at=?,authority_receipt=?,lease_owner=NULL,lease_expires_at=NULL WHERE event_id=?",(now,receipt["revocation_receipt"],row["event_id"]));self._audit(db,"issuer","revocation.delivered",row["order_id"],{"license_id":row["license_id"],"receipt":receipt["revocation_receipt"]});self._commit_trusted(db);return receipt
+   now=self._utc_now().isoformat();db.execute("UPDATE revocation_outbox SET state='delivered',delivered_at=?,authority_receipt=?,lease_owner=NULL,lease_expires_at=NULL WHERE event_id=?",(now,receipt["revocation_receipt"],row["event_id"]));self._audit(db,"issuer","revocation.delivered",row["order_id"],{"license_id":row["license_id"],"receipt":receipt["revocation_receipt"]});self._commit_trusted(db);return receipt
  def fail_revocation(self,row,worker_id,error,max_attempts=8):
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT state,lease_owner,fencing_version,attempt_count FROM revocation_outbox WHERE event_id=?",(row["event_id"],)).fetchone()
    if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();return
-   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));db.execute("UPDATE revocation_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE event_id=?",(state,(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat(),self._hash(str(error)),row["event_id"]));self._commit_trusted(db)
+   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));db.execute("UPDATE revocation_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE event_id=?",(state,(self._utc_now()+timedelta(seconds=delay)).isoformat(),self._hash(str(error)),row["event_id"]));self._commit_trusted(db)
  def deliver_revocation(self,order_id,authority):
   worker="revoke-inline-"+uuid.uuid4().hex;row=self.claim_revocation(worker,order_id=order_id)
   if not row:

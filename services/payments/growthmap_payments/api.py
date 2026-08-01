@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .service import Config,PaymentService
 from .facilitator import OfficialX402Facilitator
+from .public_config import APPROVED_BASE_RECIPIENT
 class MockFacilitator:
  """Nested authorization envelope for isolated tests; not an official SDK implementation."""
  def __init__(self):self.settled={};self.fail=False
@@ -173,7 +174,15 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
   return {"state":"activated","certificate":certificate}
  app.state.payments=service;return app
 def from_env():
- production=os.getenv('GROWTHMAP_PAYMENTS_ENV')=='production';test_mode=os.getenv('GROWTHMAP_PAYMENTS_TEST_MODE')=='1'
+ environment=os.getenv('GROWTHMAP_PAYMENTS_ENV','test')
+ if environment not in {'production','development','test'}:raise RuntimeError('invalid payments environment')
+ production=environment=='production';test_mode=os.getenv('GROWTHMAP_PAYMENTS_TEST_MODE')=='1'
+ raw_live=os.getenv('GROWTHMAP_ALLOW_LIVE_PAYMENT_RECIPIENT')
+ if raw_live not in {None,'0','1'}:raise RuntimeError('invalid live payment recipient opt-in')
+ allow_live=raw_live=='1'
  if production and test_mode:raise RuntimeError("test facilitator forbidden in production")
- config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),os.getenv('GROWTHMAP_X402_RECIPIENT',''),os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256',''),load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=test_mode,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None)
+ recipient=os.getenv('GROWTHMAP_X402_RECIPIENT','')
+ if production and recipient!=APPROVED_BASE_RECIPIENT:raise RuntimeError("production payment recipient missing or not approved")
+ if not production and recipient.lower()==APPROVED_BASE_RECIPIENT and not allow_live:raise RuntimeError('approved live payment recipient forbidden outside production')
+ config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),recipient,os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256',''),load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=test_mode,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None,environment=environment,allow_live_payment_recipient=allow_live)
  return create_app(config,MockFacilitator() if test_mode else None)

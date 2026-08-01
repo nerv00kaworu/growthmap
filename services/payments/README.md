@@ -1,12 +1,16 @@
 # GrowthMap payments v1 candidate
 
+## Reviewed public-config boundary
+
+`config/commercial-public-config.json` is strict-validated and deterministically expanded by `tools/generate-public-config.py`. Its raw bytes must also match `config/commercial-public-config.sha256`, an independent reviewed pin that the generator never writes. Any canonical edit requires an explicit pin update under independent review; generated artifact or self-generated server digest updates are not approval. Required Linux and Windows CI run `python3 tools/generate-public-config.py --check` plus the full payments suite.
+
 Independent FastAPI/SQLite candidate. Run tests only:
 
 ```sh
 PYTHONPATH=services/payments:src/backend src/backend/venv/bin/pytest -q services/payments/tests
 ```
 
-A pinned x402 2.17 `OfficialX402Facilitator` candidate adapter exists, but production credentials, a real recipient/endpoint, authenticated receipt/finality reconciler and deployment/live smoke evidence are still blocked. There is no PayPal API, production credential, recipient, or private key in this candidate. `GROWTHMAP_PAYMENTS_ENV=production` fails unless admin auth and an explicit Ed25519 key file are provided; recipient placeholders always fail. Never copy either payment or authority DB into the desktop DB.
+A pinned x402 2.17 `OfficialX402Facilitator` candidate adapter exists, but the approved Base recipient is pinned in strict public config and must be explicitly supplied in production, while production facilitator endpoint/credentials, authenticated receipt/finality reconciler and deployment/live smoke evidence are still blocked. There is no PayPal API, production credential, or private key in this candidate. `GROWTHMAP_PAYMENTS_ENV=production` fails unless admin auth and an explicit Ed25519 key file are provided; invalid recipient placeholders always fail; the approved public recipient alone does not make production ready. Never copy either payment or authority DB into the desktop DB.
 
 Operations: stop writes or use SQLite online backup API; copy DB plus `-wal`/`-shm` consistently, encrypt, restrict access, test restore and `PRAGMA integrity_check`. Current migration version is `PRAGMA user_version=9`; baseline 001 is immutable and forward remediations are checksum-pinned 002–009; apply reviewed forward-only migrations before service startup.
 
@@ -25,3 +29,11 @@ After durable paid evidence, `entitlement_outbox` delivers `(x402, order_id)` id
 The claim endpoint is POST-body-only and requires order recovery authentication, device public key, fresh nonce, and Ed25519 device proof. It returns only a schema-v2 device activation certificate. Legacy `license_json` columns remain readable only for controlled migration of pre-schema-8 rows; new flows never call the removed portable `_license()` signer.
 
 SDK 2.17 settle success is not represented as chain finality: the SDK response has no receipt/block/finality timestamp. The adapter never substitutes `datetime.now()`. It leaves the intent ambiguous for an authenticated receipt reconciler. Schema-8 entitlement and schema-9 revocation outbox triggers make payload/delete/ack mutation fail closed; authority entitlement and deterministic revocation receipt inbox rows are likewise immutable. Leased/fenced workers reclaim expired leases, reject stale workers, back off/quarantine failures, and safely replay Authority-commit/payment-ack crashes.
+
+Payment creates immutable revocation events only within five minutes of its aware service clock. Authority accepts a first-seen event only within a 24-hour transport window and five minutes of clock lead; a naive Authority clock fails closed. Authority checks an exact prior request digest before freshness so a commit/ack crash can replay the same receipt even after the window; first-seen stale/future events and contradictory replays fail closed.
+
+### Live-recipient safety
+
+`production` requires the exact reviewed public Base payee before any other credential gate. `test` and `development` reject that live payee by default; a deliberate integration run may opt in only with `GROWTHMAP_ALLOW_LIVE_PAYMENT_RECIPIENT=1` (all other values fail closed). Isolated tests must use a non-live fixture recipient.
+
+The reviewed source is `config/commercial-public-config.json`. Run `python3 tools/generate-public-config.py` after review and `python3 tools/generate-public-config.py --check` in verification; generated server/desktop artifacts and the server SHA-256 pin must not be hand-edited.

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 from growthmap_payments.service import Config,PaymentService,BASE_NETWORK,BASE_USDC,SCHEMA_VERSION
 from growthmap_payments.api import MockFacilitator,create_app
+from growthmap_payments.public_config import APPROVED_BASE_RECIPIENT
 from desktop.entitlements import verify_document
 RECIPIENT='0x1111111111111111111111111111111111111111';ORIGIN='https://admin.test';CSRF='fixture-csrf';HEAD={'Authorization':'Bearer secret','X-CSRF-Token':CSRF,'Origin':ORIGIN}
 MAC_KEY=b'growthmap-isolated-test-settlement-mac-key-v1'
@@ -232,6 +233,25 @@ def test_evidence_reconciliation_releases_ambiguity_and_recovers_paid(tmp_path):
   active=db.execute("SELECT reserved_ordinal,count(*) FROM settlement_intents WHERE state!='cancelled_unpaid' GROUP BY reserved_ordinal HAVING count(*)>1").fetchall();assert active==[]
   assert db.execute("SELECT state FROM settlement_intents WHERE intent_id=?",(new_intent['intent_id'],)).fetchone()[0]=='prepared'
 
+def test_production_recipient_gate_precedes_other_credentials(tmp_path,monkeypatch):
+ import growthmap_payments.api as api
+ monkeypatch.setenv('GROWTHMAP_PAYMENTS_ENV','production')
+ monkeypatch.delenv('GROWTHMAP_X402_RECIPIENT',raising=False)
+ with pytest.raises(RuntimeError,match='recipient missing or not approved'):api.from_env()
+ monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT','0x1111111111111111111111111111111111111111')
+ with pytest.raises(RuntimeError,match='recipient missing or not approved'):api.from_env()
+ monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT',APPROVED_BASE_RECIPIENT)
+ with pytest.raises(RuntimeError) as caught:api.from_env()
+ assert 'recipient missing or not approved' not in str(caught.value)
+
+
+def test_public_recipient_config_matches_desktop_truth():
+ public=json.loads((Path(__file__).parents[1]/'public-config.json').read_text())
+ desktop=json.loads((Path(__file__).parents[3]/'desktop/commercial-config.json').read_text())
+ assert public=={'baseNetwork':desktop['baseNetwork'],'basePayee':desktop['basePayee']}
+ assert public['basePayee']==APPROVED_BASE_RECIPIENT
+
+
 def test_env_mock_requires_explicit_opt_in(tmp_path,monkeypatch):
  import growthmap_payments.api as api
  monkeypatch.setenv('GROWTHMAP_PAYMENTS_DB',str(tmp_path/'none.sqlite'));monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT',RECIPIENT);monkeypatch.setenv('GROWTHMAP_PURCHASE_RESOURCE_BASE','https://pay.test');monkeypatch.setenv('GROWTHMAP_ADMIN_ORIGIN',ORIGIN);monkeypatch.setenv('GROWTHMAP_CSRF_SECRET',CSRF);monkeypatch.setenv('GROWTHMAP_ADMIN_SESSION_SHA256',hashlib.sha256(b'secret').hexdigest());mac=tmp_path/'mac.key';mac.write_bytes(MAC_KEY);monkeypatch.setenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE',str(mac));monkeypatch.setenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE',str(tmp_path/'terminal.checkpoint'))
@@ -412,3 +432,80 @@ def test_migration8_outbox_delete_and_payload_tamper_are_blocked(tmp_path):
  with s._db() as db:
   with pytest.raises(sqlite3.IntegrityError,match='append-only'):db.execute('delete from entitlement_outbox')
   with pytest.raises(sqlite3.IntegrityError,match='immutable'):db.execute("update entitlement_outbox set payer='0x0000000000000000000000000000000000000000'")
+
+def test_public_config_loader_fail_closed_tmp_fixtures(tmp_path):
+ import hashlib,os
+ from growthmap_payments.public_config import load_public_config
+ good=b'{"baseNetwork":"eip155:8453","basePayee":"0x81d30e175a22c1c2f78b3db6fc0600a6e1cb3591"}'
+ def attempt(raw=good,mode=0o600):
+  p=tmp_path/f'c-{len(list(tmp_path.iterdir()))}.json';p.write_bytes(raw);p.chmod(mode);return load_public_config(p,expected_digest=hashlib.sha256(raw).hexdigest())
+ assert attempt()['baseNetwork']=='eip155:8453'
+ for raw in (b'{"baseNetwork":"x","baseNetwork":"eip155:8453","basePayee":"0x81d30e175a22c1c2f78b3db6fc0600a6e1cb3591"}',b'{"baseNetwork":"eip155:8453","BASENETWORK":"eip155:8453","basePayee":"0x81d30e175a22c1c2f78b3db6fc0600a6e1cb3591"}',b'\xff'):
+  with pytest.raises(RuntimeError):attempt(raw)
+ with pytest.raises(RuntimeError):attempt(good,0o622)
+ target=tmp_path/'target';target.write_bytes(good);link=tmp_path/'link';link.symlink_to(target)
+ with pytest.raises(RuntimeError):load_public_config(link,expected_digest=hashlib.sha256(good).hexdigest())
+ fifo=tmp_path/'fifo';os.mkfifo(fifo)
+ with pytest.raises(RuntimeError):load_public_config(fifo,expected_digest=hashlib.sha256(good).hexdigest())
+ huge=b'{}'+b' '*5000
+ with pytest.raises(RuntimeError):attempt(huge)
+
+def test_generated_public_config_digest_and_parity():
+ import hashlib,subprocess,sys
+ root=Path(__file__).parents[3];public=(Path(__file__).parents[1]/'public-config.json').read_bytes()
+ from growthmap_payments.public_config import PUBLIC_CONFIG_SHA256
+ assert hashlib.sha256(public).hexdigest()==PUBLIC_CONFIG_SHA256
+ subprocess.run([sys.executable,str(root/'tools/generate-public-config.py'),'--check'],cwd=root,check=True)
+
+def test_generator_strict_canonical_and_independent_review_pin(tmp_path):
+ import importlib.util,subprocess,sys,shutil
+ root=Path(__file__).parents[3];spec=importlib.util.spec_from_file_location('public_generator',root/'tools/generate-public-config.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+ raw=(root/'config/commercial-public-config.json').read_bytes();doc=json.loads(raw)
+ for invalid in (
+  raw.replace(b'"schemaVersion": 3',b'"schemaVersion": 3, "schemaVersion": 3'),
+  raw.replace(b'"schemaVersion": 3',b'"schemaVersion": 3, "extra": true'),
+  raw.replace(b'"schemaVersion": 3',b'"schemaVersion": "3"'),
+  raw.replace(b'"baseNetwork": "eip155:8453"',b'"baseNetwork": "wrong"'),
+  raw.replace(b'"schemaVersion": 3',('"schemaVersion": 3, "ＳＣＨＥＭＡＶＥＲＳＩＯＮ": 3').encode()),
+ ):
+  with pytest.raises(ValueError):module.load_and_validate(invalid)
+ tree=tmp_path/'candidate';(tree/'tools').mkdir(parents=True);(tree/'config').mkdir();shutil.copy2(root/'tools/generate-public-config.py',tree/'tools/generate-public-config.py');shutil.copy2(root/'config/commercial-public-config.json',tree/'config/commercial-public-config.json');shutil.copy2(root/'config/commercial-public-config.sha256',tree/'config/commercial-public-config.sha256')
+ subprocess.run([sys.executable,'tools/generate-public-config.py'],cwd=tree,check=True)
+ before={p.relative_to(tree):p.read_bytes() for p in tree.rglob('*') if p.is_file()}
+ subprocess.run([sys.executable,'tools/generate-public-config.py'],cwd=tree,check=True);assert before=={p.relative_to(tree):p.read_bytes() for p in tree.rglob('*') if p.is_file()}
+ canonical=tree/'config/commercial-public-config.json';canonical.write_bytes(canonical.read_bytes().replace(doc['supportEmail'].encode(),b'attacker@example.net'))
+ pin_before=(tree/'config/commercial-public-config.sha256').read_bytes();subprocess.run([sys.executable,'tools/generate-public-config.py'],cwd=tree,check=True);assert (tree/'config/commercial-public-config.sha256').read_bytes()==pin_before
+ failed=subprocess.run([sys.executable,'tools/generate-public-config.py','--check'],cwd=tree);assert failed.returncode!=0
+
+def test_direct_config_authoritative_recipient_matrix_and_challenge_paths(tmp_path):
+ from growthmap_payments.facilitator import OfficialX402Facilitator
+ def production(recipient,**changes):
+  return replace(config(tmp_path/(hashlib.sha256((recipient+str(changes)).encode()).hexdigest()+'.sqlite')),recipient=recipient,production=True,admin_secret_hash='$argon2id$fixture',**changes)
+ case_variant='0x'+APPROVED_BASE_RECIPIENT[2:].upper()
+ for recipient in ('','0x1111111111111111111111111111111111111111',case_variant):
+  with pytest.raises(RuntimeError,match='recipient'):production(recipient).validate()
+ production(APPROVED_BASE_RECIPIENT).validate()
+ with pytest.raises(RuntimeError,match='opt-in forbidden'):production(APPROVED_BASE_RECIPIENT,allow_live_payment_recipient=True).validate()
+ for recipient,opt_in,accepted in ((RECIPIENT,False,True),(RECIPIENT,True,True),(APPROVED_BASE_RECIPIENT,False,False),(case_variant,False,False),(APPROVED_BASE_RECIPIENT,True,True),(case_variant,True,True)):
+  c=replace(config(tmp_path/f'nonprod-{recipient[-4:]}-{opt_in}-{accepted}.sqlite'),recipient=recipient,allow_live_payment_recipient=opt_in)
+  if accepted:c.validate()
+  else:
+   with pytest.raises(RuntimeError,match='live payment recipient'):c.validate()
+ class CustomFacilitator:
+  def verify(self,*args):raise AssertionError
+  def settle(self,*args):raise AssertionError
+ official=OfficialX402Facilitator('https://facilitator.test',client=object())
+ for index,facilitator in enumerate((None,MockFacilitator(),official,CustomFacilitator())):
+  c=production(APPROVED_BASE_RECIPIENT);c=replace(c,db_path=tmp_path/f'authority-{index}.sqlite',settlement_checkpoint_path=tmp_path/f'authority-{index}.checkpoint')
+  service=PaymentService(c,facilitator);order=service.create_order('x402',f'authority-{index}@e.test');assert service.challenge(order['order_id'])['accepts'][0]['payTo']==APPROVED_BASE_RECIPIENT
+  with pytest.raises(RuntimeError,match='recipient'):PaymentService(replace(c,db_path=tmp_path/f'bad-{index}.sqlite',settlement_checkpoint_path=tmp_path/f'bad-{index}.checkpoint',recipient=RECIPIENT),facilitator)
+
+def test_nonproduction_live_recipient_requires_explicit_valid_opt_in(tmp_path,monkeypatch):
+ import growthmap_payments.api as api
+ monkeypatch.setenv('GROWTHMAP_PAYMENTS_ENV','test');monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT',APPROVED_BASE_RECIPIENT)
+ with pytest.raises(RuntimeError,match='forbidden outside production'):api.from_env()
+ monkeypatch.setenv('GROWTHMAP_ALLOW_LIVE_PAYMENT_RECIPIENT','yes')
+ with pytest.raises(RuntimeError,match='invalid live payment'):api.from_env()
+ monkeypatch.setenv('GROWTHMAP_ALLOW_LIVE_PAYMENT_RECIPIENT','1')
+ with pytest.raises(RuntimeError) as caught:api.from_env()
+ assert 'live payment recipient' not in str(caught.value)

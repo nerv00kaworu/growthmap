@@ -8,6 +8,7 @@
     "start": "electron .",
     "pack:dir": "npm run preflight && electron-builder --dir",
     "dist:win": "npm run preflight:win && electron-builder --win nsis --publish never",
+    "dist:win:signed": "node scripts/require-signed-release.js && npm run preflight:win && electron-builder --win nsis --publish never --config electron-builder-signed.js",
     "dist:win:e2e": "npm run preflight:win && electron-builder --win dir --config scripts/e2e-builder-config.js --publish never",
     "preflight": "node scripts/preflight.js",
     "preflight:win": "node scripts/preflight.js win32",
@@ -53,6 +54,8 @@
       "startup-policy.js",
       "startup-verdict.js",
       "commercial-config.js",
+      "release-mode.js",
+      "release-mode.json",
       "license-file.js",
       "device-identity-store.js",
       "product-identity.json",
@@ -60,7 +63,8 @@
       "!e2e-main.js",
       "package.json",
       "csp.js",
-      "generated/csp-script-hashes.json"
+      "generated/csp-script-hashes.json",
+      "generated/public-config.js"
     ],
     "extraResources": [
       {
@@ -93,9 +97,9 @@
       }
     ],
     "win": {
-      "verifyUpdateCodeSignature": true,
+      "verifyUpdateCodeSignature": false,
       "signtoolOptions": {
-        "publisherName": "GrowthMap Software Ltd."
+        "publisherName": "月影塵（nerv00kaworu）"
       },
       "target": [
         {

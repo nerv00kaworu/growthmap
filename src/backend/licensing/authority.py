@@ -191,31 +191,29 @@ class LicenseAuthority:
         if authority_id!=self.authority_id:raise ValueError("wrong_authority")
         if action not in {"refund","revoke"}:raise ValueError("invalid_revocation_action")
         if reason not in {"refund","chargeback","fraud","terms_violation","administrative"} or len(reason)>32:raise ValueError("invalid_revocation_reason")
-        if (not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}",source or "") or
-            not re.fullmatch(r"[a-f0-9]{64}",source_id or "") or
-            not re.fullmatch(r"[a-f0-9]{64}",payload_digest or "") or
-            not isinstance(license_id,str) or not LICENSE_ID_RE.fullmatch(license_id) or
-            not re.fullmatch(r"[a-f0-9]{64}",payment_proof or "") or
-            not re.fullmatch(r"0x[a-fA-F0-9]{64}",tx_hash or "")):
-            raise ValueError("invalid_revocation_evidence")
-        try:
-            event_time=datetime.fromisoformat(created_at.replace("Z","+00:00"))
-            if event_time.tzinfo is None:raise ValueError
-        except (AttributeError,ValueError) as error:raise ValueError("invalid_revocation_created_at") from error
+        if (not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}",source or "") or not re.fullmatch(r"[a-f0-9]{64}",source_id or "") or not re.fullmatch(r"[a-f0-9]{64}",payload_digest or "") or not isinstance(license_id,str) or not LICENSE_ID_RE.fullmatch(license_id) or not re.fullmatch(r"[a-f0-9]{64}",payment_proof or "") or not re.fullmatch(r"0x[a-fA-F0-9]{64}",tx_hash or "")):raise ValueError("invalid_revocation_evidence")
         request={"authority_id":authority_id,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id,"action":action,"reason":reason,"payment_proof":payment_proof,"tx_hash":tx_hash,"created_at":created_at};request_digest=hashlib.sha256(canonical(request)).hexdigest()
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE");row=db.execute("SELECT license_id,payload_digest FROM external_entitlements WHERE source=? AND source_id=?",(source,source_id)).fetchone()
-            if not row or row["payload_digest"]!=payload_digest or (license_id is not None and row["license_id"]!=license_id):db.rollback();raise ValueError("external_entitlement_unavailable")
+            if not row or row["payload_digest"]!=payload_digest or row["license_id"]!=license_id:db.rollback();raise ValueError("external_entitlement_unavailable")
+            # Replay lookup deliberately precedes freshness: durable outbox retries after
+            # an Authority commit/payment acknowledgement crash return the same receipt.
             prior=db.execute("SELECT request_digest,receipt,revoked_at,license_id FROM external_revocations WHERE source=? AND source_id=?",(source,source_id)).fetchone()
             if prior:
                 if prior["request_digest"]!=request_digest:db.rollback();raise ValueError("external_revocation_contradiction")
                 db.commit();return {"license_id":prior["license_id"],"revoked_at":prior["revoked_at"],"revocation_receipt":prior["receipt"],"authority_id":authority_id}
-            revoked_at=utc(self.now());receipt=hashlib.sha256(canonical({"authority_id":authority_id,"request_digest":request_digest,"license_id":row["license_id"],"revoked_at":revoked_at})).hexdigest()
-            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]))
-            db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]))
-            db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],))
-            db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]))
-            db.execute("INSERT INTO external_revocations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id}
+            try:
+                event_time=datetime.fromisoformat(created_at.replace("Z","+00:00"))
+                if event_time.tzinfo is None:raise ValueError
+                event_time=event_time.astimezone(timezone.utc);clock=self.now()
+                if not isinstance(clock,datetime) or clock.tzinfo is None:raise RuntimeError("invalid_authority_clock")
+                now=clock.astimezone(timezone.utc)
+                if event_time<now-timedelta(hours=24) or event_time>now+timedelta(minutes=5):raise ValueError
+            except RuntimeError:
+                db.rollback();raise
+            except (AttributeError,TypeError,ValueError) as error:db.rollback();raise ValueError("invalid_revocation_created_at") from error
+            revoked_at=utc(now);receipt=hashlib.sha256(canonical({"authority_id":authority_id,"request_digest":request_digest,"license_id":row["license_id"],"revoked_at":revoked_at})).hexdigest()
+            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id}
     def deactivate(self, *, license_id: str, device_id: str, reason="user_recovery") -> bool:
         """Authority-authenticated caller boundary: deployment must authenticate license owner/admin."""
         with self._lock,self._connect() as db:

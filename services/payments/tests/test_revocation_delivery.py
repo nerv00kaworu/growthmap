@@ -1,5 +1,6 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime,timedelta,timezone
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
@@ -140,8 +141,44 @@ def test_challenge_wrong_proof_rolls_back_and_exact_response_loss(tmp_path):
 
 def test_authority_revocation_strict_shape_and_contradiction(tmp_path):
  service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority);args=_revocation_args(service,ent);first=authority.revoke_external_entitlement(**args);assert authority.revoke_external_entitlement(**args)==first
- for field,value,error in (("action","reject","invalid_revocation_action"),("reason","other","invalid_revocation_reason"),("license_id","bad id","invalid_revocation_evidence"),("payment_proof","no","invalid_revocation_evidence"),("tx_hash","no","invalid_revocation_evidence"),("created_at","legacy","invalid_revocation_created_at")):
+ for field,value,error in (("action","reject","invalid_revocation_action"),("reason","other","invalid_revocation_reason"),("license_id","bad id","invalid_revocation_evidence"),("payment_proof","no","invalid_revocation_evidence"),("tx_hash","no","invalid_revocation_evidence")):
   bad=dict(args);bad[field]=value
   with pytest.raises(ValueError,match=error):authority.revoke_external_entitlement(**bad)
  contradictory=dict(args);contradictory["reason"]="chargeback"
  with pytest.raises(ValueError,match="external_revocation_contradiction"):authority.revoke_external_entitlement(**contradictory)
+
+
+def test_revocation_created_at_freshness_and_expired_exact_replay(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority);args=_revocation_args(service,ent)
+ for stamp in ((datetime.now(timezone.utc)+timedelta(minutes=6)).isoformat(),(datetime.now(timezone.utc)-timedelta(hours=25)).isoformat(),datetime.now().isoformat()):
+  bad=dict(args);bad["created_at"]=stamp
+  with pytest.raises(ValueError,match="invalid_revocation_created_at"):authority.revoke_external_entitlement(**bad)
+ first=authority.revoke_external_entitlement(**args)
+ old_now=authority.now;authority.now=lambda: old_now()+timedelta(hours=25)
+ assert authority.revoke_external_entitlement(**args)==first
+ contradiction=dict(args);contradiction["reason"]="chargeback"
+ with pytest.raises(ValueError,match="external_revocation_contradiction"):authority.revoke_external_entitlement(**contradiction)
+
+
+def test_revocation_naive_authority_clock_fails_closed(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority);args=_revocation_args(service,ent);authority.now=lambda:datetime.now()
+ with pytest.raises(RuntimeError,match="invalid_authority_clock"):authority.revoke_external_entitlement(**args)
+
+
+def test_payment_rejects_stale_future_and_naive_revocation_creation(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority)
+ with service._db() as db:
+  row=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(order["order_id"],)).fetchone()
+  for stamp in ((datetime.now(timezone.utc)-timedelta(minutes=6)).isoformat(),(datetime.now(timezone.utc)+timedelta(minutes=6)).isoformat(),datetime.now().isoformat()):
+   with pytest.raises(ValueError,match="invalid revocation event time"):service._enqueue_revocation(db,row,ent["license_id"],"revoke","fraud",stamp)
+
+def test_payment_revocation_uses_one_injected_aware_utc_clock(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority)
+ instant=datetime(2030,1,2,3,4,5,tzinfo=timezone(timedelta(hours=8)));service.now=lambda:instant.isoformat()
+ result=service.admin_transition(order["order_id"],"revoke","fraud")
+ assert result["revocation"]["revoked_at"]=="2030-01-01T19:04:05Z"
+ assert result["revocation_event"]["created_at"]=="2030-01-01T19:04:05+00:00"
+
+def test_payment_revocation_naive_injected_clock_fails_closed(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);service.deliver_entitlement(order["order_id"],authority);service.now=lambda:datetime(2030,1,1)
+ with pytest.raises(RuntimeError,match="invalid_payment_clock"):service.admin_transition(order["order_id"],"revoke","fraud")
