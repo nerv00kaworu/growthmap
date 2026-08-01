@@ -143,8 +143,8 @@ def main(argv):
  if len(argv)!=3 or argv[1] not in ("--validate-db","--validated-snapshot-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
  if argv[1]=="--entitlement-status":
   # No database is opened. This is the same cryptographic verifier used by the API.
-  from desktop.entitlements import peek_current_entitlement
-  result=peek_current_entitlement().public()
+  from desktop.startup_verdict import effective_entitlement
+  result=effective_entitlement().public()
  elif argv[1]=="--validate-db": result=validate(argv[2])
  elif argv[1]=="--schema-status": result=schema_status(argv[2])
  else: result=validated_snapshot(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])

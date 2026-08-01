@@ -153,3 +153,7 @@ Please keep all user-facing text in Traditional Chinese (繁體中文), and main
 ## 📄 License
 
 MIT
+
+### License issuance Phase 1
+
+Payment-independent device activation and desktop unlock are specified in [`docs/LICENSE-ISSUANCE-v1.md`](docs/LICENSE-ISSUANCE-v1.md). This source module is not a deployed issuance service: production HSM/KMS, API authentication/TLS, rollback-resistant storage, recovery controls, and Windows signed-package validation remain release gates.

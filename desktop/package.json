@@ -23,9 +23,9 @@
     "rimraf": "6.1.2"
   },
   "devDependencies": {
-    "electron": "^43.2.0",
-    "electron-builder": "^26.15.3",
-    "playwright-core": "^1.62.0"
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "playwright-core": "1.62.0"
   },
   "build": {
     "appId": "com.growthmap.desktop",
@@ -53,6 +53,8 @@
       "startup-policy.js",
       "startup-verdict.js",
       "commercial-config.js",
+      "license-file.js",
+      "device-identity-store.js",
       "product-identity.json",
       "commercial-config.json",
       "!e2e-main.js",
@@ -145,6 +147,6 @@
   "description": "Windows-first local GrowthMap authoring desktop application",
   "author": "GrowthMap Project Contributors",
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "6.8.9"
   }
 }

@@ -31,6 +31,9 @@ PUBLIC_KEY_PATH = _public_key_path()
 EDITIONS = {"personal", "pro", "studio"}
 LICENSE_FIELDS = {"schema_version","edition","license_id","major_version","device_allowance","device_binding","issued_at","expires_at","revoked_at","max_active_projects","next_check_in_at","signature"}
 LICENSE_REQUIRED = {"schema_version","edition","license_id","major_version","device_allowance","issued_at","max_active_projects","signature"}
+ACTIVATION_FIELDS = {"schema_version","certificate_type","product","edition","license_id","activation_id","major_version","device_allowance","device_id","device_public_key","issued_at","expires_at","revoked_at","max_active_projects","next_check_in_at","signature"}
+ACTIVATION_DOMAIN=b"growthmap-activation-certificate-v2\0"
+DEVICE_ID_RE=re.compile(r"gmdev_[0-9a-f]{64}")
 ROLLBACK_TOLERANCE = timedelta(minutes=5)
 REVOCATION_FIELDS={"schema_version","assertion_type","product","major_version","license_id","revoked_at","sequence","reason_code","signature"}
 REVOCATION_REASONS={None,"refund","chargeback","fraud","terms_violation","administrative"}
@@ -72,47 +75,75 @@ def strict_json_loads(raw: str) -> dict[str,Any]:
         return result
     return json.loads(raw,object_pairs_hook=pairs)
 
+def stable_file_bytes(path: Path, *, max_bytes: int=65536) -> bytes:
+    flags=os.O_RDONLY|getattr(os,"O_NOFOLLOW",0)
+    fd=os.open(path,flags)
+    try:
+        before=os.fstat(fd)
+        if not __import__("stat").S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_size>max_bytes:raise ValueError("unsafe_file")
+        chunks=[];remaining=before.st_size
+        while remaining:
+            part=os.read(fd,min(remaining,65536))
+            if not part:raise ValueError("short_read")
+            chunks.append(part);remaining-=len(part)
+        after=os.fstat(fd)
+        if (before.st_dev,before.st_ino,before.st_size,before.st_nlink)!=(after.st_dev,after.st_ino,after.st_size,after.st_nlink):raise ValueError("unstable_file")
+        return b"".join(chunks)
+    finally:os.close(fd)
+
+def stable_json_file(path: Path, *, max_bytes: int=65536) -> dict[str,Any]:
+    return strict_json_loads(stable_file_bytes(path,max_bytes=max_bytes).decode("utf-8"))
+
 def canonical_payload(doc: dict[str, Any]) -> bytes:
     return json.dumps({k:doc[k] for k in sorted(doc) if k != "signature"}, sort_keys=True, separators=(",",":"), ensure_ascii=False).encode()
 
-def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, *, now: datetime | None=None, current_major: int=CURRENT_MAJOR_VERSION) -> Entitlement:
-    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+def _device_id(public_key_b64: str) -> str:
+    raw=base64.b64decode(public_key_b64,validate=True)
+    if len(raw)!=32: raise ValueError("device_public_key")
+    Ed25519PublicKey.from_public_bytes(raw)
+    return "gmdev_"+__import__("hashlib").sha256(raw).hexdigest()
+
+def verify_document(doc: dict[str, Any], public_key_path: Path=PUBLIC_KEY_PATH, *, now: datetime | None=None, current_major: int=CURRENT_MAJOR_VERSION, device_public_key: str|None=None) -> Entitlement:
+    now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
-        if not isinstance(doc, dict) or set(doc)-LICENSE_FIELDS or not LICENSE_REQUIRED <= set(doc): return Entitlement(reason="invalid_document")
-        if isinstance(doc["schema_version"],bool) or not isinstance(doc["schema_version"],int) or doc["schema_version"] != 1: return Entitlement(reason="unsupported_schema")
+        if not isinstance(doc,dict): return Entitlement(reason="invalid_document")
+        version=doc.get("schema_version");is_activation=version==2;allowed=ACTIVATION_FIELDS if is_activation else LICENSE_FIELDS;required=ACTIVATION_FIELDS if is_activation else LICENSE_REQUIRED
+        invalid_fields=(set(doc)!=allowed) if is_activation else (bool(set(doc)-allowed) or not required<=set(doc))
+        if invalid_fields: return Entitlement(reason="invalid_document")
+        if isinstance(version,bool) or not isinstance(version,int) or version not in {1,2}: return Entitlement(reason="unsupported_schema")
         if doc["edition"] not in EDITIONS: return Entitlement(reason="invalid_edition")
         if not isinstance(doc["license_id"],str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",doc["license_id"]): return Entitlement(reason="invalid_license_id")
-        if isinstance(doc["major_version"],bool) or not isinstance(doc["major_version"],int) or doc["major_version"] < 1: return Entitlement(reason="invalid_major_version")
-        if isinstance(doc["device_allowance"],bool) or not isinstance(doc["device_allowance"],int) or doc["device_allowance"] < 1: return Entitlement(reason="invalid_device_allowance")
-        binding=doc.get("device_binding")
-        if binding is not None: return Entitlement(reason="device_binding_unsupported")
-        _iso(doc["issued_at"])
-        expires=doc.get("expires_at");expiry=None
-        if expires is not None:
-            try: expiry=_iso(expires)
-            except (ValueError,TypeError): return Entitlement(reason="invalid_expiry")
-        revoked=None
-        if doc.get("revoked_at") is not None:
-            try: revoked=_iso(doc["revoked_at"])
-            except (ValueError,TypeError): return Entitlement(reason="invalid_revocation")
-        if doc["max_active_projects"] is not None: return Entitlement(reason="invalid_limit")
+        for name in ("major_version","device_allowance"):
+            if isinstance(doc[name],bool) or not isinstance(doc[name],int) or doc[name]<1: return Entitlement(reason="invalid_"+name)
+        # Stable precedence: exact shape/basic primitive types, then signature, then signed semantics.
         raw=public_key_path.read_bytes()
         if b"REPLACE_WITH" in raw: return Entitlement(reason="placeholder_public_key")
         key=serialization.load_pem_public_key(raw)
         if not isinstance(key,Ed25519PublicKey): return Entitlement(reason="invalid_public_key")
-        key.verify(base64.b64decode(doc["signature"],validate=True),canonical_payload(doc))
-        if doc["major_version"] != current_major: return Entitlement(reason="major_mismatch", major_version=doc["major_version"])
+        key.verify(base64.b64decode(doc["signature"],validate=True),(ACTIVATION_DOMAIN if is_activation else b"")+canonical_payload(doc))
+        if doc["device_allowance"]>2: return Entitlement(reason="invalid_device_allowance")
+        if doc["max_active_projects"] is not None: return Entitlement(reason="invalid_limit")
+        try: _iso(doc["issued_at"])
+        except Exception:return Entitlement(reason="invalid_issued_at")
+        try: expiry=_iso(doc["expires_at"]) if doc.get("expires_at") is not None else None
+        except Exception:return Entitlement(reason="invalid_expiry")
+        try: revoked=_iso(doc["revoked_at"]) if doc.get("revoked_at") is not None else None
+        except Exception:return Entitlement(reason="invalid_revocation")
+        if is_activation:
+            if doc["certificate_type"]!="growthmap_device_activation" or doc["product"]!="growthmap": return Entitlement(reason="invalid_certificate_type")
+            if not isinstance(doc["activation_id"],str) or not re.fullmatch(r"gma_[0-9a-f]{32}",doc["activation_id"]): return Entitlement(reason="invalid_activation_id")
+            if not isinstance(doc["device_id"],str) or not DEVICE_ID_RE.fullmatch(doc["device_id"]) or _device_id(doc["device_public_key"])!=doc["device_id"]: return Entitlement(reason="invalid_device_binding")
+            if not device_public_key: return Entitlement(reason="device_identity_missing",license_id=doc["license_id"],major_version=doc["major_version"])
+            if not __import__("hmac").compare_digest(doc["device_public_key"],device_public_key): return Entitlement(reason="wrong_device",license_id=doc["license_id"],major_version=doc["major_version"])
+        elif doc.get("device_binding") is not None: return Entitlement(reason="device_binding_unsupported")
+        if doc["major_version"]!=current_major: return Entitlement(reason="major_mismatch",major_version=doc["major_version"],license_id=doc["license_id"])
         observed=dict(state="paid_observed",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None)
-        if expiry is not None and expiry <= now: return Entitlement(**observed,reason="expired")
-        if revoked is not None and revoked <= now: return Entitlement(**observed,reason="revoked")
-        if "next_check_in_at" in doc:
-            try: next_check_in=_iso(doc["next_check_in_at"])
-            except (ValueError,TypeError,KeyError): return Entitlement(reason="invalid_check_in")
-            if now > next_check_in: return Entitlement(reason="check_in_required",license_id=doc["license_id"],major_version=doc["major_version"])
-        else:
-            return Entitlement(state="paid_legacy",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=False,reason="legacy_bootstrap_required")
+        if expiry is not None and expiry<=now: return Entitlement(**observed,reason="expired")
+        if revoked is not None and revoked<=now: return Entitlement(**observed,reason="revoked")
+        if "next_check_in_at" not in doc or not is_activation: return Entitlement(state="paid_legacy",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=False,reason="legacy_bootstrap_required")
+        if now>_iso(doc["next_check_in_at"]): return Entitlement(reason="check_in_required",license_id=doc["license_id"],major_version=doc["major_version"])
         return Entitlement(state="paid",edition=doc["edition"],license_id=doc["license_id"],major_version=doc["major_version"],device_allowance=doc["device_allowance"],max_active_projects=None,valid=True,mutations_allowed=True,reason="valid")
-    except (OSError,ValueError,TypeError,InvalidSignature): return Entitlement(reason="invalid_signature")
+    except (OSError,ValueError,TypeError,KeyError,InvalidSignature): return Entitlement(reason="invalid_signature")
 
 def verify_revocation_assertion(doc: dict[str,Any], license_id: str, public_key_path: Path=PUBLIC_KEY_PATH, *, current_major: int=CURRENT_MAJOR_VERSION, minimum_sequence: int=0, now: datetime|None=None, issued_at: str|None=None) -> dict[str,Any]:
     now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -141,15 +172,31 @@ def apply_revocation(value: Entitlement, path: Path=REVOCATION_PATH, *, public_k
     return Entitlement(reason="revoked",license_id=value.license_id,major_version=value.major_version)
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True,exist_ok=True)
-    fd,name=tempfile.mkstemp(prefix=path.name+".",suffix=".tmp",dir=path.parent)
+    parent=path.parent;parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if os.name=="nt":
+        # Python dirfd/openat primitives are unavailable on Windows; fail closed on reparse-like parents/files.
+        if parent.is_symlink() or (path.exists() and (path.is_symlink() or not path.is_file())):raise ValueError("unsafe_destination")
+        fd,name=tempfile.mkstemp(prefix=path.name+".",suffix=".tmp",dir=parent)
+        try:
+            with os.fdopen(fd,"w",encoding="utf-8") as handle:json.dump(value,handle,separators=(",",":"));handle.flush();os.fsync(handle.fileno())
+            os.chmod(name,0o600);os.replace(name,path)
+        except Exception:
+            try:os.unlink(name)
+            except OSError:pass
+            raise
+        return
+    dfd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY|getattr(os,"O_NOFOLLOW",0));name=f".{path.name}.{os.getpid()}.{__import__('secrets').token_hex(8)}.tmp"
     try:
-        with os.fdopen(fd,"w",encoding="utf-8") as handle: json.dump(value,handle,separators=(",",":")); handle.flush(); os.fsync(handle.fileno())
-        os.chmod(name,0o600); os.replace(name,path)
+        fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=dfd)
+        try:
+            raw=json.dumps(value,separators=(",",":")).encode();os.write(fd,raw);os.fsync(fd)
+        finally:os.close(fd)
+        os.replace(name,path.name,src_dir_fd=dfd,dst_dir_fd=dfd);os.fsync(dfd)
     except Exception:
-        try: os.unlink(name)
-        except OSError: pass
+        try:os.unlink(name,dir_fd=dfd)
+        except OSError:pass
         raise
+    finally:os.close(dfd)
 
 def initialize_trial(path: Path=TRIAL_PATH, *, now: datetime | None=None, started_at: str | None=None, installation_id: str="test-installation") -> None:
     """Electron-authorized first-install initialization; never resets existing/corrupt state."""
@@ -176,7 +223,7 @@ def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, check
 def peek_current_entitlement(*, now: datetime | None=None) -> Entitlement:
     """Cryptographic entitlement lookup with zero file writes."""
     if LICENSE_PATH.exists():
-        try: doc=strict_json_loads(LICENSE_PATH.read_text("utf-8")); return apply_revocation(verify_document(doc,public_key_path=_public_key_path(),now=now),public_key_path=_public_key_path(),issued_at=doc.get("issued_at"))
+        try: doc=strict_json_loads(LICENSE_PATH.read_text("utf-8")); return apply_revocation(verify_document(doc,public_key_path=_public_key_path(),now=now,device_public_key=os.getenv("GROWTHMAP_DEVICE_PUBLIC_KEY")),public_key_path=_public_key_path(),issued_at=doc.get("issued_at"))
         except (OSError,ValueError): return Entitlement(reason="corrupt_license")
     return trial_entitlement(now=now,checkpoint=False)
 
