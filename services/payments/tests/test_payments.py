@@ -494,7 +494,7 @@ def test_direct_config_authoritative_recipient_matrix_and_challenge_paths(tmp_pa
  class CustomFacilitator:
   def verify(self,*args):raise AssertionError
   def settle(self,*args):raise AssertionError
- official=OfficialX402Facilitator('https://facilitator.test',client=object())
+ official=OfficialX402Facilitator('https://facilitator.test',client=object(),_allow_test_origin=True)
  for index,facilitator in enumerate((None,MockFacilitator(),official,CustomFacilitator())):
   c=production(APPROVED_BASE_RECIPIENT);c=replace(c,db_path=tmp_path/f'authority-{index}.sqlite',settlement_checkpoint_path=tmp_path/f'authority-{index}.checkpoint')
   service=PaymentService(c,facilitator);order=service.create_order('x402',f'authority-{index}@e.test');assert service.challenge(order['order_id'])['accepts'][0]['payTo']==APPROVED_BASE_RECIPIENT

@@ -71,7 +71,8 @@ async def strict_body(request,model):
 def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
  if config.production:
   if isinstance(facilitator,MockFacilitator):raise RuntimeError("mock facilitator forbidden in production")
-  if not isinstance(facilitator,OfficialX402Facilitator):raise RuntimeError("production requires official HTTPS x402 adapter")
+  # No source-level constructor, marker, subclass, provider, or client proves
+  # production authorization. The reviewed composition root is not integrated.
   raise RuntimeError("production service blocked: reviewed Argon2id session provider not integrated")
  service=PaymentService(config,facilitator);app=FastAPI(title="GrowthMap Payments Candidate",version="1.0-device-activation");limiter=Limiter(config.rate_limit)
  @app.middleware("http")

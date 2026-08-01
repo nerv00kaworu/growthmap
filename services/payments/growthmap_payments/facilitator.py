@@ -1,34 +1,115 @@
 """Fail-closed adapter around the official x402 Python SDK 2.17.0."""
 from __future__ import annotations
 import hashlib
+import ipaddress
 import json
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 from .service import BASE_NETWORK, BASE_USDC
 
 _TX = re.compile(r"0x[0-9a-fA-F]{64}")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+_ORIGIN_ERROR = "facilitator endpoint must be a canonical public-DNS HTTPS origin"
+# Fail closed on syntactically recognizable IANA/IETF special-use namespaces.
+# ``arpa`` intentionally covers the entire infrastructure namespace, including
+# reverse DNS and AS112/resolver names. ``test`` is handled separately because
+# it has one explicit offline-only opt-in. Raw IDNA A-labels are not accepted.
+_SPECIAL_USE_ROOTS = (
+    "localhost", "local", "internal", "invalid", "example", "alt", "arpa", "onion",
+    "example.com", "example.net", "example.org",
+)
+
+
+def _is_legacy_numeric_ipv4(host: str) -> bool:
+    """Recognize 1–4 component decimal/octal/hex IPv4-like hosts offline."""
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return False
+    numeric_component = re.compile(r"(?:[0-9]+|0[xX][0-9a-fA-F]+)")
+    return all(numeric_component.fullmatch(part) for part in parts)
+
+
+class FacilitatorClientProvider(Protocol):
+    """Dependency-construction seam; it is not an authorization boundary."""
+    def build_x402_client(self, *, endpoint: str, timeout: float) -> Any: ...
 
 class OfficialX402Facilitator:
     """Synchronous boundary used by the durable ledger.
 
-    ``client`` is injectable only to permit offline contract tests. Production
-    construction uses x402.http.HTTPFacilitatorClientSync.
+    ``client`` is injectable only to permit offline contract tests. Construction
+    APIs do not prove authorization; the real production composition root is not
+    integrated. Neither this adapter nor the ledger reads raw credential env vars.
     """
-    def __init__(self, endpoint: str, *, timeout: float = 20.0, client: Any = None, allowed_origin: str|None=None, context_ttl=120, max_contexts=1024):
-        parsed=urlsplit(endpoint);origin=f"{parsed.scheme}://{parsed.netloc}"
-        if (parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in("","/") or
-            (allowed_origin is not None and origin.lower()!=allowed_origin.rstrip('/').lower())):
-            raise RuntimeError("facilitator endpoint must be an exact allowed HTTPS origin")
-        self.endpoint = origin
+    @staticmethod
+    def _validated_origin(endpoint: str, allowed_origin: str | None, *, allow_test_origin: bool = False) -> str:
+        def canonical(value: str) -> str:
+            if not isinstance(value, str):
+                raise RuntimeError(_ORIGIN_ERROR)
+            # urlsplit strips or normalizes some ASCII controls. Reject them before
+            # parsing so no parser/resolver differential can change the byte string.
+            if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+                raise RuntimeError(_ORIGIN_ERROR)
+            try:
+                parsed = urlsplit(value)
+                host = parsed.hostname
+                port = parsed.port
+            except (TypeError, ValueError):
+                raise RuntimeError(_ORIGIN_ERROR) from None
+            if (parsed.scheme != "https" or not host or parsed.netloc != host or port is not None
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or host != host.lower() or host.endswith(".") or "_" in host):
+                raise RuntimeError(_ORIGIN_ERROR)
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pass
+            else:
+                raise RuntimeError(_ORIGIN_ERROR)
+            if _is_legacy_numeric_ipv4(host):
+                raise RuntimeError(_ORIGIN_ERROR)
+            labels = host.split(".")
+            special_use = any(host == root or host.endswith("." + root) for root in _SPECIAL_USE_ROOTS)
+            raw_a_label = any(label.startswith("xn--") for label in labels)
+            test_only = host == "test" or host.endswith(".test")
+            if (len(labels) < 2 or any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+                    or special_use or raw_a_label or (test_only and not allow_test_origin)):
+                raise RuntimeError(_ORIGIN_ERROR)
+            origin = "https://" + host
+            if value != origin:
+                raise RuntimeError(_ORIGIN_ERROR)
+            return origin
+
+        origin = canonical(endpoint)
+        if allowed_origin is not None and canonical(allowed_origin) != origin:
+            raise RuntimeError(_ORIGIN_ERROR)
+        return origin
+
+    def __init__(self, endpoint: str, *, timeout: float = 20.0, client: Any = None, allowed_origin: str | None = None,
+                 context_ttl=120, max_contexts=1024, _allow_test_origin: bool = False):
+        self.endpoint = self._validated_origin(endpoint, allowed_origin, allow_test_origin=_allow_test_origin)
         if client is None:
             from x402.http import FacilitatorConfig, HTTPFacilitatorClientSync
             client = HTTPFacilitatorClientSync(FacilitatorConfig(url=self.endpoint, timeout=timeout))
         self.client = client
-        self._contexts: dict[str, tuple[Any, Any,str,float]] = {};self._lock=threading.Lock();self.context_ttl=context_ttl;self.max_contexts=max_contexts
+        self._contexts: dict[str, tuple[Any, Any, str, float]] = {}
+        self._lock = threading.Lock()
+        self.context_ttl = context_ttl
+        self.max_contexts = max_contexts
+
+    @classmethod
+    def from_client_provider(cls, endpoint: str, provider: FacilitatorClientProvider, *, timeout: float = 20.0,
+                             allowed_origin: str | None = None, _allow_test_origin: bool = False):
+        """Construct dependencies only; this does not prove production authorization."""
+        if provider is None or not callable(getattr(provider, "build_x402_client", None)):
+            raise RuntimeError("facilitator client provider required")
+        origin = cls._validated_origin(endpoint, allowed_origin, allow_test_origin=_allow_test_origin)
+        client = provider.build_x402_client(endpoint=origin, timeout=timeout)
+        if client is None or not callable(getattr(client, "verify", None)) or not callable(getattr(client, "settle", None)):
+            raise RuntimeError("facilitator provider returned invalid client")
+        return cls(origin, timeout=timeout, client=client, allowed_origin=allowed_origin, _allow_test_origin=_allow_test_origin)
 
     @staticmethod
     def _models(signature: str, challenge: dict[str, Any]):
