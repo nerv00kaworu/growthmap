@@ -12,7 +12,7 @@ At confirmation the current tier is recalculated. If quote, authorization, attes
 
 `POST /v1/orders` creates the order; `POST /v1/orders/{id}/purchase` without `PAYMENT-SIGNATURE` returns 402 plus base64 JSON in `PAYMENT-REQUIRED`, protocol v2, exact scheme, CAIP-2 `eip155:8453`, 6-decimal amount `10000000` or `29000000`, and payee. Native USDC is pinned to Circle's Base address `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` ([Circle contract list](https://developers.circle.com/stablecoins/usdc-contract-addresses), verified 2026-07-28). Requirements bind order, product, major, amount, network, asset and recipient. Replay IDs/payment proofs/transactions are unique. Client tx hashes alone are never trusted.
 
-Only deterministic `MockFacilitator` exists. Real CDP/official SDK verify+settle types/API are an explicit production blocker; this candidate does not invent them. Recipient placeholder fails startup. Human wallets open an HTTPS portal/WalletConnect seam; the desktop never receives keys or fabricates x402 headers.
+A candidate `OfficialX402Facilitator` adapter for the pinned x402 2.17 contract exists alongside the deterministic isolated-test `MockFacilitator`. It deliberately does not claim production readiness: production credentials, a real recipient/endpoint, authenticated receipt/finality reconciliation, deployment review and live smoke evidence remain blockers. Recipient placeholders fail startup. Human wallets open an HTTPS portal/WalletConnect seam; the desktop never receives keys or fabricates x402 headers.
 
 ## PayPal runbook
 
@@ -28,7 +28,7 @@ Refund/revocation never deletes evidence. Offline licenses remain usable until t
 
 Candidate admin auth uses configured exact origin, CSRF and constant-time test-session verification with no defaults. Production startup is unconditionally blocked until reviewed Argon2id session infrastructure is integrated. Order/recovery/admin rate limiting is an integration seam. Email is normalized; audit data uses email/proof hashes and must not log raw secrets, private keys or license signatures. Audit events are append-only hash chained and tamper-checkable. External payloads are retained only as hashes.
 
-SQLite is separate from every desktop DB, WAL enabled, FK/busy timeout enabled, current schema `PRAGMA user_version=6` (preserved baseline migration 001 plus checksum-pinned forward migrations 002–006). Back up using SQLite online backup or quiesce writes and consistently preserve DB/WAL; encrypt, access-control, integrity-check and restore-test. Apply only reviewed forward migrations.
+SQLite is separate from every desktop DB, WAL enabled, FK/busy timeout enabled, current schema `PRAGMA user_version=9` (preserved baseline migration 001 plus checksum-pinned forward migrations 002–009). Back up using SQLite online backup or quiesce writes and consistently preserve DB/WAL; encrypt, access-control, integrity-check and restore-test. Apply only reviewed forward migrations.
 
 ## Production blockers
 
@@ -71,3 +71,27 @@ New licenses contain a signed `next_check_in_at` 30 days after issue. Paid write
 Electron imports an assertion only after sidecar signature/schema/license/major validation, then atomically writes the assertion and an OS-safeStorage-encrypted digest/sequence receipt. Startup compares both: deletion, rollback, or tamper becomes extraction mode where durable receipt/assertion evidence remains. `safeStorage` availability is mandatory. OS credential-store rollback together with file rollback remains outside existing primitives and is a production blocker requiring an OS/HSM monotonic counter. The candidate intentionally exposes file import rather than automatic network check-in.
 
 Legacy schema-v1 licenses without `next_check_in_at` are signature-verified without altering their signed bytes, then receive a separate safeStorage-authenticated first-observation deadline of at most 30 days. The first observation uses local trusted application observation time, never `issued_at`. Paid-clock observations are checkpointed even when the signed license is already check-in-expired, so moving the clock forward and then backward cannot reactivate it. Revocation timestamps use canonical UTC `YYYY-MM-DDTHH:MM:SS[.ffffff]Z`, may be at most five minutes ahead of observation, and cannot precede license issuance. Raw license/revocation JSON rejects duplicate and Unicode-casefold-colliding keys before object construction.
+
+## R8 x402 → device activation closure
+
+New x402 settlements never create schema-v1 JSON and never set `device_binding=None`. The payment DB and authority DB are separate SQLite databases, so no cross-database atomicity is claimed:
+
+```text
+wallet portal → official x402 2.17 verify → payment settlement intent (durable)
+              → settle once → authenticated paid evidence → payment outbox (UNIQUE order)
+              ⇢ idempotent LicenseAuthority inbox (UNIQUE x402/order)
+              → POST body recovery auth + device Ed25519 PoP → signed v2 certificate
+              → existing desktop verifier/import → unlocked only on matching device
+```
+
+Schema 8 adds `entitlement_outbox`; `LicenseAuthority.external_entitlements` is the idempotent inbox. A crash at either side is recovered by replaying pending outbox rows: the same `(source,source_id)` returns the same license identity. Legacy `orders.license_json` is retained solely for explicit old recovery/manual migration; R8 code does not write it and the new activation response never returns portable entitlement JSON. Payment success may return `activation_required`, not a license.
+
+Activation secrets are accepted only by `POST /v1/activation/challenge` JSON. Responses are generic on authentication/proof failure and carry `Cache-Control: no-store`, `Pragma: no-cache`, and `Referrer-Policy: no-referrer`. The desktop/wallet boundary remains strict: wallet signing belongs to the external HTTPS purchase portal; device private keys remain in Electron main/safeStorage and only device proofs/certificates cross the seam.
+
+Production remains gated on reviewed TLS/auth and log redaction, HSM/KMS + rollback resistance, real recipient and facilitator credentials, mainnet smoke/reconciliation runbook, monitoring/backups, and signed Windows package E2E. No production recipient, secret, deployment, chain transaction, or Agent Port grant is included.
+
+### Official facilitator receipt/finality boundary
+
+The audited x402 2.17.0 `SettleResponse` includes success, payer, transaction, network and optional amount, but no authenticated block receipt, block number or finality timestamp. The official adapter therefore validates settle payer equals verify payer and then deliberately enters `manual_review`; it does **not** use local wall clock as finality. Promotion requires the authenticated reconciler to provide payer, transaction, immutable receipt/evidence digest, source, finality timestamp and explicit finality basis bound to the original order/proof/nonce/amount. This is a production integration gate, not an automatic retry.
+
+The schema-8 entitlement outbox payload is append-only and binds order/source, proof, transaction, evidence, payer, Base network, native USDC, exact atomic amount, product and major. Schema 9 adds an immutable revocation outbox binding authority/source identity, the original entitlement digest/license/order, refund-or-revoke action and reason, payment proof/transaction/evidence and creation time. Both use leased/fenced workers with expired-lease reclaim, bounded retry/quarantine, stale-worker rejection and immutable deterministic Authority receipts. Refund before delivery atomically cancels/quarantines the pending entitlement and creates no false Authority revoke; refund/revoke after delivery atomically writes local terminal state plus the revocation event. Crash windows on both paths replay by the same source identity. Reconciliation must quarantine any payment/outbox/authority disagreement.

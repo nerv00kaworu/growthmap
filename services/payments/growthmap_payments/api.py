@@ -4,10 +4,12 @@ import base64,hashlib,hmac,json,logging,os,threading,time
 from collections import defaultdict,deque
 from pathlib import Path
 from fastapi import FastAPI,Header,HTTPException,Request
+from pydantic import BaseModel,ConfigDict,StrictStr,ValidationError
 from fastapi.responses import JSONResponse
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .service import Config,PaymentService
+from .facilitator import OfficialX402Facilitator
 class MockFacilitator:
  """Nested authorization envelope for isolated tests; not an official SDK implementation."""
  def __init__(self):self.settled={};self.fail=False
@@ -19,11 +21,11 @@ class MockFacilitator:
   checks={"network":env["network"],"asset":auth.get("asset"),"amount":auth.get("value"),"payTo":auth.get("to"),"orderId":auth.get("orderId")}
   expected={"network":req["network"],"asset":req["asset"],"amount":req["amount"],"payTo":req["payTo"],"orderId":req["extra"]["orderId"]}
   if checks!=expected or not re_address(auth.get("from")) or not auth.get("nonce") or not isinstance(auth.get("validBefore"),int) or auth["validBefore"]<int(time.time()):raise ValueError("authorization binding")
-  return {"amount":auth["value"],"nonce":auth["nonce"],"proof_id":hashlib.sha256(signature.encode()).hexdigest()}
+  return {"amount":auth["value"],"nonce":auth["nonce"],"proof_id":hashlib.sha256(signature.encode()).hexdigest(),"payer":auth["from"]}
  def settle(self,signature,requirements):
   value=self.verify(signature,requirements)
   if self.fail:raise RuntimeError("mock settlement ambiguity")
-  result=self.settled.get(value["nonce"]) or {"success":True,"transaction":"mock:"+hashlib.sha256(signature.encode()).hexdigest()};self.settled[value["nonce"]]=result;return result
+  result=self.settled.get(value["nonce"]) or {"success":True,"transaction":"mock:"+hashlib.sha256(signature.encode()).hexdigest(),"payer":"0x"+"2"*40,"finality_at":PaymentService.now(),"finality_basis":"isolated_test_fixture"};self.settled[value["nonce"]]=result;return result
 def re_address(v):
  import re
  return isinstance(v,str) and re.fullmatch(r"0x[0-9a-fA-F]{40}",v) is not None
@@ -47,9 +49,30 @@ def load_settlement_mac_key(path):
  p=Path(path);raw=p.read_bytes()
  if len(raw)<32:raise RuntimeError("external settlement MAC key file is weak")
  return raw
-def create_app(config:Config,facilitator=None,reconciler=None):
- if config.production:raise RuntimeError("production service blocked: reviewed Argon2id session provider not integrated")
- service=PaymentService(config,facilitator);app=FastAPI(title="GrowthMap Payments Candidate",version="1.0-remediation");limiter=Limiter(config.rate_limit)
+class ActivationChallengeBody(BaseModel):
+ model_config=ConfigDict(extra='forbid',strict=True)
+ order_id:StrictStr;recovery_code:StrictStr;device_public_key:StrictStr
+class ActivationCompleteBody(BaseModel):
+ model_config=ConfigDict(extra='forbid',strict=True)
+ challenge_id:StrictStr;proof:StrictStr
+async def strict_body(request,model):
+ raw=await request.body()
+ if not raw or len(raw)>8192:raise ValueError('invalid body')
+ seen=[]
+ def pairs(items):
+  folded=set();result={}
+  for key,value in items:
+   if not isinstance(key,str) or key.casefold() in folded:raise ValueError('duplicate field')
+   folded.add(key.casefold());result[key]=value
+  return result
+ try:return model.model_validate(json.loads(raw,object_pairs_hook=pairs))
+ except (ValueError,ValidationError,json.JSONDecodeError) as error:raise ValueError('invalid body') from error
+def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
+ if config.production:
+  if isinstance(facilitator,MockFacilitator):raise RuntimeError("mock facilitator forbidden in production")
+  if not isinstance(facilitator,OfficialX402Facilitator):raise RuntimeError("production requires official HTTPS x402 adapter")
+  raise RuntimeError("production service blocked: reviewed Argon2id session provider not integrated")
+ service=PaymentService(config,facilitator);app=FastAPI(title="GrowthMap Payments Candidate",version="1.0-device-activation");limiter=Limiter(config.rate_limit)
  @app.middleware("http")
  async def prevent_sensitive_response_caching(request:Request,call_next):
   try:response=await call_next(request)
@@ -57,6 +80,8 @@ def create_app(config:Config,facilitator=None,reconciler=None):
    logging.getLogger("growthmap_payments.api").exception("Unhandled payment API error",extra={"path":request.url.path})
    response=JSONResponse(status_code=500,content={"detail":"Internal server error"})
   response.headers["Cache-Control"]="no-store"
+  response.headers["Pragma"]="no-cache"
+  response.headers["Referrer-Policy"]="no-referrer"
   return response
  def admin(request,authorization,csrf):
   ip=request.client.host if request.client else "unknown"
@@ -89,15 +114,18 @@ def create_app(config:Config,facilitator=None,reconciler=None):
   except (KeyError,ValueError) as e:raise HTTPException(410,str(e))
   if not payment_signature:return JSONResponse(status_code=402,content={"error":"payment_required","resource":challenge["resource"]},headers={"PAYMENT-REQUIRED":base64.b64encode(json.dumps(challenge,separators=(',',':')).encode()).decode(),"Cache-Control":"no-store"})
   if facilitator is None:raise HTTPException(503,"official facilitator integration blocked")
-  try:verified=facilitator.verify(payment_signature,challenge);intent=service.prepare_x402_intent(oid,verified["proof_id"],verified["nonce"],int(verified["amount"]))
+  try:verified=facilitator.verify(payment_signature,challenge);intent=service.prepare_x402_intent(oid,verified["proof_id"],verified["nonce"],int(verified["amount"]),verified.get("payer"))
   except ValueError as e:raise HTTPException(409,str(e))
   try:
    settled=facilitator.settle(payment_signature,challenge)
    if not settled.get("success"):raise RuntimeError("ambiguous")
-   service.record_settlement_result(intent["intent_id"],settled["transaction"],hashlib.sha256(json.dumps(settled,sort_keys=True).encode()).hexdigest(),"mock-facilitator",service.now());current=service.finalize_x402_intent(intent["intent_id"])
-   return {"order_id":oid,"state":current["state"],"license":json.loads(current["license_json"]),"transaction":settled["transaction"]}
+   evidence=settled.get("evidence",settled);service.record_settlement_result(intent["intent_id"],settled["transaction"],hashlib.sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest(),settled.get("source","isolated-test-facilitator"),settled.get("finality_at"),payer=settled.get("payer"),finality_basis=settled.get("finality_basis"));service.finalize_x402_intent(intent["intent_id"])
   except Exception as e:
    service.mark_intent_ambiguous(intent["intent_id"],str(e));raise HTTPException(409,"settlement ambiguous; manual reconciliation required; never automatically retried") from e
+  if authority is None:return JSONResponse({"order_id":oid,"state":"payment_settled_activation_pending"},status_code=202)
+  try:service.deliver_entitlement(oid,authority)
+  except Exception:return JSONResponse({"order_id":oid,"state":"payment_settled_activation_pending"},status_code=202)
+  return {"order_id":oid,"state":"activation_required","transaction":settled["transaction"]}
  @app.post('/v1/orders/{oid}/paypal-submit')
  async def paypal_submit(oid,body:dict,request:Request):
   limiter.check("orders",request.client.host if request.client else "unknown")
@@ -124,15 +152,25 @@ def create_app(config:Config,facilitator=None,reconciler=None):
   try:return service.admin_transition(oid,action,(body or {}).get("reason_code"))
   except KeyError as e:raise HTTPException(404,str(e))
   except ValueError as e:raise HTTPException(409,str(e))
- @app.get('/v1/candidate/check-in/{code}')
- async def candidate_check_in(code,request:Request):
-  limiter.check("check-in",request.client.host if request.client else "unknown")
-  return JSONResponse(service.candidate_check_in(code),headers={"Cache-Control":"no-store"})
- @app.get('/v1/recovery/{code}')
- async def recovery(code,request:Request):
-  limiter.check("recovery",request.client.host if request.client else "unknown")
-  body=service.recovery_lookup(code)
-  return JSONResponse(body,headers={"Cache-Control":"no-store"})
+ def unavailable():return JSONResponse({"state":"not_found_or_unavailable"},status_code=404)
+ @app.post('/v1/activation/challenge')
+ async def activation_challenge_endpoint(request:Request):
+  limiter.check("activation",request.client.host if request.client else "unknown")
+  if authority is None:return unavailable()
+  try:body=await strict_body(request,ActivationChallengeBody)
+  except ValueError:return unavailable()
+  row=service.authenticated_entitlement(body.order_id,body.recovery_code)
+  if not row:return unavailable()
+  try:challenge=authority.issue_activation_challenge(license_id=row["license_id"],device_public_key=body.device_public_key)
+  except (ValueError,TypeError):return unavailable()
+  return {"state":"challenge_issued","challenge":challenge}
+ @app.post('/v1/activation/complete')
+ async def activation_complete_endpoint(request:Request):
+  limiter.check("activation",request.client.host if request.client else "unknown")
+  if authority is None:return unavailable()
+  try:body=await strict_body(request,ActivationCompleteBody);certificate=authority.activate_challenge(challenge_id=body.challenge_id,proof=body.proof)
+  except (ValueError,TypeError):return unavailable()
+  return {"state":"activated","certificate":certificate}
  app.state.payments=service;return app
 def from_env():
  production=os.getenv('GROWTHMAP_PAYMENTS_ENV')=='production';test_mode=os.getenv('GROWTHMAP_PAYMENTS_TEST_MODE')=='1'
