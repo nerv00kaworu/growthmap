@@ -209,7 +209,7 @@ def test_official_client_provider_seam_and_production_hard_block(tmp_path):
     for candidate in candidates:
         if candidate is not None:
             candidate._authorized_provider_injected = True
-        with pytest.raises(RuntimeError, match="reviewed Argon2id session provider not integrated"):
+        with pytest.raises(RuntimeError, match="reviewed dependencies unavailable"):
             create_app(production, candidate, reconciler=object())
 
 

@@ -9,8 +9,15 @@ from fastapi.responses import JSONResponse
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .service import Config,PaymentService
-from .facilitator import OfficialX402Facilitator
 from .public_config import APPROVED_BASE_RECIPIENT
+from .session import AdminSessionVerifier,Argon2idSessionVerifier,MAX_TOKEN_CHARS
+
+class _IsolatedTestSessionVerifier:
+ """Legacy SHA-256 fixture adapter; constructed only for explicit isolated tests."""
+ def __init__(self,digest):self._digest=digest
+ def verify(self,token):
+  try:return bool(self._digest) and hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(),self._digest)
+  except Exception:return False
 class MockFacilitator:
  """Nested authorization envelope for isolated tests; not an official SDK implementation."""
  def __init__(self):self.settled={};self.fail=False
@@ -31,14 +38,38 @@ def re_address(v):
  import re
  return isinstance(v,str) and re.fullmatch(r"0x[0-9a-fA-F]{40}",v) is not None
 class Limiter:
- def __init__(self,limit):self.limit=limit;self.rows=defaultdict(deque);self.lock=threading.Lock()
+ def __init__(self,limit):self.limit=limit;self.rows=defaultdict(deque);self.lock=threading.Lock();self._sequence=0
+ @staticmethod
+ def _stamp(slot):return slot[0] if isinstance(slot,tuple) else slot
+ def _prune(self,q,now):
+  while q and self._stamp(q[0])<now-60:q.popleft()
  def check(self,bucket,key,consume=True):
   now=time.monotonic()
   with self.lock:
-   q=self.rows[(bucket,key)]
-   while q and q[0]<now-60:q.popleft()
+   q=self.rows[(bucket,key)];self._prune(q,now)
    if len(q)>=self.limit:raise HTTPException(429,"rate limit")
    if consume:q.append(now)
+ def reserve(self,*keys):
+  """Atomically reserve every bucket, returning owner-specific rollback slots."""
+  now=time.monotonic()
+  with self.lock:
+   queues=[]
+   for key in keys:
+    q=self.rows[key];self._prune(q,now);queues.append(q)
+    if len(q)>=self.limit:raise HTTPException(429,"rate limit")
+   self._sequence+=1;owner=self._sequence;slots=[]
+   for key,q in zip(keys,queues):
+    slot=(now,owner);q.append(slot);slots.append((key,slot))
+   return tuple(slots)
+ def retain(self,reservation,*retained_keys):
+  """Atomically release only this reservation's unwanted slots."""
+  retained=set(retained_keys)
+  with self.lock:
+   for key,slot in reservation:
+    if key not in retained:
+     q=self.rows[key]
+     try:q.remove(slot)
+     except ValueError:pass
 def load_key(path):
  if not path:return None
  key=serialization.load_pem_private_key(Path(path).read_bytes(),password=None)
@@ -68,12 +99,19 @@ async def strict_body(request,model):
   return result
  try:return model.model_validate(json.loads(raw,object_pairs_hook=pairs))
  except (ValueError,ValidationError,json.JSONDecodeError) as error:raise ValueError('invalid body') from error
-def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
+def create_app(config:Config,facilitator=None,reconciler=None,authority=None,session_verifier:AdminSessionVerifier|None=None):
+ caller_supplied_session_verifier=session_verifier is not None
  if config.production:
-  if isinstance(facilitator,MockFacilitator):raise RuntimeError("mock facilitator forbidden in production")
-  # No source-level constructor, marker, subclass, provider, or client proves
-  # production authorization. The reviewed composition root is not integrated.
-  raise RuntimeError("production service blocked: reviewed Argon2id session provider not integrated")
+  # External production trust roots are not authorized in this composition root.
+  # Dependency class, protocol shape, or injected state must never lift this gate.
+  raise RuntimeError("production service blocked: reviewed dependencies unavailable")
+ elif not caller_supplied_session_verifier and config.isolated_test is True:
+  session_verifier=_IsolatedTestSessionVerifier(config.admin_secret_hash)
+ legacy_isolated_fixture=(
+  not caller_supplied_session_verifier
+  and config.isolated_test is True
+  and type(session_verifier) is _IsolatedTestSessionVerifier
+ )
  service=PaymentService(config,facilitator);app=FastAPI(title="GrowthMap Payments Candidate",version="1.0-device-activation");limiter=Limiter(config.rate_limit)
  @app.middleware("http")
  async def prevent_sensitive_response_caching(request:Request,call_next):
@@ -87,24 +125,65 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
   return response
  def admin(request,authorization,csrf):
   ip=request.client.host if request.client else "unknown"
-  # The bounded digest is non-secret and prevents one bad token from consuming
-  # every per-IP slot; the coarse IP bucket prevents rotating-token bypass.
-  auth_bytes=(authorization or "").encode()[:4096]
+  supplied=authorization or ""
+  token=supplied[7:] if supplied.startswith("Bearer ") else ""
+  token_bounded=False
+  # Apply the cheap character cap before strict encoding, then enforce the
+  # protocol's byte cap before any injected verifier can see the token.
+  if token and len(token)<=MAX_TOKEN_CHARS:
+   try:token_bytes=token.encode("utf-8","strict");token_bounded=1<=len(token_bytes)<=MAX_TOKEN_CHARS
+   except UnicodeError:pass
+  # Never encode an attacker-sized header merely to derive its limiter key.
+  fingerprint_input=supplied[:MAX_TOKEN_CHARS+7] if len(supplied)<=MAX_TOKEN_CHARS+7 else "oversized"
+  try:auth_bytes=fingerprint_input.encode("utf-8","strict")
+  except UnicodeError:auth_bytes=b"invalid"
   fingerprint=hashlib.sha256(auth_bytes).hexdigest()[:24]
-  # A saturated failed-auth bucket blocks only unauthenticated attempts; a
-  # bounded local SHA-256 precheck lets known-good sessions bypass NAT abuse.
-  token=authorization.removeprefix("Bearer ") if authorization else ""
-  supplied_hash=hashlib.sha256(token.encode()).hexdigest();token_ok=bool(config.admin_secret_hash) and hmac.compare_digest(supplied_hash,config.admin_secret_hash)
-  if not token_ok:limiter.check("admin-ip-failed",ip,consume=False)
-  # Consume failed-auth buckets only after the bounded precheck fails. A future
-  # expensive provider must remain behind this rotating-token/IP gate.
+  coarse=("admin-ip-failed",ip);finger=("admin-auth",f"{ip}:{fingerprint}");action=("admin-action",ip)
+  # Preserve the cheap internally constructed isolated SHA fixture's legacy
+  # NAT bypass. Every caller-injected verifier uses the atomic reservation path.
+  if legacy_isolated_fixture:
+   token_ok=token_bounded and session_verifier.verify(token)
+   reservation=None
+   if not token_ok:
+    reservation=limiter.reserve(coarse,finger)
+  else:
+   reservation=limiter.reserve(coarse,finger,action);finalized=False
+   def finalize(*retained):
+    nonlocal finalized
+    if not finalized:
+     limiter.retain(reservation,*retained);finalized=True
+   try:
+    try:
+     result=session_verifier.verify(token) if token_bounded else False
+     token_ok=result is True
+    except Exception:token_ok=False
+    if not token_ok:
+     finalize(coarse,finger)
+     raise HTTPException(403,"admin authentication failed")
+    try:
+     origin_ok=hmac.compare_digest(request.headers.get("origin","").encode("utf-8","strict"),config.allowed_admin_origin.encode("utf-8","strict"))
+     csrf_ok=bool(config.csrf_secret) and hmac.compare_digest((csrf or "").encode("utf-8","strict"),config.csrf_secret.encode("utf-8","strict"))
+    except Exception:origin_ok=csrf_ok=False
+    if not (origin_ok and csrf_ok):
+     finalize(coarse)
+     raise HTTPException(403,"admin authentication failed")
+    finalize(action)
+    return
+   except HTTPException:raise
+   except Exception:
+    raise HTTPException(403,"admin authentication failed") from None
+   finally:
+    if not finalized:finalize(coarse)
   if not token_ok:
-   limiter.check("admin-auth",f"{ip}:{fingerprint}");limiter.check("admin-ip-failed",ip);raise HTTPException(403,"admin authentication failed")
-  origin_ok=hmac.compare_digest(request.headers.get("origin","").encode(),config.allowed_admin_origin.encode())
-  csrf_ok=bool(config.csrf_secret) and hmac.compare_digest((csrf or "").encode(),config.csrf_secret.encode())
+   raise HTTPException(403,"admin authentication failed")
+  try:
+   origin_ok=hmac.compare_digest(request.headers.get("origin","").encode("utf-8","strict"),config.allowed_admin_origin.encode("utf-8","strict"))
+   csrf_ok=bool(config.csrf_secret) and hmac.compare_digest((csrf or "").encode("utf-8","strict"),config.csrf_secret.encode("utf-8","strict"))
+  except Exception:origin_ok=csrf_ok=False
   if not (origin_ok and csrf_ok):
-   limiter.check("admin-ip-failed",ip);raise HTTPException(403,"admin authentication failed")
-  limiter.check("admin-action",ip)
+   limiter.check(*coarse)
+   raise HTTPException(403,"admin authentication failed")
+  limiter.check(*action)
  @app.post('/v1/orders')
  async def create(body:dict,request:Request):
   limiter.check("orders",request.client.host if request.client else "unknown")
@@ -178,7 +257,7 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
   try:body=await strict_body(request,ActivationCompleteBody);certificate=authority.activate_challenge(challenge_id=body.challenge_id,proof=body.proof)
   except (ValueError,TypeError):return unavailable()
   return {"state":"activated","certificate":certificate}
- app.state.payments=service;return app
+ app.state.payments=service;app.state.admin_limiter=limiter;return app
 def from_env():
  environment=os.getenv('GROWTHMAP_PAYMENTS_ENV','test')
  if environment not in {'production','development','test'}:raise RuntimeError('invalid payments environment')
@@ -189,11 +268,16 @@ def from_env():
  if production and test_mode:raise RuntimeError("test facilitator forbidden in production")
  recipient=os.getenv('GROWTHMAP_X402_RECIPIENT','')
  if production and recipient!=APPROVED_BASE_RECIPIENT:raise RuntimeError("production payment recipient missing or not approved")
- if not production and recipient.lower()==APPROVED_BASE_RECIPIENT and not allow_live:raise RuntimeError('approved live payment recipient forbidden outside production')
+ if production:raise RuntimeError('production service blocked: reviewed dependencies unavailable')
+ if recipient.lower()==APPROVED_BASE_RECIPIENT and not allow_live:raise RuntimeError('approved live payment recipient forbidden outside production')
  try:authority_generation=int(os.getenv('GROWTHMAP_AUTHORITY_GENERATION',''))
  except ValueError:authority_generation=None
  authority_public_key_path=os.getenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_FILE')
  try:authority_public_key=Path(authority_public_key_path).read_bytes() if authority_public_key_path else None
  except Exception:raise RuntimeError('reviewed Authority public key unavailable') from None
- config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),recipient,os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256',''),load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=test_mode,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None,environment=environment,authority_id=os.getenv('GROWTHMAP_AUTHORITY_ID',''),authority_key_id=os.getenv('GROWTHMAP_AUTHORITY_KEY_ID'),authority_generation=authority_generation,authority_public_key_sha256=os.getenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_SHA256'),authority_attestation=os.getenv('GROWTHMAP_AUTHORITY_ATTESTATION'),authority_public_key=authority_public_key,allow_live_payment_recipient=allow_live)
- return create_app(config,MockFacilitator() if test_mode else None)
+ legacy_sha=os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256','')
+ session_hash_file=os.getenv('GROWTHMAP_ADMIN_SESSION_HASH_FILE')
+ session_verifier=Argon2idSessionVerifier.from_hash_file(session_hash_file) if session_hash_file else None
+ legacy_enabled=test_mode and environment=='test' and not session_hash_file
+ config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),recipient,legacy_sha if legacy_enabled else '',load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=legacy_enabled,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None,environment=environment,authority_id=os.getenv('GROWTHMAP_AUTHORITY_ID',''),authority_key_id=os.getenv('GROWTHMAP_AUTHORITY_KEY_ID'),authority_generation=authority_generation,authority_public_key_sha256=os.getenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_SHA256'),authority_attestation=os.getenv('GROWTHMAP_AUTHORITY_ATTESTATION'),authority_public_key=authority_public_key,allow_live_payment_recipient=allow_live)
+ return create_app(config,MockFacilitator() if test_mode else None,session_verifier=session_verifier)

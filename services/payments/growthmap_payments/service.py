@@ -47,7 +47,7 @@ class Config:
   if self.production:
    origin=urlsplit(self.allowed_admin_origin)
    if origin.scheme!="https" or not origin.netloc or origin.path not in("", "/") or re.search(r"invalid|example|localhost|127\.0\.0\.1",origin.netloc,re.I):raise RuntimeError("production admin origin missing/placeholder")
-   if not self.admin_secret_hash.startswith("$argon2id$") or not self.csrf_secret or self.signing_key is None:raise RuntimeError("production Argon2id auth/CSRF/key provider missing")
+   if not self.csrf_secret or self.signing_key is None:raise RuntimeError("production CSRF/key provider missing")
 class PaymentService:
  def __init__(self,config:Config,facilitator:Facilitator|None=None):
   config.validate();self.config=config;self.facilitator=facilitator;self._checkpoint_failed=False
