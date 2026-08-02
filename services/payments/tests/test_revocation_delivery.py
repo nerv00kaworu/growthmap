@@ -6,6 +6,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import pytest
 from test_device_activation_closure import setup, paid
 from licensing.authority import activation_challenge
+from growthmap_payments.service import PaymentService
 
 
 def keypair():
@@ -30,9 +31,9 @@ def test_revocation_ack_crash_reclaim_stale_fence_and_100_replay(tmp_path):
  stale=service.claim_revocation("stale",lease_seconds=-1,order_id=order["order_id"]);fresh=service.claim_revocation("fresh",lease_seconds=-1,order_id=order["order_id"]);assert fresh["fencing_version"]>stale["fencing_version"]
  with pytest.raises(RuntimeError,match="lease lost"):service.deliver_claimed_revocation(stale,authority,"stale")
  # Authority commit followed by payment-ack crash: replay after lease expiry.
- receipt=authority.revoke_external_entitlement(source=fresh["source"],source_id=fresh["source_id"],payload_digest=fresh["entitlement_payload_digest"],authority_id=fresh["authority_id"],license_id=fresh["license_id"],action=fresh["action"],reason=fresh["reason"],payment_proof=fresh["proof_hash"],tx_hash=fresh["tx_hash"],created_at=fresh["created_at"])
+ receipt=authority.revoke_external_entitlement(source=fresh["source"],source_id=fresh["source_id"],payload_digest=fresh["entitlement_payload_digest"],authority_id=fresh["authority_id"],signer_identity=authority.handshake(),license_id=fresh["license_id"],action=fresh["action"],reason=fresh["reason"],payment_proof=fresh["proof_hash"],tx_hash=fresh["tx_hash"],created_at=fresh["created_at"])
  reclaimed=service.claim_revocation("reclaim",order_id=order["order_id"]);acked=service.deliver_claimed_revocation(reclaimed,authority,"reclaim");assert acked==receipt
- with ThreadPoolExecutor(20) as pool:replays=list(pool.map(lambda _:authority.revoke_external_entitlement(source=fresh["source"],source_id=fresh["source_id"],payload_digest=fresh["entitlement_payload_digest"],authority_id=fresh["authority_id"],license_id=fresh["license_id"],action=fresh["action"],reason=fresh["reason"],payment_proof=fresh["proof_hash"],tx_hash=fresh["tx_hash"],created_at=fresh["created_at"]),range(100)))
+ with ThreadPoolExecutor(20) as pool:replays=list(pool.map(lambda _:authority.revoke_external_entitlement(source=fresh["source"],source_id=fresh["source_id"],payload_digest=fresh["entitlement_payload_digest"],authority_id=fresh["authority_id"],signer_identity=authority.handshake(),license_id=fresh["license_id"],action=fresh["action"],reason=fresh["reason"],payment_proof=fresh["proof_hash"],tx_hash=fresh["tx_hash"],created_at=fresh["created_at"]),range(100)))
  assert {x["revocation_receipt"] for x in replays}=={receipt["revocation_receipt"]}
  with authority._connect() as db:
   assert db.execute("select count(*) from external_revocations").fetchone()[0]==1
@@ -90,7 +91,7 @@ def test_reconciler_wrong_or_missing_field_matrix(field,tmp_path):
 
 def _revocation_args(service, entitlement, action="revoke", reason="fraud"):
  with service._db() as db: row=dict(db.execute("select * from entitlement_outbox").fetchone())
- return dict(source=row["source"],source_id=row["source_id"],payload_digest=service._outbox_payload_digest(row),authority_id=service.config.authority_id,license_id=entitlement["license_id"],action=action,reason=reason,payment_proof=row["proof_hash"],tx_hash=row["tx_hash"],created_at=row["created_at"])
+ return dict(source=row["source"],source_id=row["source_id"],payload_digest=service._outbox_payload_digest(row),authority_id=service.config.authority_id,signer_identity={'authority_id':service.config.authority_id,'key_id':service.config.authority_key_id,'generation':service.config.authority_generation,'public_key_sha256':service.config.authority_public_key_sha256,'attestation':service.config.authority_attestation},license_id=entitlement["license_id"],action=action,reason=reason,payment_proof=row["proof_hash"],tx_hash=row["tx_hash"],created_at=row["created_at"])
 
 
 def test_revoke_writer_wins_challenge_has_zero_activation_side_effect(tmp_path,monkeypatch):
@@ -182,3 +183,18 @@ def test_payment_revocation_uses_one_injected_aware_utc_clock(tmp_path):
 def test_payment_revocation_naive_injected_clock_fails_closed(tmp_path):
  service,authority,_=setup(tmp_path);order=paid(service);service.deliver_entitlement(order["order_id"],authority);service.now=lambda:datetime(2030,1,1)
  with pytest.raises(RuntimeError,match="invalid_payment_clock"):service.admin_transition(order["order_id"],"revoke","fraud")
+
+def test_stale_revocation_fence_cannot_claim_or_finalize(tmp_path):
+ service,authority,_=setup(tmp_path);order=paid(service);service.deliver_entitlement(order['order_id'],authority);service.admin_transition(order['order_id'],'revoke');stale=service.claim_revocation('stale',lease_seconds=-1,order_id=order['order_id']);fresh=service.claim_revocation('fresh',lease_seconds=30,order_id=order['order_id'])
+ assert fresh['fencing_version']>stale['fencing_version'] and fresh['lease_owner']=='fresh'
+ with pytest.raises(RuntimeError,match='lease lost'):service.deliver_claimed_revocation(stale,authority,'stale')
+ with service._db() as db:assert tuple(db.execute('select state,lease_owner from revocation_outbox').fetchone())==('leased','fresh')
+
+@pytest.mark.parametrize('bad',['0','',' ','2000-01-01T00:00:00','2000-01-01T00:00:00Z','2000-01-01T08:00:00+08:00','2000-99-99T00:00:00+00:00','2000-01-01T00:00:00+00:00junk'])
+def test_malformed_revocation_lease_expiry_never_authorizes_reclaim(tmp_path,bad):
+ service,authority,_=setup(tmp_path);order=paid(service);service.deliver_entitlement(order['order_id'],authority);service.admin_transition(order['order_id'],'revoke');claimed=service.claim_revocation('owner',order_id=order['order_id'])
+ with service._db() as db:db.execute('update revocation_outbox set lease_expires_at=?',(bad,));service._write_checkpoint_document(service._checkpoint_document(db));db.commit()
+ restart=PaymentService(service.config);before=service.config.settlement_checkpoint_path.read_bytes()
+ with pytest.raises(RuntimeError,match='invalid revocation lease timestamp'):restart.claim_revocation('attacker',order_id=order['order_id'])
+ assert service.config.settlement_checkpoint_path.read_bytes()==before
+ with service._db() as db:assert tuple(db.execute('select state,lease_owner,fencing_version from revocation_outbox').fetchone())==('leased','owner',claimed['fencing_version'])

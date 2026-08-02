@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from growthmap_payments.api import MockFacilitator,create_app
 from test_payments import config,sig
 class RaisingAuthority:
- def handshake(self):return {'authority_id':'growthmap-authority-primary'}
+ def handshake(self):return {'authority_id':'growthmap-authority-primary','key_id':'isolated-fixture-key','generation':1,'public_key_sha256':'0'*64,'attestation':'offline-fixture'}
  def create_external_entitlement(self,**kwargs):raise RuntimeError('offline')
 def test_paid_delivery_failure_is_202_and_never_resettles(tmp_path):
  fac=MockFacilitator();calls={'settle':0};original=fac.settle

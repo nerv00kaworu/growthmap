@@ -11,8 +11,9 @@ from licensing.authority import LicenseAuthority, activation_challenge
 RECIPIENT="0x1111111111111111111111111111111111111111"
 def setup(tmp_path):
  key=Ed25519PrivateKey.generate();pem=tmp_path/"issuer.pem";pem.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()))
- cfg=Config(tmp_path/"payments.sqlite",RECIPIENT,hashlib.sha256(b"secret").hexdigest(),key,"https://admin.test","csrf","https://payments.test",isolated_test=True,settlement_mac_key=b"x"*32,settlement_checkpoint_path=tmp_path/"checkpoint")
- return PaymentService(cfg),LicenseAuthority(tmp_path/"authority.sqlite",pem),cfg
+ authority=LicenseAuthority(tmp_path/"authority.sqlite",pem);identity=authority.handshake();identity["public_key"]=authority.public_key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+ cfg=Config(tmp_path/"payments.sqlite",RECIPIENT,hashlib.sha256(b"secret").hexdigest(),key,"https://admin.test","csrf","https://payments.test",isolated_test=True,settlement_mac_key=b"x"*32,settlement_checkpoint_path=tmp_path/"checkpoint",authority_id=identity["authority_id"],authority_key_id=identity["key_id"],authority_generation=identity["generation"],authority_public_key_sha256=identity["public_key_sha256"],authority_attestation=identity["attestation"],authority_public_key=identity["public_key"])
+ return PaymentService(cfg),authority,cfg
 
 def paid(service):
  order=service.create_order("x402","buyer@example.test");intent=service.prepare_x402_intent(order["order_id"],"proof","nonce",10_000_000,"0x"+"2"*40)

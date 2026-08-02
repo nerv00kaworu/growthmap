@@ -137,6 +137,11 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None):
  async def list_orders(request:Request,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
   admin(request,authorization,csrf)
   return JSONResponse(service.admin_list_orders(),headers={"Cache-Control":"no-store"})
+ @app.get('/v1/admin/authority-reconciliation')
+ async def authority_reconciliation(request:Request,status:str|None=None,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
+  admin(request,authorization,csrf)
+  try:return JSONResponse(service.list_authority_reconciliation(status),headers={"Cache-Control":"no-store"})
+  except ValueError:raise HTTPException(400,"invalid reconciliation status") from None
  @app.post('/v1/admin/orders/{oid}/paypal-confirm')
  async def paypal_confirm(oid,body:dict,request:Request,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
   admin(request,authorization,csrf)
@@ -185,5 +190,10 @@ def from_env():
  recipient=os.getenv('GROWTHMAP_X402_RECIPIENT','')
  if production and recipient!=APPROVED_BASE_RECIPIENT:raise RuntimeError("production payment recipient missing or not approved")
  if not production and recipient.lower()==APPROVED_BASE_RECIPIENT and not allow_live:raise RuntimeError('approved live payment recipient forbidden outside production')
- config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),recipient,os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256',''),load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=test_mode,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None,environment=environment,allow_live_payment_recipient=allow_live)
+ try:authority_generation=int(os.getenv('GROWTHMAP_AUTHORITY_GENERATION',''))
+ except ValueError:authority_generation=None
+ authority_public_key_path=os.getenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_FILE')
+ try:authority_public_key=Path(authority_public_key_path).read_bytes() if authority_public_key_path else None
+ except Exception:raise RuntimeError('reviewed Authority public key unavailable') from None
+ config=Config(Path(os.getenv('GROWTHMAP_PAYMENTS_DB','payments.sqlite3')),recipient,os.getenv('GROWTHMAP_ADMIN_SESSION_SHA256',''),load_key(os.getenv('GROWTHMAP_SIGNING_KEY_FILE')),os.getenv('GROWTHMAP_ADMIN_ORIGIN',''),os.getenv('GROWTHMAP_CSRF_SECRET',''),os.getenv('GROWTHMAP_PURCHASE_RESOURCE_BASE',''),production=production,isolated_test=test_mode,settlement_mac_key=load_settlement_mac_key(os.getenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE')),settlement_checkpoint_path=Path(os.environ['GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE']) if os.getenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE') else None,environment=environment,authority_id=os.getenv('GROWTHMAP_AUTHORITY_ID',''),authority_key_id=os.getenv('GROWTHMAP_AUTHORITY_KEY_ID'),authority_generation=authority_generation,authority_public_key_sha256=os.getenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_SHA256'),authority_attestation=os.getenv('GROWTHMAP_AUTHORITY_ATTESTATION'),authority_public_key=authority_public_key,allow_live_payment_recipient=allow_live)
  return create_app(config,MockFacilitator() if test_mode else None)

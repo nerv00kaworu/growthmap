@@ -16,6 +16,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 LICENSE_ID_RE=re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
 DEVICE_KEY_DOMAIN=b"growthmap-activation-request-v1\0"
 CERT_DOMAIN=b"growthmap-activation-certificate-v2\0"
+ENTITLEMENT_ACK_DOMAIN=b"growthmap-entitlement-authority-ack-v1\0"
+REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
 # SQLite WAL bootstrap can report BUSY before its connection timeout applies to
 # PRAGMA journal_mode. Serialize schema bootstrap within one service process;
 # SQLite's own busy timeout remains the cross-process boundary.
@@ -114,6 +116,11 @@ class LicenseAuthority:
               sequence INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, event TEXT NOT NULL,
               license_id TEXT NOT NULL, device_id TEXT, detail TEXT NOT NULL);
             """)
+            # Authority inbox identity columns are an append-only local schema upgrade.
+            for table in ("external_entitlements","external_revocations"):
+                columns={row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                for name,kind in (("signer_key_id","TEXT"),("signer_generation","INTEGER"),("signer_public_key_sha256","TEXT"),("signer_attestation","TEXT"),("ack_signature","TEXT")):
+                    if name not in columns:db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
             # Reject locally impossible/stale rotations before touching the external
             # monotonic source. The later pin is still a separate-system operation.
             self._check_ceremony_transition(db)
@@ -182,7 +189,12 @@ class LicenseAuthority:
     def handshake(self) -> dict[str,Any]:
         self._assert_signer_state()
         return {"authority_id":self.authority_id,"key_id":self.ceremony["key_id"],"generation":self.ceremony["generation"],"public_key_sha256":self.ceremony["public_key_sha256"],"attestation":self.ceremony["provider_attestation_id"]}
-    def create_external_entitlement(self, *, source: str, source_id: str, payload_digest: str, authority_id: str, edition="personal", major_version=1, seat_limit=2) -> dict[str,Any]:
+    def _accepted_signer_identity(self,identity):
+        expected=self.handshake()
+        if type(identity) is not dict or set(identity)!=set(expected) or any(type(identity[k]) is not type(expected[k]) or not hmac.compare_digest(str(identity[k]),str(expected[k])) for k in expected):raise ValueError("authority_identity_mismatch")
+        return expected
+    def _signed_ack(self,domain:bytes,payload:dict[str,Any])->str:return base64.b64encode(self._sign_verified(domain+canonical(payload))).decode()
+    def create_external_entitlement(self, *, source: str, source_id: str, payload_digest: str, authority_id: str, signer_identity: dict[str,Any], edition="personal", major_version=1, seat_limit=2) -> dict[str,Any]:
         """Idempotent inbox for a durable external payment source.
 
         Payment and authority databases are deliberately separate: callers persist an
@@ -190,20 +202,32 @@ class LicenseAuthority:
         supplied license id, is the exactly-once identity boundary.
         """
         if authority_id!=self.authority_id:raise ValueError("wrong_authority")
+        identity=self._accepted_signer_identity(signer_identity)
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}",source) or not re.fullmatch(r"[a-f0-9]{64}",source_id) or not re.fullmatch(r"[a-f0-9]{64}",payload_digest): raise ValueError("invalid_external_source")
         if edition not in {"personal","pro","studio"} or major_version != 1 or seat_limit not in {1,2}: raise ValueError("invalid_license")
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            prior=db.execute("SELECT l.*,e.payload_digest,e.authority_id FROM external_entitlements e JOIN licenses l USING(license_id) WHERE e.source=? AND e.source_id=?",(source,source_id)).fetchone()
+            prior=db.execute("SELECT l.*,e.payload_digest,e.authority_id,e.signer_key_id,e.signer_generation,e.signer_public_key_sha256,e.signer_attestation,e.ack_signature FROM external_entitlements e JOIN licenses l USING(license_id) WHERE e.source=? AND e.source_id=?",(source,source_id)).fetchone()
+            stored={"authority_id":prior["authority_id"],"key_id":prior["signer_key_id"],"generation":prior["signer_generation"],"public_key_sha256":prior["signer_public_key_sha256"],"attestation":prior["signer_attestation"]} if prior else None
             if prior:
-                if prior["payload_digest"]!=payload_digest or prior["authority_id"]!=authority_id:db.rollback();raise ValueError("external_entitlement_contradiction")
-                receipt=hashlib.sha256(canonical({"authority_id":authority_id,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":prior["license_id"]})).hexdigest();db.commit();return {"license_id":prior["license_id"],"edition":prior["edition"],"major_version":prior["major_version"],"device_allowance":prior["seat_limit"],"delivery_receipt":receipt,"authority_id":authority_id}
+                if prior["payload_digest"]!=payload_digest or stored!=identity:db.rollback();raise ValueError("external_entitlement_contradiction")
+                if prior["ack_signature"] is None:db.rollback();raise ValueError("legacy_identity_unproven")
+                receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":prior["license_id"]})).hexdigest();db.commit();return {"license_id":prior["license_id"],"edition":prior["edition"],"major_version":prior["major_version"],"device_allowance":prior["seat_limit"],"delivery_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":prior["ack_signature"]}
             license_id="gm_"+uuid.uuid4().hex;issued=utc(self.now())
             db.execute("INSERT INTO licenses VALUES(?,?,?,?,?,?,?,?)",(license_id,edition,major_version,seat_limit,issued,None,None,30))
-            db.execute("INSERT INTO external_entitlements VALUES(?,?,?,?,?,?)",(source,source_id,license_id,issued,payload_digest,authority_id))
-            receipt=hashlib.sha256(canonical({"authority_id":authority_id,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id})).hexdigest()
-            self._audit(db,"external_entitlement_created",license_id,detail=json.dumps({"source":source,"source_id":source_id,"payload_digest":payload_digest}));db.commit()
-            return {"license_id":license_id,"edition":edition,"major_version":major_version,"device_allowance":seat_limit,"delivery_receipt":receipt,"authority_id":authority_id}
+            receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id})).hexdigest();ack_payload={"authority_id":authority_id,"delivery_receipt":receipt,"license_id":license_id,"payload_digest":payload_digest,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(ENTITLEMENT_ACK_DOMAIN,ack_payload)
+            db.execute("INSERT INTO external_entitlements(source,source_id,license_id,created_at,payload_digest,authority_id,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,license_id,issued,payload_digest,authority_id,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature))
+            self._audit(db,"external_entitlement_created",license_id,detail=json.dumps({"source":source,"source_id":source_id,"payload_digest":payload_digest,"signer_identity":identity}));db.commit()
+            return {"license_id":license_id,"edition":edition,"major_version":major_version,"device_allowance":seat_limit,"delivery_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
+    def read_external_entitlement_acknowledgement(self, *, source:str, source_id:str, signer_identity:dict[str,Any]) -> dict[str,Any]:
+        identity=self._accepted_signer_identity(signer_identity)
+        with self._connect() as db:row=db.execute("SELECT source,source_id,license_id,payload_digest,authority_id,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature FROM external_entitlements WHERE source=? AND source_id=?",(source,source_id)).fetchone()
+        if not row:raise ValueError("external_entitlement_unavailable")
+        stored={"authority_id":row["authority_id"],"key_id":row["signer_key_id"],"generation":row["signer_generation"],"public_key_sha256":row["signer_public_key_sha256"],"attestation":row["signer_attestation"]}
+        if None in stored.values() or row["ack_signature"] is None:raise ValueError("legacy_identity_unproven")
+        if stored!=identity:raise ValueError("external_entitlement_contradiction")
+        receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":row["source"],"source_id":row["source_id"],"payload_digest":row["payload_digest"],"license_id":row["license_id"]})).hexdigest()
+        return {"source":row["source"],"source_id":row["source_id"],"payload_digest":row["payload_digest"],"license_id":row["license_id"],"authority_id":row["authority_id"],"signer_identity":identity,"delivery_receipt":receipt,"ack_signature":row["ack_signature"]}
     def issue_activation_challenge(self, *, license_id: str, device_public_key: str, ttl_seconds=300) -> dict[str,str]:
         device_id=device_identifier(device_public_key);now=self.now();nonce=secrets.token_urlsafe(24);challenge_id="gmc_"+uuid.uuid4().hex
         with self._lock,self._connect() as db:
@@ -269,21 +293,25 @@ class LicenseAuthority:
             db.execute("BEGIN IMMEDIATE")
             try:cert=self._activate_in_transaction(db,license_id,device_public_key,nonce,proof,self.now());db.commit();return cert
             except Exception:db.rollback();raise
-    def revoke_external_entitlement(self, *, source: str, source_id: str, payload_digest: str, authority_id: str, license_id: str|None=None, action="revoke", reason="administrative", payment_proof="legacy", tx_hash="legacy", created_at="legacy") -> dict[str,str]:
+    def revoke_external_entitlement(self, *, source: str, source_id: str, payload_digest: str, authority_id: str, signer_identity: dict[str,Any], license_id: str|None=None, action="revoke", reason="administrative", payment_proof="legacy", tx_hash="legacy", created_at="legacy") -> dict[str,Any]:
         if authority_id!=self.authority_id:raise ValueError("wrong_authority")
+        identity=self._accepted_signer_identity(signer_identity)
         if action not in {"refund","revoke"}:raise ValueError("invalid_revocation_action")
         if reason not in {"refund","chargeback","fraud","terms_violation","administrative"} or len(reason)>32:raise ValueError("invalid_revocation_reason")
         if (not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}",source or "") or not re.fullmatch(r"[a-f0-9]{64}",source_id or "") or not re.fullmatch(r"[a-f0-9]{64}",payload_digest or "") or not isinstance(license_id,str) or not LICENSE_ID_RE.fullmatch(license_id) or not re.fullmatch(r"[a-f0-9]{64}",payment_proof or "") or not re.fullmatch(r"0x[a-fA-F0-9]{64}",tx_hash or "")):raise ValueError("invalid_revocation_evidence")
-        request={"authority_id":authority_id,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id,"action":action,"reason":reason,"payment_proof":payment_proof,"tx_hash":tx_hash,"created_at":created_at};request_digest=hashlib.sha256(canonical(request)).hexdigest()
+        request={"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id,"action":action,"reason":reason,"payment_proof":payment_proof,"tx_hash":tx_hash,"created_at":created_at};request_digest=hashlib.sha256(canonical(request)).hexdigest()
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE");row=db.execute("SELECT license_id,payload_digest FROM external_entitlements WHERE source=? AND source_id=?",(source,source_id)).fetchone()
             if not row or row["payload_digest"]!=payload_digest or row["license_id"]!=license_id:db.rollback();raise ValueError("external_entitlement_unavailable")
             # Replay lookup deliberately precedes freshness: durable outbox retries after
             # an Authority commit/payment acknowledgement crash return the same receipt.
-            prior=db.execute("SELECT request_digest,receipt,revoked_at,license_id FROM external_revocations WHERE source=? AND source_id=?",(source,source_id)).fetchone()
+            prior=db.execute("SELECT request_digest,receipt,revoked_at,license_id,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature FROM external_revocations WHERE source=? AND source_id=?",(source,source_id)).fetchone()
             if prior:
                 if prior["request_digest"]!=request_digest:db.rollback();raise ValueError("external_revocation_contradiction")
-                db.commit();return {"license_id":prior["license_id"],"revoked_at":prior["revoked_at"],"revocation_receipt":prior["receipt"],"authority_id":authority_id}
+                stored={"authority_id":authority_id,"key_id":prior["signer_key_id"],"generation":prior["signer_generation"],"public_key_sha256":prior["signer_public_key_sha256"],"attestation":prior["signer_attestation"]}
+                if stored!=identity:db.rollback();raise ValueError("external_revocation_contradiction")
+                if prior["ack_signature"] is None:db.rollback();raise ValueError("legacy_identity_unproven")
+                db.commit();return {"license_id":prior["license_id"],"revoked_at":prior["revoked_at"],"revocation_receipt":prior["receipt"],"authority_id":authority_id,"signer_identity":identity,"ack_signature":prior["ack_signature"]}
             try:
                 event_time=datetime.fromisoformat(created_at.replace("Z","+00:00"))
                 if event_time.tzinfo is None:raise ValueError
@@ -295,7 +323,16 @@ class LicenseAuthority:
                 db.rollback();raise
             except (AttributeError,TypeError,ValueError) as error:db.rollback();raise ValueError("invalid_revocation_created_at") from error
             revoked_at=utc(now);receipt=hashlib.sha256(canonical({"authority_id":authority_id,"request_digest":request_digest,"license_id":row["license_id"],"revoked_at":revoked_at})).hexdigest()
-            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id}
+            ack_payload={"authority_id":authority_id,"license_id":row["license_id"],"request_digest":request_digest,"revocation_receipt":receipt,"revoked_at":revoked_at,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(REVOCATION_ACK_DOMAIN,ack_payload)
+            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations(source,source_id,authority_id,payload_digest,license_id,action,reason,payment_proof,tx_hash,event_created_at,revoked_at,request_digest,receipt,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt,"signer_identity":identity}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
+    def read_external_revocation_acknowledgement(self, *, source:str, source_id:str, signer_identity:dict[str,Any]) -> dict[str,Any]:
+        identity=self._accepted_signer_identity(signer_identity)
+        with self._connect() as db:row=db.execute("SELECT * FROM external_revocations WHERE source=? AND source_id=?",(source,source_id)).fetchone()
+        if not row:raise ValueError("external_revocation_unavailable")
+        stored={"authority_id":row["authority_id"],"key_id":row["signer_key_id"],"generation":row["signer_generation"],"public_key_sha256":row["signer_public_key_sha256"],"attestation":row["signer_attestation"]}
+        if None in stored.values() or row["ack_signature"] is None:raise ValueError("legacy_identity_unproven")
+        if stored!=identity:raise ValueError("external_revocation_contradiction")
+        return {"source":row["source"],"source_id":row["source_id"],"payload_digest":row["payload_digest"],"license_id":row["license_id"],"action":row["action"],"reason":row["reason"],"payment_proof":row["payment_proof"],"tx_hash":row["tx_hash"],"created_at":row["event_created_at"],"revoked_at":row["revoked_at"],"request_digest":row["request_digest"],"revocation_receipt":row["receipt"],"authority_id":row["authority_id"],"signer_identity":identity,"ack_signature":row["ack_signature"]}
     def deactivate(self, *, license_id: str, device_id: str, reason="user_recovery") -> bool:
         """Authority-authenticated caller boundary: deployment must authenticate license owner/admin."""
         with self._lock,self._connect() as db:

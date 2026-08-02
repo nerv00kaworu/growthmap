@@ -11,8 +11,10 @@ from growthmap_payments.api import MockFacilitator,create_app
 from growthmap_payments.public_config import APPROVED_BASE_RECIPIENT
 from desktop.entitlements import verify_document
 RECIPIENT='0x1111111111111111111111111111111111111111';ORIGIN='https://admin.test';CSRF='fixture-csrf';HEAD={'Authorization':'Bearer secret','X-CSRF-Token':CSRF,'Origin':ORIGIN}
-MAC_KEY=b'growthmap-isolated-test-settlement-mac-key-v1'
-def config(path,key=None,limit=1000,mac_key=MAC_KEY,checkpoint=None):return Config(path,RECIPIENT,hashlib.sha256(b'secret').hexdigest(),key or Ed25519PrivateKey.generate(),ORIGIN,CSRF,'https://payments.test',quote_seconds=60,rate_limit=limit,isolated_test=True,settlement_mac_key=mac_key,settlement_checkpoint_path=checkpoint or path.with_suffix('.checkpoint'))
+MAC_KEY=b'growthmap-isolated-test-settlement-mac-key-v1';AUTHORITY_FIXTURE_KEY=Ed25519PrivateKey.generate();AUTHORITY_FIXTURE_PUBLIC=AUTHORITY_FIXTURE_KEY.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+def config(path,key=None,limit=1000,mac_key=MAC_KEY,checkpoint=None,authority_identity=None):
+ identity=authority_identity or {'authority_id':'growthmap-authority-primary','key_id':'isolated-fixture-key','generation':1,'public_key_sha256':hashlib.sha256(AUTHORITY_FIXTURE_PUBLIC).hexdigest(),'attestation':'offline-fixture','public_key':AUTHORITY_FIXTURE_PUBLIC}
+ return Config(path,RECIPIENT,hashlib.sha256(b'secret').hexdigest(),key or Ed25519PrivateKey.generate(),ORIGIN,CSRF,'https://payments.test',quote_seconds=60,rate_limit=limit,isolated_test=True,settlement_mac_key=mac_key,settlement_checkpoint_path=checkpoint or path.with_suffix('.checkpoint'),authority_id=identity['authority_id'],authority_key_id=identity['key_id'],authority_generation=identity['generation'],authority_public_key_sha256=identity['public_key_sha256'],authority_attestation=identity['attestation'],authority_public_key=identity['public_key'])
 @pytest.fixture
 def env(tmp_path):
  c=config(tmp_path/'p.sqlite');return PaymentService(c,MockFacilitator()),c
@@ -24,9 +26,9 @@ def seed_confirmed(svc,n):
   o=svc.create_order('paypal',f's{i}@e.test');svc.paypal_submit(o['order_id'],f'TX{i}');svc.paypal_confirm(o['order_id'],f'TX{i}',{'amount':'10.00','currency':'USD','status':'COMPLETED','payee_verified':True})
 
 def test_non_test_config_rejects_missing_or_weak_settlement_mac_key(tmp_path):
- missing=Config(tmp_path/'missing.sqlite',RECIPIENT,'',None,purchase_resource_base='https://payments.growthmap.app',settlement_checkpoint_path=tmp_path/'missing.checkpoint')
+ missing=replace(config(tmp_path/'missing.sqlite'),settlement_mac_key=None)
  with pytest.raises(RuntimeError,match='settlement MAC key'):missing.validate()
- weak=Config(tmp_path/'weak.sqlite',RECIPIENT,'',None,purchase_resource_base='https://payments.growthmap.app',settlement_mac_key=b'too-short',settlement_checkpoint_path=tmp_path/'weak.checkpoint')
+ weak=replace(config(tmp_path/'weak.sqlite'),settlement_mac_key=b'too-short')
  with pytest.raises(RuntimeError,match='settlement MAC key'):weak.validate()
 
 
@@ -254,7 +256,7 @@ def test_public_recipient_config_matches_desktop_truth():
 
 def test_env_mock_requires_explicit_opt_in(tmp_path,monkeypatch):
  import growthmap_payments.api as api
- monkeypatch.setenv('GROWTHMAP_PAYMENTS_DB',str(tmp_path/'none.sqlite'));monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT',RECIPIENT);monkeypatch.setenv('GROWTHMAP_PURCHASE_RESOURCE_BASE','https://pay.test');monkeypatch.setenv('GROWTHMAP_ADMIN_ORIGIN',ORIGIN);monkeypatch.setenv('GROWTHMAP_CSRF_SECRET',CSRF);monkeypatch.setenv('GROWTHMAP_ADMIN_SESSION_SHA256',hashlib.sha256(b'secret').hexdigest());mac=tmp_path/'mac.key';mac.write_bytes(MAC_KEY);monkeypatch.setenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE',str(mac));monkeypatch.setenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE',str(tmp_path/'terminal.checkpoint'))
+ monkeypatch.setenv('GROWTHMAP_PAYMENTS_DB',str(tmp_path/'none.sqlite'));monkeypatch.setenv('GROWTHMAP_X402_RECIPIENT',RECIPIENT);monkeypatch.setenv('GROWTHMAP_PURCHASE_RESOURCE_BASE','https://pay.test');monkeypatch.setenv('GROWTHMAP_ADMIN_ORIGIN',ORIGIN);monkeypatch.setenv('GROWTHMAP_CSRF_SECRET',CSRF);monkeypatch.setenv('GROWTHMAP_ADMIN_SESSION_SHA256',hashlib.sha256(b'secret').hexdigest());monkeypatch.setenv('GROWTHMAP_AUTHORITY_ID','growthmap-authority-primary');monkeypatch.setenv('GROWTHMAP_AUTHORITY_KEY_ID','isolated-fixture-key');monkeypatch.setenv('GROWTHMAP_AUTHORITY_GENERATION','1');authority_public=tmp_path/'authority-public.pem';authority_public.write_bytes(AUTHORITY_FIXTURE_PUBLIC);monkeypatch.setenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_FILE',str(authority_public));monkeypatch.setenv('GROWTHMAP_AUTHORITY_PUBLIC_KEY_SHA256',hashlib.sha256(AUTHORITY_FIXTURE_PUBLIC).hexdigest());monkeypatch.setenv('GROWTHMAP_AUTHORITY_ATTESTATION','offline-fixture');mac=tmp_path/'mac.key';mac.write_bytes(MAC_KEY);monkeypatch.setenv('GROWTHMAP_SETTLEMENT_MAC_KEY_FILE',str(mac));monkeypatch.setenv('GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE',str(tmp_path/'terminal.checkpoint'))
  app=api.from_env();assert app.state.payments.facilitator is None
  monkeypatch.setenv('GROWTHMAP_PAYMENTS_TEST_MODE','1');monkeypatch.setenv('GROWTHMAP_PAYMENTS_DB',str(tmp_path/'mock.sqlite'));app=api.from_env();assert isinstance(app.state.payments.facilitator,MockFacilitator)
  monkeypatch.setenv('GROWTHMAP_PAYMENTS_ENV','production')
@@ -401,7 +403,7 @@ def test_v8_authority_revocation_is_idempotent_and_blocks_activation(tmp_path):
  from test_device_activation_closure import setup,paid,device
  s,a,_=setup(tmp_path);o=paid(s);e=s.deliver_entitlement(o['order_id'],a)
  with s._db() as db:r=dict(db.execute('select * from entitlement_outbox').fetchone())
- digest=s._outbox_payload_digest(r);args=dict(source=r['source'],source_id=r['source_id'],payload_digest=digest,authority_id=s.config.authority_id,license_id=e['license_id'],action='revoke',reason='administrative',payment_proof=r['proof_hash'],tx_hash=r['tx_hash'],created_at=r['created_at']);assert a.revoke_external_entitlement(**args);assert a.revoke_external_entitlement(**args)
+ digest=s._outbox_payload_digest(r);args=dict(source=r['source'],source_id=r['source_id'],payload_digest=digest,authority_id=s.config.authority_id,signer_identity=a.handshake(),license_id=e['license_id'],action='revoke',reason='administrative',payment_proof=r['proof_hash'],tx_hash=r['tx_hash'],created_at=r['created_at']);assert a.revoke_external_entitlement(**args);assert a.revoke_external_entitlement(**args)
  public,nonce,proof=device(e['license_id'])
  with pytest.raises(ValueError,match='unavailable|revoked'):a.issue_activation_challenge(license_id=e['license_id'],device_public_key=public)
 
@@ -410,8 +412,8 @@ def test_v8_revocation_wrong_authority_and_payload_fail_closed(tmp_path):
  from test_device_activation_closure import setup,paid
  s,a,_=setup(tmp_path);o=paid(s);s.deliver_entitlement(o['order_id'],a)
  with s._db() as db:r=dict(db.execute('select * from entitlement_outbox').fetchone())
- with pytest.raises(ValueError,match='wrong_authority'):a.revoke_external_entitlement(source=r['source'],source_id=r['source_id'],payload_digest=s._outbox_payload_digest(r),authority_id='other-authority')
- with pytest.raises(ValueError,match='unavailable'):a.revoke_external_entitlement(source=r['source'],source_id=r['source_id'],payload_digest='0'*64,authority_id=s.config.authority_id,license_id=r['license_id'] or 'gm_missing',action='revoke',reason='administrative',payment_proof=r['proof_hash'],tx_hash=r['tx_hash'],created_at=r['created_at'])
+ with pytest.raises(ValueError,match='wrong_authority'):a.revoke_external_entitlement(source=r['source'],source_id=r['source_id'],payload_digest=s._outbox_payload_digest(r),authority_id='other-authority',signer_identity=a.handshake())
+ with pytest.raises(ValueError,match='unavailable'):a.revoke_external_entitlement(source=r['source'],source_id=r['source_id'],payload_digest='0'*64,authority_id=s.config.authority_id,signer_identity=a.handshake(),license_id=r['license_id'] or 'gm_missing',action='revoke',reason='administrative',payment_proof=r['proof_hash'],tx_hash=r['tx_hash'],created_at=r['created_at'])
 
 
 def test_v8_challenge_replaces_portable_check_in(tmp_path):
@@ -509,3 +511,19 @@ def test_nonproduction_live_recipient_requires_explicit_valid_opt_in(tmp_path,mo
  monkeypatch.setenv('GROWTHMAP_ALLOW_LIVE_PAYMENT_RECIPIENT','1')
  with pytest.raises(RuntimeError) as caught:api.from_env()
  assert 'live payment recipient' not in str(caught.value)
+
+@pytest.mark.parametrize('version',[8,9,10])
+def test_populated_v8_v9_v10_upgrade_identity_matrix(tmp_path,monkeypatch,version):
+ import growthmap_payments.service as module
+ p=tmp_path/f'v{version}.sqlite';c=config(p);monkeypatch.setattr(module,'SCHEMA_VERSION',version);legacy=PaymentService(c)
+ # Representative rows are created by the historical schema itself; v8 has
+ # entitlement only, while v9/v10 additionally have revocation.
+ with legacy._db() as db:
+  now='2026-08-02T00:00:00+00:00'
+  for i,state in enumerate(('pending','leased','delivered')):
+   oid=f'00000000-0000-0000-0000-000000000{i+1:03d}';db.execute("INSERT INTO orders(id,recovery_code_hash,rail,state,quoted_amount_minor,currency,tier,quote_expires_at,buyer_email,license_name,created_at,updated_at) VALUES(?,?,'x402','payment_confirmed',10000000,'USDC','early',?,'buyer@test','Buyer',?,?)",(oid,hashlib.sha256(oid.encode()).hexdigest(),now,now,now));db.execute("INSERT INTO entitlement_outbox(order_id,source,source_id,proof_hash,tx_hash,evidence_hash,payer,network,asset,amount_minor,product,major_version,state,license_id,created_at,delivered_at,lease_owner,lease_expires_at,delivery_receipt) VALUES(?,'x402',?,?,?,?,?,'eip155:8453',?,10000000,'growthmap',1,?,?,?,?,?,?,?)",(oid,hashlib.sha256(('s'+oid).encode()).hexdigest(),hashlib.sha256(('p'+oid).encode()).hexdigest(),'0x'+hashlib.sha256(('t'+oid).encode()).hexdigest(),hashlib.sha256(('e'+oid).encode()).hexdigest(),RECIPIENT,module.BASE_USDC,state,'gm_'+'a'*32 if state=='delivered' else None,now,now if state=='delivered' else None,'worker' if state=='leased' else None,now if state=='leased' else None,hashlib.sha256(oid.encode()).hexdigest() if state=='delivered' else None))
+  db.commit()
+ monkeypatch.setattr(module,'SCHEMA_VERSION',11);upgraded=PaymentService(c)
+ with upgraded._db() as db:
+  rows=db.execute('select state,authority_identity_status,authority_key_id,authority_ack_signature from entitlement_outbox order by order_id').fetchall();assert [r[0] for r in rows]==['quarantined','quarantined','delivered'];assert all(r[1]=='legacy_identity_unproven' and r[2] is None and r[3] is None for r in rows);assert db.execute('pragma integrity_check').fetchone()[0]=='ok';assert db.execute('pragma foreign_key_check').fetchall()==[]
+  with pytest.raises(sqlite3.IntegrityError,match='acknowledgement'):db.execute("update entitlement_outbox set state='delivered' where order_id=?",('00000000-0000-0000-0000-000000000001',))
