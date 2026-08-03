@@ -469,6 +469,15 @@ def test_public_config_platform_metadata_rejects_unknown_platform(monkeypatch):
  with pytest.raises(RuntimeError,match='platform is unsupported'):module._validate_platform_metadata(Opened())
 
 
+def test_admin_hash_file_verifier_fails_closed_without_posix_primitives(tmp_path,monkeypatch):
+ import growthmap_payments.session as module
+ path=tmp_path/'admin.phc';path.write_bytes(b'$argon2id$malformed')
+ monkeypatch.delattr(module.os,'O_NOFOLLOW',raising=False)
+ monkeypatch.delattr(module.os,'O_NONBLOCK',raising=False)
+ with pytest.raises(RuntimeError,match='^admin session verifier unavailable$'):
+  module.Argon2idSessionVerifier.from_hash_file(path)
+
+
 def test_generated_public_config_digest_and_parity():
  import hashlib,subprocess,sys
  root=Path(__file__).parents[3];public=(Path(__file__).parents[1]/'public-config.json').read_bytes()

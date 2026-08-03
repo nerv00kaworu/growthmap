@@ -25,6 +25,14 @@ from growthmap_payments.session import (
 from test_payments import CSRF,HEAD,ORIGIN,config
 
 
+# The production admin hash-file verifier deliberately depends on POSIX
+# ownership, mode, no-follow and nonblocking-open guarantees. Windows desktop
+# packaging does not host this server boundary and must not pretend NTFS ACLs
+# are equivalent. Linux CI runs this complete module; non-POSIX platforms
+# verify the explicit fail-closed contract in test_payments.py instead.
+pytestmark=pytest.mark.skipif(os.name!="posix",reason="production admin hash-file verifier requires POSIX file-security semantics")
+
+
 def phc(token=b"correct horse",memory=65536,iterations=3,parallelism=1,variant=2,salt=b"0123456789abcdef",hash_len=32):
     lib=ctypes.CDLL(ctypes.util.find_library("argon2"))
     fn=lib.argon2_hash
