@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="production sidecars use Linux AF_UNIX and POSIX key modes")
+
 from growthmap_payments.unix_transport import AuthenticatedUnixJSONClient, UnixAuthorityClient, UnixFinalityAuthenticator
 
 KEY = b"isolated-unix-transport-key-32bytes-minimum"

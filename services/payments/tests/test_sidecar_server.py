@@ -9,6 +9,8 @@ import threading
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="production sidecars use Linux AF_UNIX/SO_PEERCRED")
+
 from growthmap_payments.sidecar_server import AuthenticatedUnixSidecarServer, AuthorityHandler, FinalityHandler, ReplayWindow
 from growthmap_payments.unix_transport import AuthenticatedUnixJSONClient, UnixAuthorityClient, UnixFinalityAuthenticator
 from test_signed_finality import payload, intent

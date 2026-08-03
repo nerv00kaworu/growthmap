@@ -24,6 +24,13 @@ jobs:
       - run: python -m pytest -q services/payments/tests
         env:
           PYTHONPATH: services/payments;src/backend
+      - name: Linux-only production sidecar source contract remains present
+        shell: pwsh
+        run: |
+          foreach ($path in @('services/payments/growthmap_payments/unix_transport.py','services/payments/growthmap_payments/sidecar_server.py')) {
+            if (-not (Test-Path $path -PathType Leaf)) { throw "Missing Linux production sidecar source: $path" }
+          }
+          if (-not (Select-String -Path services/payments/tests/test_sidecar_server.py -Pattern 'AF_UNIX/SO_PEERCRED' -Quiet)) { throw 'Windows skip must document Linux AF_UNIX/SO_PEERCRED boundary' }
       - run: python -m pytest -q
         working-directory: src/backend
       - run: npm ci
