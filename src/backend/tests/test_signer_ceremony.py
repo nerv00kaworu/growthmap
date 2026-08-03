@@ -120,8 +120,10 @@ def test_external_anchor_return_shape_and_type_rejected(tmp_path):
   def compare_and_advance(self,expected,new):return self.value
   def read(self):return self.value
  k,p,d=setup()
- for value in [1,1.0,True,{"generation":1.0,"ceremony_sha256":"0"*64},{"generation":Number.ONE,"ceremony_sha256":"0"*64},{"generation":EqualOne(),"ceremony_sha256":"0"*64},{"generation":1,"ceremony_sha256":"0"*64,"extra":1}]:
-  with pytest.raises(RuntimeError,match="anchor"):authority(tmp_path/(str(type(value))+".db"),k,p,d,BadReturnAnchor(value))
+ values=[1,1.0,True,{"generation":1.0,"ceremony_sha256":"0"*64},{"generation":Number.ONE,"ceremony_sha256":"0"*64},{"generation":EqualOne(),"ceremony_sha256":"0"*64},{"generation":1,"ceremony_sha256":"0"*64,"extra":1}]
+ for index,value in enumerate(values):
+  # Stable numeric names avoid Windows-invalid characters from str(type(value)).
+  with pytest.raises(RuntimeError,match="anchor"):authority(tmp_path/f"bad-anchor-{index}.db",k,p,d,BadReturnAnchor(value))
 
 
 def test_concurrent_competing_descriptors_exactly_one_anchor_winner(tmp_path):
