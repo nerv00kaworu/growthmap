@@ -13,7 +13,12 @@ jobs:
         with: { python-version: "3.12", cache: pip }
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: npm, cache-dependency-path: "**/package-lock.json" }
-      - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt -r services/payments/requirements.lock
+      # Install unhashed desktop/backend inputs separately from the
+      # hash-enforced payments lock. Combining them makes pip apply
+      # require-hashes to every file and reject the intentionally ranged
+      # desktop requirements before any test or packaging step can run.
+      - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt
+      - run: python -m pip install -r services/payments/requirements.lock
       - run: python tools/generate-public-config.py --check
       - run: python -m compileall -q services/payments/growthmap_payments tools
       - run: python -m pytest -q services/payments/tests
