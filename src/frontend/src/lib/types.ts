@@ -26,6 +26,10 @@ export interface GNode {
   content_blocks: ContentBlock[];
   created_at: string;
   updated_at: string;
+  revision: number;
+  authoritative_project_revision?: number;
+  authoritative_parent_id?: string | null;
+  authoritative_parent_revision?: number | null;
   ancestor_path?: LineageNode[];
   children?: GNode[];
   is_mainline?: boolean;
@@ -57,6 +61,7 @@ export interface ContentBlock {
   block_type: string;
   content: Record<string, string>;
   order_index: number;
+  revision: number;
 }
 
 export interface Edge {
@@ -69,6 +74,7 @@ export interface Edge {
   note: string;
   is_mainline: boolean;
   created_at: string;
+  revision: number;
 }
 
 export interface Project {
@@ -81,6 +87,7 @@ export interface Project {
   settings: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  revision: number;
 }
 
 export interface AgentArtifact {
@@ -137,6 +144,7 @@ export interface Branch {
   source_node_id: string;
   status: string;
   created_at: string;
+  revision: number;
 }
 
 export interface BranchNodeSummary {

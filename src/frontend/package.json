@@ -6,8 +6,10 @@
     "dev": "next dev --port 3100",
     "lint": "eslint src --max-warnings=0",
     "typecheck": "tsc --noEmit --pretty false",
-    "build": "next build",
-    "start": "next start --port 3100"
+    "test": "tsx --test src/**/*.test.ts && node --test src/lib/stable-module-ids.node-test.mjs",
+    "build": "next build && node ../../desktop/scripts/generate-csp-manifest.js",
+    "start": "next start --port 3100",
+    "test:deterministic-build": "node ../../desktop/scripts/test-deterministic-frontend-build.js"
   },
   "dependencies": {
     "@xyflow/react": "^12.6.0",
@@ -32,6 +34,7 @@
     "eslint-config-next": "15.5.21",
     "postcss": "^8.5.18",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.20.0",
     "typescript": "^5.8.0"
   }
 }

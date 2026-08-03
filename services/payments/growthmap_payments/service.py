@@ -7,10 +7,12 @@ from decimal import Decimal,InvalidOperation
 from pathlib import Path
 from typing import Any,Protocol
 from urllib.parse import urlsplit
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,Ed25519PublicKey
+ENTITLEMENT_ACK_DOMAIN=b"growthmap-entitlement-authority-ack-v1\0";REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
 BASE_NETWORK="eip155:8453";BASE_USDC="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";EARLY_LIMIT=50
-EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=7
-MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7")}
+EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=11
+MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7"),8:("008_device_activation_entitlements.sql","2c72ffee4fbd739c84f85c9ae7d8cf267bdffb84bea88779198e50e78e6e71af"),9:("009_authority_revocation_outbox.sql","367b701a724639518e9854fd0159d24bb2ce78309242f58fe64206f9367989fc"),10:("010_terminal_payer_basis_immutability.sql","101c8dc450685c8b26eaabb427e0b1c2f96765c0cbd74ace70f1cd3f66fcbd07"),11:("011_authority_signer_identity_binding.sql","1d585bb206d86e018794a96ff8adbc91b84e02355d4d12daf45e09c94d195d42")}
 TRANSITIONS={"reject":{"pending_payment","manual_review"},"refund":{"payment_confirmed","license_issued"},"revoke":{"license_issued"}}
 _CHECKPOINT_LOCKS_GUARD=threading.Lock();_CHECKPOINT_LOCKS:dict[str,threading.RLock]={}
 def _checkpoint_serialized(method):
@@ -24,9 +26,19 @@ class Facilitator(Protocol):
  def settle(self,signature:str,requirements:dict[str,Any])->dict[str,Any]:...
 @dataclass(frozen=True)
 class Config:
- db_path:Path;recipient:str;admin_secret_hash:str;signing_key:Ed25519PrivateKey|None;allowed_admin_origin:str="";csrf_secret:str="";purchase_resource_base:str="";quote_seconds:int=300;intent_seconds:int=60;production:bool=False;rate_limit:int=30;isolated_test:bool=False;settlement_mac_key:bytes|None=None;settlement_checkpoint_path:Path|None=None
+ db_path:Path;recipient:str;admin_secret_hash:str;signing_key:Ed25519PrivateKey|None;allowed_admin_origin:str="";csrf_secret:str="";purchase_resource_base:str="";quote_seconds:int=300;intent_seconds:int=60;production:bool=False;rate_limit:int=30;isolated_test:bool=False;settlement_mac_key:bytes|None=None;settlement_checkpoint_path:Path|None=None;environment:str="test";merchant_id:str="growthmap";authority_id:str="growthmap-authority-primary";authority_key_id:str|None=None;authority_generation:int|None=None;authority_public_key_sha256:str|None=None;authority_attestation:str|None=None;authority_public_key:bytes|None=None;allow_live_payment_recipient:bool=False
  def validate(self):
   if not re.fullmatch(r"0x[0-9a-fA-F]{40}",self.recipient) or self.recipient.lower()=="0x"+"0"*40:raise RuntimeError("payment recipient missing/placeholder")
+  from .public_config import APPROVED_BASE_RECIPIENT
+  if self.production:
+   if self.allow_live_payment_recipient:raise RuntimeError("live payment recipient opt-in forbidden in production")
+   if self.recipient!=APPROVED_BASE_RECIPIENT:raise RuntimeError("production payment recipient missing or not approved")
+  elif self.recipient.lower()==APPROVED_BASE_RECIPIENT and not self.allow_live_payment_recipient:raise RuntimeError("approved live payment recipient forbidden outside production")
+  identity=(self.authority_id,self.authority_key_id,self.authority_generation,self.authority_public_key_sha256,self.authority_attestation)
+  if (not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,63}",self.authority_id or "") or not isinstance(self.authority_key_id,str) or not self.authority_key_id or isinstance(self.authority_generation,bool) or not isinstance(self.authority_generation,int) or self.authority_generation<1 or not re.fullmatch(r"[a-f0-9]{64}",self.authority_public_key_sha256 or "") or not isinstance(self.authority_attestation,str) or not self.authority_attestation):raise RuntimeError("expected Authority signer identity missing or invalid")
+  try:key=serialization.load_pem_public_key(self.authority_public_key);assert isinstance(key,Ed25519PublicKey)
+  except Exception:raise RuntimeError("reviewed Authority public key missing or invalid") from None
+  if not hmac.compare_digest(hashlib.sha256(self.authority_public_key).hexdigest(),self.authority_public_key_sha256):raise RuntimeError("reviewed Authority public key digest mismatch")
   if not isinstance(self.settlement_mac_key,bytes) or len(self.settlement_mac_key)<32:raise RuntimeError("external settlement MAC key missing/weak")
   if not isinstance(self.settlement_checkpoint_path,Path):raise RuntimeError("external settlement checkpoint path missing")
   if self.settlement_checkpoint_path.resolve()==self.db_path.resolve():raise RuntimeError("settlement checkpoint must be external to database")
@@ -35,7 +47,7 @@ class Config:
   if self.production:
    origin=urlsplit(self.allowed_admin_origin)
    if origin.scheme!="https" or not origin.netloc or origin.path not in("", "/") or re.search(r"invalid|example|localhost|127\.0\.0\.1",origin.netloc,re.I):raise RuntimeError("production admin origin missing/placeholder")
-   if not self.admin_secret_hash.startswith("$argon2id$") or not self.csrf_secret or self.signing_key is None:raise RuntimeError("production Argon2id auth/CSRF/key provider missing")
+   if not self.csrf_secret or self.signing_key is None:raise RuntimeError("production CSRF/key provider missing")
 class PaymentService:
  def __init__(self,config:Config,facilitator:Facilitator|None=None):
   config.validate();self.config=config;self.facilitator=facilitator;self._checkpoint_failed=False
@@ -52,15 +64,20 @@ class PaymentService:
     yield statement;statement=""
   if statement.strip():raise RuntimeError("incomplete migration SQL")
  def _evidence_binding(self,intent,tx_hash,evidence_hash,source,finality_at,outcome="paid"):
+  def optional(name):
+   try:return intent[name]
+   except (KeyError,IndexError):return None
   # settled and finalized_paid are one authenticated paid outcome, allowing the
   # trusted issuance transition without weakening any other immutable field.
-  fields={"amount_minor":intent["amount_minor"],"created_at":intent["created_at"],"currency":intent["currency"],"evidence_hash":evidence_hash,"evidence_source":source,"finality_at":finality_at,"intent_id":intent["intent_id"],"lease_expires_at":intent["lease_expires_at"],"nonce_hash":intent["nonce_hash"],"order_id":intent["order_id"],"proof_hash":intent["proof_hash"],"reconciled_by":intent["reconciled_by"],"reserved_ordinal":intent["reserved_ordinal"],"state":"paid" if outcome=="paid" else "cancelled_unpaid","tx_hash":tx_hash}
+  fields={"amount_minor":intent["amount_minor"],"created_at":intent["created_at"],"currency":intent["currency"],"evidence_hash":evidence_hash,"evidence_source":source,"finality_at":finality_at,"finality_basis":optional("finality_basis"),"intent_id":intent["intent_id"],"lease_expires_at":intent["lease_expires_at"],"nonce_hash":intent["nonce_hash"],"order_id":intent["order_id"],"proof_hash":intent["proof_hash"],"reconciled_by":intent["reconciled_by"],"reserved_ordinal":intent["reserved_ordinal"],"state":"paid" if outcome=="paid" else "cancelled_unpaid","tx_hash":tx_hash,"verified_payer":optional("verified_payer"),"settled_payer":optional("settled_payer")}
+  if fields["finality_basis"] is None and fields["verified_payer"] is None and fields["settled_payer"] is None:
+   for legacy_field in ("finality_basis","verified_payer","settled_payer"):fields.pop(legacy_field)
   payload=json.dumps(fields,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
   return hmac.new(self.config.settlement_mac_key,payload,hashlib.sha256).hexdigest()
  def _schema_snapshot(self,db):
   return [{"type":r[0],"name":r[1],"table":r[2],"sql":re.sub(r"\s+"," ",r[3].strip())} for r in db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name")]
  def _issuance_snapshot(self,db):
-  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ());closure={}
+  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ())+(("entitlement_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entitlement_outbox'").fetchone() else ())+(("revocation_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_outbox'").fetchone() else ());closure={}
   for table in tables:
    cols=[r[1] for r in db.execute(f"PRAGMA table_info({table})")];order=",".join('"'+c+'"' for c in cols);closure[table]=[dict(r) for r in db.execute(f'SELECT * FROM "{table}" ORDER BY {order}')]
   schema=self._schema_snapshot(db);raw=json.dumps({"schema":schema,"rows":closure},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
@@ -194,6 +211,12 @@ class PaymentService:
    self._commit_trusted(db)
  @staticmethod
  def now():return datetime.now(timezone.utc).isoformat()
+ def _utc_now(self):
+  raw=self.now()
+  try:value=datetime.fromisoformat(raw.replace('Z','+00:00')) if isinstance(raw,str) else raw
+  except (AttributeError,ValueError,TypeError) as error:raise RuntimeError('invalid_payment_clock') from error
+  if not isinstance(value,datetime) or value.tzinfo is None or value.utcoffset() is None:raise RuntimeError('invalid_payment_clock')
+  return value.astimezone(timezone.utc)
  @staticmethod
  def _hash(value:str):return hashlib.sha256(value.encode()).hexdigest()
  @staticmethod
@@ -221,7 +244,7 @@ class PaymentService:
   resource={"url":f"{self.config.purchase_resource_base.rstrip('/')}/v1/orders/{oid}/purchase","description":"GrowthMap v1 perpetual personal license","mimeType":"application/json"}
   return {"x402Version":2,"resource":resource,"accepts":[{"scheme":"exact","network":BASE_NETWORK,"asset":BASE_USDC,"amount":str(r["quoted_amount_minor"]),"payTo":self.config.recipient,"maxTimeoutSeconds":self.config.quote_seconds,"extra":{"name":"USD Coin","version":"2","orderId":oid,"product":"growthmap","majorVersion":1}}]}
  @_checkpoint_serialized
- def prepare_x402_intent(self,oid,proof_id,nonce,amount):
+ def prepare_x402_intent(self,oid,proof_id,nonce,amount,payer=None):
   now=datetime.now(timezone.utc)
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone()
@@ -230,23 +253,25 @@ class PaymentService:
    if datetime.fromisoformat(r["quote_expires_at"])<=now or amount!=expected or r["quoted_amount_minor"]!=expected:
     db.execute("UPDATE orders SET state='manual_review',updated_at=? WHERE id=?",(now.isoformat(),oid));self._audit(db,"x402.verify","payment.manual_review",oid,{"provided":amount,"expected":expected});self._commit_trusted(db);raise ValueError("stale quote")
    intent=str(uuid.uuid4());lease=(now+timedelta(seconds=self.config.intent_seconds)).isoformat()
-   try:db.execute("INSERT INTO settlement_intents(intent_id,order_id,proof_hash,nonce_hash,amount_minor,currency,reserved_ordinal,lease_expires_at,state,tx_hash,evidence_hash,evidence_source,finality_at,reconciled_by,created_at,updated_at,evidence_binding) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(intent,oid,self._hash(proof_id),self._hash(nonce),amount,"USDC",ordinal,lease,"prepared",None,None,None,None,None,now.isoformat(),now.isoformat(),None))
+   if payer is not None and not re.fullmatch(r"0x[0-9a-fA-F]{40}",payer):raise ValueError("invalid verified payer")
+   try:db.execute("INSERT INTO settlement_intents(intent_id,order_id,proof_hash,nonce_hash,amount_minor,currency,reserved_ordinal,lease_expires_at,state,tx_hash,evidence_hash,evidence_source,finality_at,reconciled_by,created_at,updated_at,evidence_binding,verified_payer,settled_payer,finality_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(intent,oid,self._hash(proof_id),self._hash(nonce),amount,"USDC",ordinal,lease,"prepared",None,None,None,None,None,now.isoformat(),now.isoformat(),None,payer.lower() if payer else None,None,None))
    except sqlite3.IntegrityError as e:raise ValueError("duplicate authorization/order") from e
    self._audit(db,"x402.verify","settlement_intent.prepared",oid,{"intent_id":intent,"ordinal":ordinal,"proof_hash":self._hash(proof_id)});self._commit_trusted(db);return {"intent_id":intent,"ordinal":ordinal}
  @_checkpoint_serialized
- def record_settlement_result(self,intent_id,tx_hash,evidence_hash,evidence_source,finality_at,actor="facilitator"):
-  if not tx_hash or not evidence_hash or not evidence_source or datetime.fromisoformat(finality_at)>datetime.now(timezone.utc):raise ValueError("invalid settlement evidence")
+ def record_settlement_result(self,intent_id,tx_hash,evidence_hash,evidence_source,finality_at,actor="facilitator",*,payer=None,finality_basis=None):
+  if not tx_hash or not evidence_hash or not evidence_source or not finality_at or not finality_basis or datetime.fromisoformat(finality_at)>datetime.now(timezone.utc):raise ValueError("invalid settlement evidence")
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);i=db.execute("SELECT * FROM settlement_intents WHERE intent_id=?",(intent_id,)).fetchone()
    if not i:raise KeyError("intent")
-   authenticated=dict(i);authenticated["reconciled_by"]=actor
+   if not i["verified_payer"] or not payer or payer.lower()!=i["verified_payer"]:raise ValueError("settlement payer mismatch")
+   authenticated=dict(i);authenticated.update(reconciled_by=actor,settled_payer=payer.lower(),finality_basis=finality_basis)
    binding=self._evidence_binding(authenticated,tx_hash,evidence_hash,evidence_source,finality_at)
    if i["state"] in {"settled","finalized_paid"}:
     if i["tx_hash"]!=tx_hash or i["evidence_hash"]!=evidence_hash or i["evidence_binding"]!=binding:raise ValueError("conflicting settlement evidence")
     return dict(i)
    if i["state"] not in {"prepared","ambiguous"}:raise ValueError("intent cannot become settled")
    now=self.now()
-   try:db.execute("UPDATE settlement_intents SET state='settled',tx_hash=?,evidence_hash=?,evidence_source=?,finality_at=?,evidence_binding=?,reconciled_by=?,updated_at=? WHERE intent_id=?",(tx_hash,evidence_hash,evidence_source,finality_at,binding,actor,now,intent_id))
+   try:db.execute("UPDATE settlement_intents SET state='settled',tx_hash=?,evidence_hash=?,evidence_source=?,finality_at=?,evidence_binding=?,reconciled_by=?,updated_at=?,settled_payer=?,finality_basis=? WHERE intent_id=?",(tx_hash,evidence_hash,evidence_source,finality_at,binding,actor,now,payer.lower(),finality_basis,intent_id))
    except sqlite3.IntegrityError as e:raise ValueError("settlement evidence already used") from e
    self._audit(db,actor,"settlement.evidence_recorded",i["order_id"],{"intent_id":intent_id,"tx_hash":self._hash(tx_hash),"evidence_hash":evidence_hash,"source":evidence_source,"binding":binding});self._commit_terminal(db);return dict(db.execute("SELECT * FROM settlement_intents WHERE intent_id=?",(intent_id,)).fetchone())
  @_checkpoint_serialized
@@ -271,20 +296,157 @@ class PaymentService:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);i=db.execute("SELECT * FROM settlement_intents WHERE intent_id=?",(intent_id,)).fetchone();db.rollback()
   if not i or i["state"] not in {"prepared","ambiguous"}:raise ValueError("intent not reconcilable")
   evidence=reconciler.reconcile(dict(i))
-  required={"outcome","evidence_hash","source","finality_at","proof_hash","nonce_hash","order_id"}
+  required={"outcome","evidence_hash","source","finality_at","finality_basis","payer","proof_hash","nonce_hash","order_id"}
   if not required.issubset(evidence) or evidence["proof_hash"]!=i["proof_hash"] or evidence["nonce_hash"]!=i["nonce_hash"] or evidence["order_id"]!=i["order_id"]:raise ValueError("reconciliation evidence binding")
   if evidence["outcome"]=="paid":
-   self.record_settlement_result(intent_id,evidence.get("tx_hash"),evidence["evidence_hash"],evidence["source"],evidence["finality_at"],admin_actor);return self.finalize_x402_intent(intent_id)
+   self.record_settlement_result(intent_id,evidence.get("tx_hash"),evidence["evidence_hash"],evidence["source"],evidence["finality_at"],admin_actor,payer=evidence["payer"],finality_basis=evidence["finality_basis"]);return self.finalize_x402_intent(intent_id)
   if evidence["outcome"]!="unpaid" or evidence.get("tx_hash") is not None or datetime.fromisoformat(evidence["finality_at"])>datetime.now(timezone.utc):raise ValueError("final unpaid evidence required")
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT * FROM settlement_intents WHERE intent_id=?",(intent_id,)).fetchone()
    if fresh["state"] not in {"prepared","ambiguous"}:raise ValueError("reconciliation race")
-   now=self.now();authenticated=dict(fresh);authenticated["reconciled_by"]=admin_actor;binding=self._evidence_binding(authenticated,None,evidence["evidence_hash"],evidence["source"],evidence["finality_at"],"unpaid")
-   try:db.execute("UPDATE settlement_intents SET state='cancelled_unpaid',evidence_hash=?,evidence_source=?,finality_at=?,evidence_binding=?,reconciled_by=?,updated_at=? WHERE intent_id=?",(evidence["evidence_hash"],evidence["source"],evidence["finality_at"],binding,admin_actor,now,intent_id))
+   now=self.now();authenticated=dict(fresh);authenticated.update(reconciled_by=admin_actor,settled_payer=evidence["payer"].lower(),finality_basis=evidence["finality_basis"]);binding=self._evidence_binding(authenticated,None,evidence["evidence_hash"],evidence["source"],evidence["finality_at"],"unpaid")
+   try:db.execute("UPDATE settlement_intents SET state='cancelled_unpaid',evidence_hash=?,evidence_source=?,finality_at=?,evidence_binding=?,reconciled_by=?,updated_at=?,settled_payer=?,finality_basis=? WHERE intent_id=?",(evidence["evidence_hash"],evidence["source"],evidence["finality_at"],binding,admin_actor,now,evidence["payer"].lower(),evidence["finality_basis"],intent_id))
    except sqlite3.IntegrityError as e:raise ValueError("settlement evidence already used") from e
    db.execute("UPDATE orders SET state='expired',updated_at=? WHERE id=?",(now,fresh["order_id"]));self._audit(db,admin_actor,"settlement.cancelled_unpaid",fresh["order_id"],{"intent_id":intent_id,"ordinal_released":fresh["reserved_ordinal"],"evidence_hash":evidence["evidence_hash"],"source":evidence["source"],"binding":binding});self._commit_terminal(db);return {"intent_id":intent_id,"state":"cancelled_unpaid","released_ordinal":fresh["reserved_ordinal"]}
+ def _authority_identity(self):
+  return {"authority_id":self.config.authority_id,"key_id":self.config.authority_key_id,"generation":self.config.authority_generation,"public_key_sha256":self.config.authority_public_key_sha256,"attestation":self.config.authority_attestation}
+ def _verify_authority_handshake(self,authority):
+  try:actual=authority.handshake()
+  except Exception:raise RuntimeError("authority_identity_unavailable") from None
+  expected=self._authority_identity()
+  if type(actual) is not dict or set(actual)!=set(expected) or any(type(actual[k]) is not type(expected[k]) for k in expected) or any(not hmac.compare_digest(str(actual[k]),str(expected[k])) for k in expected):raise RuntimeError("authority_identity_mismatch")
+  return expected
+ def _authority_call(self,method,**kwargs):
+  try:return method(**kwargs)
+  except Exception:raise RuntimeError("authority_operation_unavailable") from None
+ @staticmethod
+ def _exact(value,keys):return type(value) is dict and set(value)==set(keys)
+ def _verify_ack_signature(self,domain,payload,signature):
+  try:
+   raw=base64.b64decode(signature,validate=True);assert len(raw)==64;key=serialization.load_pem_public_key(self.config.authority_public_key);key.verify(raw,domain+json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode())
+  except Exception:raise RuntimeError("authority_acknowledgement_invalid") from None
+ def _validate_entitlement_ack(self,value,row,identity,digest):
+  keys={"source","source_id","payload_digest","license_id","authority_id","signer_identity","delivery_receipt","ack_signature"}
+  if not self._exact(value,keys) or any(type(value[k]) is not str for k in keys-{"signer_identity"}) or value["signer_identity"]!=identity or value["authority_id"]!=identity["authority_id"] or value["source"]!=row["source"] or value["source_id"]!=row["source_id"] or value["payload_digest"]!=digest or not re.fullmatch(r"gm_[a-f0-9]{32}",value["license_id"]) or not re.fullmatch(r"[a-f0-9]{64}",value["delivery_receipt"]):raise RuntimeError("authority_acknowledgement_invalid")
+  expected=hashlib.sha256(json.dumps({"license_id":value["license_id"],"payload_digest":digest,"signer_identity":identity,"source":row["source"],"source_id":row["source_id"]},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+  if not hmac.compare_digest(value["delivery_receipt"],expected):raise RuntimeError("authority_acknowledgement_invalid")
+  payload={k:value[k] for k in ("authority_id","delivery_receipt","license_id","payload_digest","signer_identity","source","source_id")};self._verify_ack_signature(ENTITLEMENT_ACK_DOMAIN,payload,value["ack_signature"]);return value
+ def _validate_revocation_ack(self,value,row,identity):
+  keys={"source","source_id","payload_digest","license_id","action","reason","payment_proof","tx_hash","created_at","revoked_at","request_digest","revocation_receipt","authority_id","signer_identity","ack_signature"}
+  mapping={"payload_digest":"entitlement_payload_digest","payment_proof":"proof_hash"}
+  if not self._exact(value,keys) or any(type(value[k]) is not str for k in keys-{"signer_identity"}) or value["signer_identity"]!=identity or value["authority_id"]!=identity["authority_id"] or any(value[k]!=row[mapping.get(k,k)] for k in ("source","source_id","payload_digest","license_id","action","reason","payment_proof","tx_hash","created_at")) or not re.fullmatch(r"[a-f0-9]{64}",value["request_digest"]) or not re.fullmatch(r"[a-f0-9]{64}",value["revocation_receipt"]):raise RuntimeError("authority_acknowledgement_invalid")
+  try:revoked=datetime.fromisoformat(value["revoked_at"].replace("Z","+00:00"))
+  except Exception:raise RuntimeError("authority_acknowledgement_invalid") from None
+  if revoked.tzinfo is None or value["revoked_at"]!=revoked.astimezone(timezone.utc).isoformat().replace("+00:00","Z"):raise RuntimeError("authority_acknowledgement_invalid")
+  request={"signer_identity":identity,"source":row["source"],"source_id":row["source_id"],"payload_digest":row["entitlement_payload_digest"],"license_id":row["license_id"],"action":row["action"],"reason":row["reason"],"payment_proof":row["proof_hash"],"tx_hash":row["tx_hash"],"created_at":row["created_at"]};request_digest=hashlib.sha256(json.dumps(request,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest();receipt=hashlib.sha256(json.dumps({"authority_id":identity["authority_id"],"license_id":row["license_id"],"request_digest":request_digest,"revoked_at":value["revoked_at"]},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+  if not hmac.compare_digest(value["request_digest"],request_digest) or not hmac.compare_digest(value["revocation_receipt"],receipt):raise RuntimeError("authority_acknowledgement_invalid")
+  payload={k:value[k] for k in ("authority_id","license_id","request_digest","revocation_receipt","revoked_at","signer_identity","source","source_id")};self._verify_ack_signature(REVOCATION_ACK_DOMAIN,payload,value["ack_signature"]);return value
  def _issue_reserved(self,db,intent,tx_hash,now,actor):
-  oid=intent["order_id"];license_id=f"gm-v1-{uuid.uuid4()}";doc=self._license(license_id,now);db.execute("INSERT INTO payment_proofs VALUES(?,?,?,?,?)",(intent["proof_hash"],"x402",oid,tx_hash,now.isoformat()));db.execute("UPDATE orders SET state='payment_confirmed',sale_ordinal=?,confirmed_at=?,updated_at=?,tx_hash=? WHERE id=?",(intent["reserved_ordinal"],now.isoformat(),now.isoformat(),tx_hash,oid));self._audit(db,actor,"payment.confirmed",oid,{"ordinal":intent["reserved_ordinal"]});db.execute("UPDATE orders SET state='license_issued',license_id=?,license_json=?,updated_at=? WHERE id=?",(license_id,json.dumps(doc,separators=(",",":")),now.isoformat(),oid));db.execute("UPDATE settlement_intents SET state='finalized_paid',updated_at=? WHERE intent_id=?",(now.isoformat(),intent["intent_id"]));self._audit(db,"issuer","license.issued",oid,{"license_id":license_id});return dict(db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone())
+  """Atomically confirm payment and enqueue authority delivery; never sign a license."""
+  oid=intent["order_id"];stamp=now.isoformat();source_context={"environment":self.config.environment,"merchant":self.config.merchant_id,"payee":self.config.recipient.lower(),"network":BASE_NETWORK,"asset":BASE_USDC.lower(),"product":"growthmap","major":1,"order":oid};source_id=hashlib.sha256(json.dumps(source_context).encode()).hexdigest();db.execute("INSERT INTO payment_proofs VALUES(?,?,?,?,?)",(intent["proof_hash"],"x402",oid,tx_hash,stamp));db.execute("UPDATE orders SET state='payment_confirmed',sale_ordinal=?,confirmed_at=?,updated_at=?,tx_hash=? WHERE id=?",(intent["reserved_ordinal"],stamp,stamp,tx_hash,oid));self._audit(db,actor,"payment.confirmed",oid,{"ordinal":intent["reserved_ordinal"]});identity=self._authority_identity();db.execute("INSERT INTO entitlement_outbox(order_id,source,source_id,proof_hash,tx_hash,evidence_hash,payer,network,asset,amount_minor,product,major_version,state,created_at,next_attempt_at,authority_id,authority_key_id,authority_generation,authority_public_key_sha256,authority_attestation,authority_identity_status) VALUES(?,'x402',?,?,?,?,?,'eip155:8453',?,?, 'growthmap',1,'pending',?,?,?,?,?,?,?,?)",(oid,source_id,intent["proof_hash"],tx_hash,intent["evidence_hash"],intent["settled_payer"],BASE_USDC,intent["amount_minor"],stamp,stamp,identity["authority_id"],identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],"verified"));db.execute("UPDATE settlement_intents SET state='finalized_paid',updated_at=? WHERE intent_id=?",(stamp,intent["intent_id"]));self._audit(db,"issuer","entitlement.enqueued",oid,{"source":"x402"});return dict(db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone())
+ def _outbox_payload_digest(self,row):
+  return hashlib.sha256(json.dumps({k:row[k] for k in ("order_id","source","source_id","proof_hash","tx_hash","evidence_hash","payer","network","asset","amount_minor","product","major_version")}).encode()).hexdigest()
+ @staticmethod
+ def _lease_timestamp(value,error="invalid outbox lease timestamp"):
+  if type(value) is not str or not value or value.strip()!=value or value.endswith("Z"):raise RuntimeError(error)
+  try:parsed=datetime.fromisoformat(value)
+  except Exception:raise RuntimeError(error) from None
+  if parsed.tzinfo!=timezone.utc or parsed.isoformat()!=value:raise RuntimeError(error)
+  return parsed
+ def claim_outbox(self,worker_id,lease_seconds=30,order_id=None):
+  now=datetime.now(timezone.utc);expires=(now+timedelta(seconds=lease_seconds)).isoformat()
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT e.*,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE ((o.state='payment_confirmed' AND e.state='pending' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?)) OR (e.state='leased' AND e.lease_expires_at<=? AND o.state IN('payment_confirmed','refunded')) OR (e.reconciliation_phase IN('crossing_authorized','readback_only') AND e.state='quarantined' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?) AND o.state IN('payment_confirmed','refunded')))";params=[now.isoformat(),now.isoformat(),now.isoformat()]
+   if order_id is not None:sql+=" AND order_id=?";params.append(order_id)
+   row=db.execute(sql+" ORDER BY created_at LIMIT 1",params).fetchone()
+   if not row:db.rollback();return None
+   if row["state"]=="leased":
+    expiry=self._lease_timestamp(row["lease_expires_at"])
+    if expiry>now:db.rollback();return None
+   if row["state"]=="leased" and row["reconciliation_phase"]=="crossing_prepared":
+    if any(row[k] is not None for k in ("license_id","delivery_receipt","authority_ack_signature")):db.rollback();raise RuntimeError("prepared recovery evidence contradiction")
+    reset=db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase='none',lease_owner=NULL,lease_expires_at=NULL,fencing_version=fencing_version+1,next_attempt_at=? WHERE order_id=? AND state='leased' AND reconciliation_phase='crossing_prepared' AND lease_owner=? AND fencing_version=? AND lease_expires_at=? AND lease_expires_at<=? AND license_id IS NULL AND delivery_receipt IS NULL AND authority_ack_signature IS NULL AND authority_identity_status='verified'",(now.isoformat(),row["order_id"],row["lease_owner"],row["fencing_version"],row["lease_expires_at"],now.isoformat())).rowcount
+    if reset!=1:db.rollback();raise RuntimeError("prepared recovery lost")
+    if row["order_state"]=="refunded":self._commit_trusted(db);return None
+    if row["order_state"]!="payment_confirmed":db.rollback();raise RuntimeError("prepared recovery order state invalid")
+    row=db.execute("SELECT e.*,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE e.order_id=?",(row["order_id"],)).fetchone()
+   fence=row["fencing_version"]+1;prior_state=row["state"];changed=db.execute("UPDATE entitlement_outbox SET state='leased',lease_owner=?,lease_expires_at=?,attempt_count=attempt_count+1,fencing_version=?,reconciliation_phase=CASE WHEN reconciliation_phase IN('crossing_authorized','readback_only') THEN 'readback_only' ELSE reconciliation_phase END WHERE order_id=? AND fencing_version=?",(worker_id,expires,fence,row["order_id"],row["fencing_version"])).rowcount
+   if changed!=1:db.rollback();raise RuntimeError("outbox claim lost")
+   self._commit_trusted(db);return dict(db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone())
+ def deliver_claimed_outbox(self,row,authority,worker_id):
+  # Revalidate the fence and local policy before crossing the database boundary:
+  # a concurrent refund of a pending entitlement must never create a license.
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT e.state,e.lease_owner,e.fencing_version,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE e.order_id=?",(row["order_id"],)).fetchone();db.rollback()
+  if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"] or fresh["order_state"] not in {"payment_confirmed","refunded"} or (fresh["order_state"]=="refunded" and row.get("reconciliation_phase")!="readback_only"):raise RuntimeError("outbox lease lost")
+  identity=self._verify_authority_handshake(authority)
+  if row.get("reconciliation_phase")!="readback_only":
+   with self._db() as db:
+    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);changed=db.execute("UPDATE entitlement_outbox SET reconciliation_phase='crossing_prepared' WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=? AND reconciliation_phase='none'",(row["order_id"],worker_id,row["fencing_version"])).rowcount
+    if changed!=1:db.rollback();raise RuntimeError("outbox lease lost")
+    self._commit_trusted(db)
+   with self._db() as db:
+    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);authorized=db.execute("UPDATE entitlement_outbox SET reconciliation_phase='crossing_authorized' WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=? AND reconciliation_phase='crossing_prepared' AND EXISTS(SELECT 1 FROM orders WHERE id=? AND state='payment_confirmed')",(row["order_id"],worker_id,row["fencing_version"],row["order_id"])).rowcount
+    if authorized!=1:db.rollback();raise RuntimeError("outbox crossing authorization lost")
+    self._commit_trusted(db)
+   row=dict(row);row["reconciliation_phase"]="crossing_authorized"
+  columns={"authority_id":"authority_id","key_id":"authority_key_id","generation":"authority_generation","public_key_sha256":"authority_public_key_sha256","attestation":"authority_attestation"}
+  if any(row[columns[k]]!=v for k,v in identity.items()):raise RuntimeError("authority_identity_mismatch")
+  digest=self._outbox_payload_digest(row);readback_only=row.get("reconciliation_phase")=="readback_only";response=None
+  if not readback_only:
+   try:response=self._authority_call(authority.create_external_entitlement,source=row["source"],source_id=row["source_id"],payload_digest=digest,authority_id=self.config.authority_id,signer_identity=identity,major_version=1,seat_limit=2)
+   except RuntimeError:pass
+  self._verify_authority_handshake(authority)
+  try:ack=self._authority_call(authority.read_external_entitlement_acknowledgement,source=row["source"],source_id=row["source_id"],signer_identity=identity)
+  except RuntimeError:
+   with self._db() as db:
+    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT reconciliation_phase,attempt_count,state FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone()
+    if not fresh or fresh["reconciliation_phase"] not in {"crossing_authorized","readback_only"}:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
+    phase="manual_review" if fresh["attempt_count"]>=8 else "readback_only";changed=db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=? AND reconciliation_phase IN('crossing_authorized','readback_only')",(phase,(datetime.now(timezone.utc)+timedelta(seconds=min(3600,2**min(fresh["attempt_count"],10)))).isoformat(),self._hash('authority_reconciliation_pending'),row["order_id"])).rowcount
+    if changed!=1:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
+    self._commit_trusted(db)
+   raise RuntimeError("authority_reconciliation_pending") from None
+  response=response or {"license_id":ack["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":ack["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":ack["ack_signature"]}
+  self._verify_authority_handshake(authority);self._verify_authority_handshake(authority);entitlement=self._validate_entitlement_ack(ack,row,identity,digest)
+  expected_response={"license_id":entitlement["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":entitlement["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":entitlement["ack_signature"]}
+  # The independently verified durable acknowledgement is authoritative. A lost or
+  # contradictory transport response cannot discard signed evidence or compensation.
+  entitlement=expected_response
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone();order=db.execute("SELECT state FROM orders WHERE id=?",(row["order_id"],)).fetchone();now=self.now()
+   if fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:
+    if order and order["state"]=="refunded" and fresh["state"] in {"quarantined","pending","leased"}:
+     db.execute("UPDATE entitlement_outbox SET state='delivered',license_id=?,delivered_at=?,delivery_receipt=?,authority_ack_signature=?,lease_owner=NULL,lease_expires_at=NULL WHERE order_id=?",(entitlement["license_id"],now,entitlement["delivery_receipt"],entitlement["ack_signature"],row["order_id"]));self._enqueue_revocation(db,dict(fresh),entitlement["license_id"],"refund","refund",now);self._audit(db,"issuer","entitlement.compensating_revocation",row["order_id"],{"license_id":entitlement["license_id"]});self._commit_trusted(db);return entitlement
+    db.rollback();raise RuntimeError("outbox lease lost")
+   db.execute("UPDATE entitlement_outbox SET state='delivered',license_id=?,delivered_at=?,delivery_receipt=?,authority_ack_signature=?,lease_owner=NULL,lease_expires_at=NULL WHERE order_id=?",(entitlement["license_id"],now,entitlement["delivery_receipt"],entitlement["ack_signature"],row["order_id"]))
+   if order["state"]=="payment_confirmed":db.execute("UPDATE orders SET state='license_issued',license_id=?,updated_at=? WHERE id=?",(entitlement["license_id"],now,row["order_id"]));self._audit(db,"issuer","entitlement.delivered",row["order_id"],{"license_id":entitlement["license_id"]})
+   elif order["state"]=="refunded":self._enqueue_revocation(db,row,entitlement["license_id"],"refund","refund",now);self._audit(db,"issuer","entitlement.delivered_after_refund",row["order_id"],{"license_id":entitlement["license_id"]})
+   else:db.rollback();raise RuntimeError("outbox lease lost")
+   self._commit_trusted(db);return entitlement
+ def fail_outbox(self,row,worker_id,error,max_attempts=8):
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT state,lease_owner,fencing_version,attempt_count FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone()
+   if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();return
+   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));db.execute("UPDATE entitlement_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=?",(state,(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat(),hashlib.sha256(str(error).encode()).hexdigest(),row["order_id"]));self._commit_trusted(db)
+ def deliver_entitlement(self,order_id,authority):
+  worker="inline-"+uuid.uuid4().hex
+  row=self.claim_outbox(worker,order_id=order_id)
+  if not row or row["order_id"]!=order_id:
+   for _ in range(100):
+    with self._db() as db:existing=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(order_id,)).fetchone()
+    if existing and existing["state"]=="delivered":
+     if existing["authority_identity_status"]!="verified" or any(existing[k] is None for k in ("authority_id","authority_key_id","authority_generation","authority_public_key_sha256","authority_attestation")):raise RuntimeError("legacy_identity_unproven")
+     stored={"authority_id":existing["authority_id"],"key_id":existing["authority_key_id"],"generation":existing["authority_generation"],"public_key_sha256":existing["authority_public_key_sha256"],"attestation":existing["authority_attestation"]}
+     if stored!=self._authority_identity():raise RuntimeError("authority_identity_mismatch")
+     result={"source":existing["source"],"source_id":existing["source_id"],"payload_digest":self._outbox_payload_digest(existing),"license_id":existing["license_id"],"authority_id":existing["authority_id"],"signer_identity":stored,"delivery_receipt":existing["delivery_receipt"],"ack_signature":existing["authority_ack_signature"]};self._validate_entitlement_ack(result,existing,stored,result["payload_digest"])
+     return {"license_id":existing["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":existing["delivery_receipt"],"authority_id":existing["authority_id"],"signer_identity":stored,"ack_signature":existing["authority_ack_signature"]}
+    if not existing or existing["state"] not in {"leased","pending"}:break
+    time.sleep(.01)
+   raise ValueError("entitlement unavailable")
+  try:return self.deliver_claimed_outbox(row,authority,worker)
+  except Exception as error:
+   if str(error) not in {"authority_reconciliation_pending","authority_reconciliation_state_lost"}:self.fail_outbox(row,worker,error)
+   raise
  def _confirm_payment_locked(self,db,oid,proof_id,amount,currency,payer_ref=None,tx_hash=None,actor="system"):
   r=db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone()
   if not r:raise KeyError("order")
@@ -295,15 +457,12 @@ class PaymentService:
    db.execute("UPDATE orders SET state='manual_review',updated_at=? WHERE id=?",(now.isoformat(),oid));self._audit(db,actor,"payment.manual_review",oid,{"provided":amount,"expected":expected,"currency":currency});self._commit_trusted(db);return dict(db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone())
   try:db.execute("INSERT INTO payment_proofs VALUES(?,?,?,?,?)",(self._hash(proof_id),r["rail"],oid,tx_hash,now.isoformat()))
   except sqlite3.IntegrityError as e:raise ValueError("duplicate payment proof") from e
-  license_id=f"gm-v1-{uuid.uuid4()}";doc=self._license(license_id,now);db.execute("UPDATE orders SET state='payment_confirmed',sale_ordinal=?,confirmed_at=?,updated_at=?,payer_ref=?,tx_hash=? WHERE id=?",(ordinal,now.isoformat(),now.isoformat(),payer_ref,tx_hash,oid));self._audit(db,actor,"payment.confirmed",oid,{"ordinal":ordinal});db.execute("UPDATE orders SET state='license_issued',license_id=?,license_json=?,updated_at=? WHERE id=?",(license_id,json.dumps(doc,separators=(",",":")),now.isoformat(),oid));self._audit(db,"issuer","license.issued",oid,{"license_id":license_id});self._commit_trusted(db);return dict(db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone())
+  db.execute("UPDATE orders SET state='payment_confirmed',sale_ordinal=?,confirmed_at=?,updated_at=?,payer_ref=?,tx_hash=? WHERE id=?",(ordinal,now.isoformat(),now.isoformat(),payer_ref,tx_hash,oid));self._audit(db,actor,"payment.confirmed",oid,{"ordinal":ordinal});self._audit(db,"issuer","entitlement.not_configured",oid,{"rail":r["rail"]});self._commit_trusted(db);return dict(db.execute("SELECT * FROM orders WHERE id=?",(oid,)).fetchone())
  @_checkpoint_serialized
  def confirm_payment_and_allocate_sale(self,oid,proof_id,amount,currency,payer_ref=None,tx_hash=None,actor="system"):
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db)
    return self._confirm_payment_locked(db,oid,proof_id,amount,currency,payer_ref,tx_hash,actor)
- def _license(self,license_id,now):
-  if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
-  d={"schema_version":1,"edition":"personal","license_id":license_id,"major_version":1,"device_allowance":2,"device_binding":None,"issued_at":now.isoformat(),"expires_at":None,"revoked_at":None,"max_active_projects":None,"next_check_in_at":(now+timedelta(days=30)).isoformat()};payload=json.dumps(d,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();d["signature"]=base64.b64encode(self.config.signing_key.sign(payload)).decode();return d
  @staticmethod
  def paypal_minor(value):
   if isinstance(value,(float,int)) or not isinstance(value,str) or re.search(r"[eE]",value):raise ValueError("PayPal amount must be a decimal string")
@@ -328,6 +487,13 @@ class PaymentService:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT payer_ref FROM orders WHERE id=? AND rail='paypal'",(oid,)).fetchone()
    if not r or r[0]!=transaction_id:raise ValueError("transaction does not match submitted claim")
    return self._confirm_payment_locked(db,oid,transaction_id,self.paypal_minor(a["amount"]),"USD",tx_hash=transaction_id,actor=actor)
+ def _enqueue_revocation(self,db,entitlement,license_id,action,reason,created_at=None):
+  service_now=self._utc_now();raw_created=created_at or service_now.isoformat()
+  try:event_time=datetime.fromisoformat(raw_created.replace('Z','+00:00'))
+  except (AttributeError,ValueError) as error:raise ValueError('invalid revocation event time') from error
+  if event_time.tzinfo is None or event_time<service_now-timedelta(minutes=5) or event_time>service_now+timedelta(minutes=5):raise ValueError('invalid revocation event time')
+  created_at=event_time.astimezone(timezone.utc).isoformat();digest=self._outbox_payload_digest(entitlement);identity={"authority_id":self.config.authority_id,"source":entitlement["source"],"source_id":entitlement["source_id"],"payload_digest":digest,"license_id":license_id,"order_id":entitlement["order_id"],"action":action};event_id="gmr_"+hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+  identity=self._authority_identity();db.execute("INSERT OR IGNORE INTO revocation_outbox(event_id,order_id,authority_id,source,source_id,entitlement_payload_digest,license_id,action,reason,proof_hash,tx_hash,evidence_hash,created_at,state,next_attempt_at,authority_key_id,authority_generation,authority_public_key_sha256,authority_attestation,authority_identity_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?,?)",(event_id,entitlement["order_id"],self.config.authority_id,entitlement["source"],entitlement["source_id"],digest,license_id,action,reason,entitlement["proof_hash"],entitlement["tx_hash"],entitlement["evidence_hash"],created_at,created_at,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],"verified"));return dict(db.execute("SELECT * FROM revocation_outbox WHERE order_id=?",(entitlement["order_id"],)).fetchone())
  def _revocation(self,license_id,revoked_at,sequence,reason_code):
   if self.config.signing_key is None:raise RuntimeError("signing key unavailable")
   if reason_code not in {None,"refund","chargeback","fraud","terms_violation","administrative"}:raise ValueError("invalid revocation reason")
@@ -342,32 +508,97 @@ class PaymentService:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT state,license_id FROM orders WHERE id=?",(oid,)).fetchone()
    if not r:raise KeyError("order")
    if r[0]==target:
-    stored=db.execute("SELECT assertion_json FROM revocation_assertions WHERE order_id=?",(oid,)).fetchone() if action=="revoke" else None
-    if action=="revoke" and not stored:raise RuntimeError("revoked order missing signed assertion")
-    self._audit(db,"admin",f"order.{action}.idempotent",oid,{"state":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":True,"revocation":json.loads(stored[0]) if stored else None}
+    stored=db.execute("SELECT assertion_json FROM revocation_assertions WHERE order_id=?",(oid,)).fetchone() if action in {"refund","revoke"} else None
+    event=db.execute("SELECT * FROM revocation_outbox WHERE order_id=?",(oid,)).fetchone() if action in {"refund","revoke"} else None
+    self._audit(db,"admin",f"order.{action}.idempotent",oid,{"state":target});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":True,"revocation":json.loads(stored[0]) if stored else None,"revocation_event":dict(event) if event else None}
    if r[0] not in TRANSITIONS[action]:raise ValueError(f"illegal transition {r[0]} -> {target}")
-   now=self.now();assertion=None
-   if action=="revoke":
-    revoked_at=datetime.now(timezone.utc).isoformat().replace("+00:00","Z")
-    assertion=self._revocation(r[1],revoked_at,1,reason_code or "administrative")
-    db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(r[1],oid,1,revoked_at,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now))
-   db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target,"license_id":r[1] if action=="revoke" else None,"sequence":1 if action=="revoke" else None});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False,"revocation":assertion}
- @_checkpoint_serialized
+   service_now=self._utc_now();now=service_now.isoformat();assertion=None;event=None;entitlement=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(oid,)).fetchone()
+   delivered=entitlement and entitlement["state"]=="delivered" and entitlement["license_id"]
+   if action in {"refund","revoke"} and delivered:
+    reason="refund" if action=="refund" else (reason_code or "administrative");revoked_at=service_now.isoformat().replace("+00:00","Z");assertion=self._revocation(entitlement["license_id"],revoked_at,1,reason);db.execute("INSERT INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(entitlement["license_id"],oid,1,revoked_at,assertion["reason_code"],json.dumps(assertion,separators=(",",":")),now));event=self._enqueue_revocation(db,entitlement,entitlement["license_id"],action,reason,now)
+   elif action=="refund" and entitlement:
+    # Cancellation is local-only because no authority license exists. Invalidating
+    # an outstanding fence ensures a claimed worker cannot deliver afterward.
+    db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase=CASE WHEN reconciliation_phase IN('none','crossing_prepared') THEN 'none' ELSE 'readback_only' END,lease_owner=NULL,lease_expires_at=NULL,fencing_version=fencing_version+1,next_attempt_at=CASE WHEN reconciliation_phase='none' THEN next_attempt_at ELSE ? END,last_error_hash=? WHERE order_id=?",((service_now+timedelta(seconds=2)).isoformat(),self._hash("cancelled_by_refund_before_delivery"),oid))
+   db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,oid));self._audit(db,"admin",f"order.{action}",oid,{"from":r[0],"to":target,"license_id":entitlement["license_id"] if delivered else None,"revocation_enqueued":bool(event)});self._commit_trusted(db);return {"order_id":oid,"state":target,"idempotent":False,"revocation":assertion,"revocation_event":event}
+ def claim_revocation(self,worker_id,lease_seconds=30,order_id=None):
+  now=self._utc_now();expires=(now+timedelta(seconds=lease_seconds)).isoformat()
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT * FROM revocation_outbox WHERE ((state='pending' AND (next_attempt_at IS NULL OR next_attempt_at<=?)) OR (state='leased' AND lease_expires_at<=?))";params=[now.isoformat(),now.isoformat()]
+   if order_id is not None:sql+=" AND order_id=?";params.append(order_id)
+   row=db.execute(sql+" ORDER BY created_at LIMIT 1",params).fetchone()
+   if not row:db.rollback();return None
+   if row["state"]=="leased":
+    expiry=self._lease_timestamp(row["lease_expires_at"],"invalid revocation lease timestamp")
+    if expiry>now:db.rollback();return None
+   fence=row["fencing_version"]+1;changed=db.execute("UPDATE revocation_outbox SET state='leased',lease_owner=?,lease_expires_at=?,attempt_count=attempt_count+1,fencing_version=? WHERE event_id=? AND fencing_version=?",(worker_id,expires,fence,row["event_id"],row["fencing_version"])).rowcount
+   if changed!=1:db.rollback();raise RuntimeError("revocation claim lost")
+   self._commit_trusted(db);return dict(db.execute("SELECT * FROM revocation_outbox WHERE event_id=?",(row["event_id"],)).fetchone())
+ def deliver_claimed_revocation(self,row,authority,worker_id):
+  identity=self._verify_authority_handshake(authority)
+  columns={"authority_id":"authority_id","key_id":"authority_key_id","generation":"authority_generation","public_key_sha256":"authority_public_key_sha256","attestation":"authority_attestation"}
+  if any(row[columns[k]]!=v for k,v in identity.items()):raise RuntimeError("authority_identity_mismatch")
+  response=self._authority_call(authority.revoke_external_entitlement,source=row["source"],source_id=row["source_id"],payload_digest=row["entitlement_payload_digest"],authority_id=row["authority_id"],signer_identity=identity,license_id=row["license_id"],action=row["action"],reason=row["reason"],payment_proof=row["proof_hash"],tx_hash=row["tx_hash"],created_at=row["created_at"])
+  self._verify_authority_handshake(authority);ack=self._authority_call(authority.read_external_revocation_acknowledgement,source=row["source"],source_id=row["source_id"],signer_identity=identity);self._verify_authority_handshake(authority);receipt=self._validate_revocation_ack(ack,row,identity);request_digest=receipt["request_digest"]
+  expected_response={"license_id":receipt["license_id"],"revoked_at":receipt["revoked_at"],"revocation_receipt":receipt["revocation_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":receipt["ack_signature"]}
+  if not self._exact(response,set(expected_response)) or response!=expected_response:raise RuntimeError("authority_acknowledgement_invalid")
+  receipt=response
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT * FROM revocation_outbox WHERE event_id=?",(row["event_id"],)).fetchone()
+   if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();raise RuntimeError("revocation lease lost")
+   now=self._utc_now().isoformat();changed=db.execute("UPDATE revocation_outbox SET state='delivered',delivered_at=?,authority_receipt=?,authority_ack_signature=?,authority_revoked_at=?,authority_request_digest=?,lease_owner=NULL,lease_expires_at=NULL WHERE event_id=? AND state='leased' AND lease_owner=? AND fencing_version=?",(now,receipt["revocation_receipt"],receipt["ack_signature"],receipt["revoked_at"],request_digest,row["event_id"],worker_id,row["fencing_version"])).rowcount
+   if changed!=1:db.rollback();raise RuntimeError("revocation lease lost")
+   self._audit(db,"issuer","revocation.delivered",row["order_id"],{"license_id":row["license_id"],"receipt":receipt["revocation_receipt"]});self._commit_trusted(db);return receipt
+ def fail_revocation(self,row,worker_id,error,max_attempts=8):
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT state,lease_owner,fencing_version,attempt_count FROM revocation_outbox WHERE event_id=?",(row["event_id"],)).fetchone()
+   if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();return
+   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));db.execute("UPDATE revocation_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE event_id=?",(state,(self._utc_now()+timedelta(seconds=delay)).isoformat(),self._hash(str(error)),row["event_id"]));self._commit_trusted(db)
+ def deliver_revocation(self,order_id,authority):
+  worker="revoke-inline-"+uuid.uuid4().hex;row=self.claim_revocation(worker,order_id=order_id)
+  if not row:
+   with self._db() as db:existing=db.execute("SELECT * FROM revocation_outbox WHERE order_id=? AND state='delivered'",(order_id,)).fetchone()
+   if existing:
+    if existing["authority_identity_status"]!="verified" or any(existing[k] is None for k in ("authority_id","authority_key_id","authority_generation","authority_public_key_sha256","authority_attestation")):raise RuntimeError("legacy_identity_unproven")
+    stored={"authority_id":existing["authority_id"],"key_id":existing["authority_key_id"],"generation":existing["authority_generation"],"public_key_sha256":existing["authority_public_key_sha256"],"attestation":existing["authority_attestation"]}
+    if stored!=self._authority_identity():raise RuntimeError("authority_identity_mismatch")
+    if any(existing[k] is None for k in ("authority_ack_signature","authority_revoked_at","authority_request_digest","authority_receipt")):raise RuntimeError("legacy_identity_unproven")
+    result={"source":existing["source"],"source_id":existing["source_id"],"payload_digest":existing["entitlement_payload_digest"],"license_id":existing["license_id"],"action":existing["action"],"reason":existing["reason"],"payment_proof":existing["proof_hash"],"tx_hash":existing["tx_hash"],"created_at":existing["created_at"],"revoked_at":existing["authority_revoked_at"],"request_digest":existing["authority_request_digest"],"revocation_receipt":existing["authority_receipt"],"authority_id":existing["authority_id"],"signer_identity":stored,"ack_signature":existing["authority_ack_signature"]}
+    self._validate_revocation_ack(result,existing,stored);return {"license_id":existing["license_id"],"revoked_at":existing["authority_revoked_at"],"revocation_receipt":existing["authority_receipt"],"authority_id":existing["authority_id"],"signer_identity":stored,"ack_signature":existing["authority_ack_signature"]}
+   raise ValueError("revocation unavailable")
+  try:return self.deliver_claimed_revocation(row,authority,worker)
+  except Exception as error:self.fail_revocation(row,worker,error);raise
  @_checkpoint_serialized
  def admin_list_orders(self):
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);rows=[dict(r) for r in db.execute("SELECT * FROM orders ORDER BY created_at DESC LIMIT 200")];db.rollback();return rows
- def recovery_lookup(self,code):
+ def authenticated_entitlement(self,order_id,code):
+  """Body-only recovery authentication; callers must return a generic failure."""
+  if not isinstance(code,str) or len(code)>256:return None
   with self._checkpoint_lock:
    with self._db() as db:
-    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT id,state,license_json FROM orders WHERE recovery_code_hash=?",(self._hash(code),)).fetchone();assertion=db.execute("SELECT assertion_json FROM revocation_assertions WHERE order_id=?",(r["id"],)).fetchone() if r and r["state"]=="revoked" else None;db.rollback()
-  return {"state":"not_found_or_unavailable"} if not r else {"state":r["state"],"license":json.loads(r["license_json"]) if r["state"]=="license_issued" and r["license_json"] else None,"revocation":json.loads(assertion[0]) if assertion else None}
+    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT id,state,license_id FROM orders WHERE id=? AND recovery_code_hash=?",(order_id,self._hash(code))).fetchone();db.rollback()
+  return dict(r) if r and r["state"]=="license_issued" and r["license_id"] else None
  @_checkpoint_serialized
- def candidate_check_in(self,code):
+ def list_authority_reconciliation(self,status=None):
+  allowed={None,"crossing_prepared","crossing_authorized","readback_only","manual_review"}
+  if status not in allowed:raise ValueError("invalid reconciliation status")
   with self._db() as db:
-   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);r=db.execute("SELECT id,state,license_id FROM orders WHERE recovery_code_hash=?",(self._hash(code),)).fetchone()
-   if not r or r["state"]!="license_issued" or not r["license_id"]:db.rollback();return {"state":"not_found_or_unavailable"}
-   doc=json.loads(db.execute("SELECT license_json FROM orders WHERE id=?",(r["id"],)).fetchone()[0]);doc["next_check_in_at"]=(datetime.now(timezone.utc)+timedelta(days=30)).isoformat();doc.pop("signature",None);payload=json.dumps(doc,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode();doc["signature"]=base64.b64encode(self.config.signing_key.sign(payload)).decode();now=self.now();db.execute("UPDATE orders SET license_json=?,updated_at=? WHERE id=?",(json.dumps(doc,separators=(",",":")),now,r["id"]));self._audit(db,"issuer","license.check_in",r["id"],{"license_id":r["license_id"],"next_check_in_at":doc["next_check_in_at"]});self._commit_trusted(db);return {"state":"license_issued","license":doc}
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT e.*,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE e.reconciliation_phase!='none'";params=[]
+   if status:sql+=" AND e.reconciliation_phase=?";params=[status]
+   candidates=[dict(r) for r in db.execute(sql+" ORDER BY e.created_at LIMIT 200",params)];db.rollback()
+  rows=[]
+  for row in candidates:
+   result={k:row[k] for k in ("order_id","order_state","attempt_count","next_attempt_at","created_at","last_error_hash")};result.update({"outbox_state":row["state"],"reconciliation_phase":row["reconciliation_phase"],"license_id":None,"evidence_status":"unavailable"})
+   try:
+    identity={"authority_id":row["authority_id"],"key_id":row["authority_key_id"],"generation":row["authority_generation"],"public_key_sha256":row["authority_public_key_sha256"],"attestation":row["authority_attestation"]};digest=self._outbox_payload_digest(row);ack={"source":row["source"],"source_id":row["source_id"],"payload_digest":digest,"license_id":row["license_id"],"authority_id":row["authority_id"],"signer_identity":identity,"delivery_receipt":row["delivery_receipt"],"ack_signature":row["authority_ack_signature"]}
+    if row["state"]!="delivered" or row["authority_identity_status"]!="verified":raise RuntimeError
+    self._validate_entitlement_ack(ack,row,identity,digest);result.update({"license_id":row["license_id"],"evidence_status":"verified"})
+   except Exception:pass
+   rows.append(result)
+  return rows
+ def pending_outbox_orders(self):
+  with self._db() as db:return [r[0] for r in db.execute("SELECT order_id FROM entitlement_outbox WHERE state='pending' ORDER BY created_at")]
  @_checkpoint_serialized
  def verify_audit(self):
   prev="0"*64

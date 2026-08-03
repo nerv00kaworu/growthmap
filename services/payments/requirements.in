@@ -1,0 +1,6 @@
+# Isolated payment-service runtime; do not install into src/backend.
+fastapi==0.116.1
+uvicorn==0.35.0
+cryptography==45.0.6
+argon2-cffi==25.1.0
+x402[httpx]==2.17.0

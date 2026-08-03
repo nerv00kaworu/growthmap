@@ -1,7 +1,7 @@
 # GrowthMap 工程規格 v0.1
 
 > Status note: this is a **target engineering spec**. The current repository only implements a subset of this document.
-> In the shipped MVP, SQLite is the active database and the frontend remains tree-first. Proposal branches and mainline selection are usable, while persistent provider management, agent sessions, and general multi-relation graph governance remain unimplemented.
+> In the shipped MVP, SQLite is the active database and the frontend remains tree-first. Proposal branches and mainline selection are usable, while persistent provider management and general multi-relation graph governance remain incomplete. Agent Sessions and provider-neutral Agent Port v1 are implemented; see `PRODUCT-CORE-v1.md` and `AGENT-PORT-v1.md`.
 
 ---
 
@@ -11,7 +11,8 @@ Current implementation status in this repository:
 
 - **Implemented**: projects, nodes, `child_of` edges, content blocks, action logs for node history, AI expand/deepen/chat endpoints, subtree fetch, Markdown/JSON/spec export, tree-oriented frontend editing, mainline selection, and proposal branch create/switch/compare/merge/archive flows
 - **Partially implemented**: edge persistence for non-`child_of` relation types exists in the model/API, but the frontend and primary workflows are still tree-first
-- **Not implemented**: persistent provider config management, agent session workflows, and frontend graph governance for non-tree relations
+- **Implemented in Core Collaboration v1**: manual Agent Sessions plus provider-neutral localhost Agent Port grants, revisions, scoped reads/context, proposals, atomic writes, events/readbacks, CLI and MCP thin clients
+- **Not implemented**: complete persistent provider lifecycle, general inverse-operation undo, and frontend graph governance for non-tree relations
 
 Use this document as the desired system shape, not as a description of the current shipped product.
 

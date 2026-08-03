@@ -39,7 +39,7 @@ with TestClient(app) as c:
 
 def test_license_major_signature_and_device_schema(tmp_path):
     private=Ed25519PrivateKey.generate();pub=tmp_path/'pub.pem';pub.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
-    assert verify_document(signed(private),pub,now=datetime(2026,1,2,tzinfo=timezone.utc)).state=='paid'
+    value=verify_document(signed(private),pub,now=datetime(2026,1,2,tzinfo=timezone.utc));assert value.state=='paid_legacy' and not value.mutations_allowed
     assert verify_document(signed(private,major_version=2),pub,current_major=1).reason=='major_mismatch'
     bad=signed(private);bad['device_allowance']=3;assert verify_document(bad,pub).reason=='invalid_signature'
     assert verify_document(signed(private,device_allowance=0),pub).reason=='invalid_device_allowance'
@@ -52,7 +52,7 @@ from fastapi.testclient import TestClient
 from main import app
 p=r"LICENSE";before=open(p).read();wrong=json.load(open(r"WRONG"))
 with TestClient(app) as c:
- assert c.get('/api/desktop/entitlement',headers={'Authorization':'Bearer t'}).json()['state']=='paid'
+ assert c.get('/api/desktop/entitlement',headers={'Authorization':'Bearer t'}).json()['state']=='paid_legacy'
  assert c.post('/api/desktop/license/import',headers={'Authorization':'Bearer t'},json={'document':wrong}).status_code==400
  assert open(p).read()==before
 '''.replace('LICENSE',str(license_file)).replace('WRONG',str(tmp_path/'wrong.json'))

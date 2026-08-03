@@ -1,0 +1,12 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import {hasAgentPortDesktopControl} from "./agent-port-control";
+const root=path.resolve(__dirname,"../..");
+const page=fs.readFileSync(path.join(root,"src/app/page.tsx"),"utf8");
+const panel=fs.readFileSync(path.join(root,"src/components/AgentPortPanel.tsx"),"utf8");
+const preload=fs.readFileSync(path.resolve(root,"../../desktop/preload.js"),"utf8");
+test("menu is absent without actual desktop preload control marker",()=>{assert.equal(hasAgentPortDesktopControl(undefined),false);assert.equal(hasAgentPortDesktopControl({isDesktop:true}),false);assert.match(page,/agentPortDesktopControl && <button data-testid="agent-port-menu-entry"/);});
+test("direct panel fails closed before API calls or token creation",()=>{assert.ok(panel.indexOf('data-testid="agent-port-unavailable"')<panel.indexOf('data-testid="agent-port-panel"'));assert.match(panel,/const reload=.*if\(!desktopControl\)return;.*listAgentGrants.*getAgentPortActivity/);assert.match(panel,/const create=.*if\(!desktopControl\)return;.*createAgentGrant/);assert.match(panel,/const review=.*if\(!desktopControl\)return;.*reviewAgentProposal/);});
+test("trusted desktop marker exposes working control panel",()=>{assert.equal(hasAgentPortDesktopControl({isDesktop:true,agentPortControl:true}),true);assert.match(preload,/isDesktop:true,\s*agentPortControl:true,/);assert.match(panel,/data-testid="agent-port-panel"/);assert.match(panel,/建立 project-wide 有限期 grant/);});

@@ -1,16 +1,5 @@
 'use strict';
-const test=require('node:test'),assert=require('node:assert/strict'),cp=require('node:child_process'),path=require('node:path');
-const {canonicalStartupVerdict,createStartupVerdict,startupVerdictEnv}=require('../startup-verdict');
-const VECTOR={mode:'fresh',token:'0123456789abcdef'.repeat(4),nonce:'Win_SAFE-token_09-azAZ'.repeat(2),mac:'2fdcbbc1824a43ed234f23f911a38e71ae92536936b558b9dae2a56dee9f874d'};
-test('fixed UTF-8/hex startup verdict vector is stable',()=>{
- assert.equal(canonicalStartupVerdict(VECTOR.mode,VECTOR.nonce),'growthmap-startup-v1:fresh:Win_SAFE-token_09-azAZWin_SAFE-token_09-azAZ');
- assert.deepEqual(createStartupVerdict(VECTOR),{mode:VECTOR.mode,nonce:VECTOR.nonce,mac:VECTOR.mac});
-});
-test('packaged-like policy to environment validates in Python with the identical token',()=>{
- const verdict=createStartupVerdict(VECTOR),env=startupVerdictEnv({verdict,token:VECTOR.token});
- assert.equal(env.GROWTHMAP_SESSION_TOKEN,VECTOR.token);
- const backend=path.resolve(__dirname,'../../src/backend');
- const python=process.env.PYTHON?path.resolve(process.env.PYTHON):(process.platform==='win32'?'python':'python3');
- const out=cp.spawnSync(python,['-c','from desktop.startup_verdict import verdict_validation; print(*verdict_validation())'],{cwd:backend,env:{...process.env,...env},encoding:'utf8'});
- assert.equal(out.status,0,out.stderr);assert.equal(out.stdout.trim(),'fresh valid');
-});
+const test=require('node:test'),assert=require('node:assert/strict'),crypto=require('node:crypto'),cp=require('node:child_process'),path=require('node:path');const {createStartupVerdict,startupVerdictEnv}=require('../startup-verdict');
+function fixture(){const {privateKey,publicKey}=crypto.generateKeyPairSync('ed25519');return {token:'test-token',mode:'paid',nonce:'N'.repeat(43),session:'S'.repeat(43),devicePublicKey:publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64'),privateKeyPem:privateKey.export({format:'pem',type:'pkcs8'}).toString()};}
+test('verdict binds private-key proof, nonce, session, mode and MAC',()=>{const f=fixture(),v=createStartupVerdict(f);assert.equal(v.mode,'paid');for(const field of ['proof','mac'])assert.ok(v[field]);const env=startupVerdictEnv({verdict:v,token:f.token}),backend=path.resolve(__dirname,'../../src/backend'),python=process.env.PYTHON||'python3',out=cp.spawnSync(python,['-c','from desktop.startup_verdict import verdict_validation;print(*verdict_validation())'],{cwd:backend,env:{...process.env,...env},encoding:'utf8'});assert.equal(out.status,0,out.stderr);assert.equal(out.stdout.trim(),'paid valid');});
+test('old proof cannot be replayed into a new startup session',()=>{const f=fixture(),v=createStartupVerdict(f);assert.notEqual(createStartupVerdict({...f,session:'T'.repeat(43)}).proof,v.proof);});

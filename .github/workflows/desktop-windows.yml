@@ -2,7 +2,7 @@ name: Desktop Windows foundation
 on:
   workflow_dispatch:
   pull_request:
-    paths: ["desktop/**", "src/backend/**", "src/frontend/**", ".github/workflows/desktop-windows.yml", ".github/workflows/scripts/**"]
+    paths: ["desktop/**", "src/backend/**", "src/frontend/**", "services/payments/**", "config/**", "tools/generate-public-config.py", ".github/workflows/desktop-windows.yml", ".github/workflows/scripts/**"]
 permissions: { contents: read }
 jobs:
   build-test-package:
@@ -13,15 +13,35 @@ jobs:
         with: { python-version: "3.12", cache: pip }
       - uses: actions/setup-node@v4
         with: { node-version: "22", cache: npm, cache-dependency-path: "**/package-lock.json" }
+      # Install unhashed desktop/backend inputs separately from the
+      # hash-enforced payments lock. Combining them makes pip apply
+      # require-hashes to every file and reject the intentionally ranged
+      # desktop requirements before any test or packaging step can run.
       - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt
+      - run: python -m pip install -r services/payments/requirements.lock
+      - run: python tools/generate-public-config.py --check
+      - run: python -m compileall -q services/payments/growthmap_payments tools
+      - run: python -m pytest -q services/payments/tests
+        env:
+          PYTHONPATH: services/payments;src/backend
       - run: python -m pytest -q
         working-directory: src/backend
       - run: npm ci
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
-      - run: node scripts/generate-csp-manifest.js
-        working-directory: desktop
+      - name: Tracked CSP semantic content identity must match the fresh deterministic build
+        shell: pwsh
+        run: |
+          node desktop/scripts/verify-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json
+          $cspStatus = $LASTEXITCODE
+          if ($cspStatus -ne 0) {
+            node desktop/scripts/diagnose-csp-manifest.js --tracked-git HEAD:desktop/generated/csp-script-hashes.json --generated desktop/generated/csp-script-hashes.json --out src/frontend/out
+            $diagnosticStatus = $LASTEXITCODE
+            if ($diagnosticStatus -ne 0) { Write-Host "::error::CSP diagnostic failed closed with status $diagnosticStatus" }
+            exit $cspStatus
+          }
+          exit 0
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
       - run: npm ci
@@ -67,9 +87,21 @@ jobs:
           if (-not ($pkg.build.files -contains '!e2e-main.js')) { throw 'E2E main exclusion missing' }
           foreach ($forbidden in @('e2e-main.js','e2e-commercial-config.js')) { if ($pkg.build.files -contains $forbidden) { throw "E2E source ships in production file set: $forbidden" } }
           if ($pkg.build.extraResources.from -match '(^|[\/])e2e([\/]|$)') { throw 'E2E resource ships in production resource set' }
-      - name: Build final noncommercial unsigned NSIS test installer
+      # Owner-choice manual test artifact only: Windows will show "Unknown Publisher".
+      # This path is not a commercial release and must never set GROWTHMAP_COMMERCIAL_RELEASE=1.
+      - name: Build final noncommercial unsigned NSIS test installer (Unknown Publisher, updater disabled)
         run: npm run dist:win
         working-directory: desktop
+        env:
+          GROWTHMAP_COMMERCIAL_RELEASE: ''
+          WIN_CSC_LINK: ''
+          WIN_CSC_KEY_PASSWORD: ''
+      - name: Verify unsigned manual-release mode metadata
+        shell: pwsh
+        run: |
+          $mode = Get-Content desktop/release-mode.json -Raw | ConvertFrom-Json
+          if ($mode.mode -ne 'unsigned-manual' -or $mode.updatesEnabled -ne $false -or $mode.publisherDisplay -ne 'Unknown Publisher') { throw 'Unsigned release metadata must disable updater and identify Unknown Publisher' }
+          if ($env:GROWTHMAP_COMMERCIAL_RELEASE -or $env:WIN_CSC_LINK -or $env:WIN_CSC_KEY_PASSWORD) { throw 'Unsigned workflow leaked commercial/signing environment' }
       - name: Verify final production resources and normal sidecar smoke
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1

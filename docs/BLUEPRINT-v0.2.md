@@ -34,4 +34,5 @@
 
 - 已實作：Project / Node / `child_of` Edge / tree-first GUI / CRUD / content blocks / mainline selection / proposal branches（建立、切換、合併、封存）/ AI expand、deepen、chat / history / Markdown、JSON、spec export
 - 部分實作：非 `child_of` edge 的儲存與 API 存在，但尚無通用視覺編輯與治理流程
-- 未實作：持久化 provider 管理、agent session 工作流、跨關係圖治理與成本路由/fallback
+- 已實作（Core Collaboration v1）：人工 Agent Sessions、provider-neutral `/agent/v1`、有限期 scoped grants、proposal/direct atomic batch、revision conflict、context/readback、REST thin CLI/MCP 與最小可審核 GUI。
+- 未實作：完整跨關係圖視覺治理、一般化 agent batch undo、成本路由/fallback。Agent Port 不執行 provider/model。

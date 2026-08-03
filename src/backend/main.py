@@ -17,6 +17,7 @@ from desktop.mutation_gate import DesktopMutationGateMiddleware
 from desktop.startup_verdict import effective_entitlement
 from desktop.migration_auth import authorized as migration_authorized
 from desktop.secrets import desktop_mode
+from agent_port.routes import router as agent_port_router, human_router as agent_port_human_router
 
 STATIC_DIR = Path(os.getenv("GROWTHMAP_STATIC_DIR", Path(__file__).parent.parent / "frontend" / "out"))
 
@@ -63,83 +64,9 @@ async def lifespan(app: FastAPI):
         raise RuntimeError("Desktop migration requires a verified pre-migration backup marker")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Lightweight SQLite migrations for databases created before these columns existed.
-        for statement in (
-            "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)",
-            "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'",
-            "ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'",
-            "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''",
-        ):
-            try:
-                await conn.execute(__import__("sqlalchemy").text(statement))
-            except Exception:
-                pass  # Column already exists on current databases
-
-        # 新資料必須永遠可被 EdgeOut 序列化；既有 NULL 由讀取端相容，不在啟動時改寫專案資料。
-        # SQLite 的 partial unique index 僅在目前資料無衝突時建立；若舊專案有髒資料，服務仍可啟動，
-        # API 寫入路徑會先維持唯一主線，待該專案經人工裁決後即可建立硬約束。
-        try:
-            await conn.execute(__import__("sqlalchemy").text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_edges_one_mainline_per_parent "
-                "ON edges(from_node_id) "
-                "WHERE relation_type = 'child_of' AND is_mainline = 1"
-            ))
-        except Exception:
-            pass
-
-        # 舊庫即使已有多主線而暫時無法建立 unique index，也要立刻阻止新的衝突寫入。
-        for statement in (
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_edges_one_mainline_insert
-            BEFORE INSERT ON edges
-            WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1
-            BEGIN
-              SELECT RAISE(ABORT, 'duplicate mainline for parent')
-              WHERE EXISTS (
-                SELECT 1 FROM edges
-                WHERE from_node_id = NEW.from_node_id
-                  AND relation_type = 'child_of'
-                  AND is_mainline = 1
-              );
-            END
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_edges_one_mainline_update
-            BEFORE UPDATE OF from_node_id, relation_type, is_mainline ON edges
-            WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1
-            BEGIN
-              SELECT RAISE(ABORT, 'duplicate mainline for parent')
-              WHERE EXISTS (
-                SELECT 1 FROM edges
-                WHERE from_node_id = NEW.from_node_id
-                  AND relation_type = 'child_of'
-                  AND is_mainline = 1
-                  AND id != OLD.id
-              );
-            END
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_edges_normalize_null_insert
-            AFTER INSERT ON edges
-            WHEN NEW.weight IS NULL OR NEW.note IS NULL
-            BEGIN
-              UPDATE edges
-              SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '')
-              WHERE id = NEW.id;
-            END
-            """,
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_edges_normalize_null_update
-            AFTER UPDATE OF weight, note ON edges
-            WHEN NEW.weight IS NULL OR NEW.note IS NULL
-            BEGIN
-              UPDATE edges
-              SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '')
-              WHERE id = NEW.id;
-            END
-            """,
-        ):
-            await conn.execute(__import__("sqlalchemy").text(statement))
+        if engine.url.get_backend_name() == "sqlite":
+            from db.migrations import migrate_sqlite
+            await migrate_sqlite(conn)
     yield
 
 
@@ -170,6 +97,8 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
+app.include_router(agent_port_human_router, prefix="/api")
+app.include_router(agent_port_router, prefix="/agent/v1")
 if desktop_mode():
     app.include_router(desktop_router, prefix="/api")
 else:

@@ -14,6 +14,21 @@ from main import app
 
 
 class GrowthMapApiSmokeTest(unittest.TestCase):
+    def project_revision(self, client, project_id):
+        return client.get(f"/api/projects/{project_id}").json()["revision"]
+
+    def node_revision(self, client, node_id):
+        return client.get(f"/api/nodes/{node_id}").json()["revision"]
+
+    def create_node(self, client, project, **data):
+        payload = {"expected_project_revision": self.project_revision(client, project["id"]), **data}
+        if payload.get("parent_id"):
+            payload["expected_parent_revision"] = self.node_revision(client, payload["parent_id"])
+        return client.post(f"/api/projects/{project['id']}/nodes", json=payload)
+
+    def patch_node(self, client, project_id, node_id, data):
+        return client.patch(f"/api/nodes/{node_id}", json={"expected_project_revision": self.project_revision(client, project_id), "expected_revision": self.node_revision(client, node_id), **data})
+
     @classmethod
     def tearDownClass(cls):
         """Release test runs must close the isolated engine cleanly."""
@@ -80,7 +95,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 "confidence": 0.86,
                 "file_paths": ["docs/spec.md", "assets/map.json"],
             }
-            patched = client.patch(f"/api/nodes/{node_id}", json=payload)
+            patched = self.patch_node(client, project["id"], node_id, payload)
             self.assertEqual(patched.status_code, 200)
             self.assertEqual({key: patched.json()[key] for key in payload}, payload)
 
@@ -103,7 +118,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 "priority": 7, "confidence": 0.91, "file_paths": ["docs/a.md", "src/b.py"],
                 "tags": ["release", "canonical"],
             }
-            self.assertEqual(client.patch(f"/api/nodes/{node_id}", json=payload).status_code, 200)
+            self.assertEqual(self.patch_node(client, project["id"], node_id, payload).status_code, 200)
             exported = client.get(f"/api/projects/{project['id']}/export-json")
             self.assertEqual(exported.status_code, 200, exported.text)
             imported = client.post("/api/projects/import-json", json=exported.json())
@@ -193,7 +208,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(artifact["status"], "pending")
             self.assertEqual(len(client.get(f"/api/nodes/{root_id}/children").json()), 0)
 
-            approved = client.post(f"/api/agent-artifacts/{artifact['id']}/approve", json={"review_note": "可採用"})
+            approved = client.post(f"/api/agent-artifacts/{artifact['id']}/approve", json={"review_note": "可採用", "expected_project_revision": project["revision"], "expected_node_revision": 1})
             self.assertEqual(approved.status_code, 200)
             self.assertEqual(approved.json()["status"], "applied")
             self.assertEqual(client.get(f"/api/nodes/{root_id}/children").json()[0]["title"], "Approved child")
@@ -209,35 +224,35 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Graph project"}).json()
             root_id = project["root_node_id"]
-            other = client.post(f"/api/projects/{project['id']}/nodes", json={"title": "Other", "parent_id": root_id}).json()
-            edge = client.post("/api/edges", json={"from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"})
+            other = self.create_node(client, project, **{"title": "Other", "parent_id": root_id}).json()
+            edge = client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"})
             self.assertEqual(edge.status_code, 201)
             edge_id = edge.json()["id"]
             self.assertEqual(len(client.get(f"/api/projects/{project['id']}/edges").json()), 2)
-            self.assertEqual(client.post("/api/edges", json={"from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"}).status_code, 409)
-            self.assertEqual(client.post("/api/edges", json={"from_node_id": root_id, "to_node_id": root_id, "relation_type": "supports"}).status_code, 400)
-            self.assertEqual(client.post("/api/edges", json={"from_node_id": root_id, "to_node_id": other["id"], "relation_type": "unknown"}).status_code, 400)
-            changed = client.patch(f"/api/edges/{edge_id}", json={"weight": 0.65, "note": "人工確認的支持關係"})
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"}).status_code, 409)
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": root_id, "relation_type": "supports"}).status_code, 400)
+            self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "unknown"}).status_code, 400)
+            changed = client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": edge.json()["revision"], "weight": 0.65, "note": "人工確認的支持關係"})
             self.assertEqual(changed.status_code, 200)
             self.assertEqual(changed.json()["weight"], 0.65)
             self.assertEqual(changed.json()["note"], "人工確認的支持關係")
-            self.assertEqual(client.patch(f"/api/edges/{edge_id}", json={"weight": 1.1}).status_code, 400)
-            self.assertEqual(client.delete(f"/api/edges/{edge_id}").status_code, 204)
+            self.assertEqual(client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": changed.json()["revision"], "weight": 1.1}).status_code, 400)
+            self.assertEqual(client.request("DELETE", f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": changed.json()["revision"]}).status_code, 204)
             tree_edge = next(item for item in client.get(f"/api/projects/{project['id']}/edges").json() if item["relation_type"] == "child_of")
-            self.assertEqual(client.delete(f"/api/edges/{tree_edge['id']}").status_code, 400)
+            self.assertEqual(client.request("DELETE", f"/api/edges/{tree_edge['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": tree_edge["revision"]}).status_code, 400)
 
     def test_legacy_null_edge_fields_are_tolerated(self):
         """歷史 NULL 欄位不得再讓 edges/mainline-path 回傳 500。"""
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Legacy graph project"}).json()
             root_id = project["root_node_id"]
-            first = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={"title": "First", "parent_id": root_id},
+            first = self.create_node(
+                client, project,
+                **{"title": "First", "parent_id": root_id},
             ).json()
-            second = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={"title": "Second", "parent_id": root_id},
+            second = self.create_node(
+                client, project,
+                **{"title": "Second", "parent_id": root_id},
             ).json()
 
             # 用測試專用 session 模擬舊 DB 的空白 weight/note；主線唯一性另由 DB 約束測試。
@@ -300,8 +315,8 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Mainline constraint"}).json()
             root_id = project["root_node_id"]
-            client.post(f"/api/projects/{project['id']}/nodes", json={"title": "First", "parent_id": root_id})
-            second = client.post(f"/api/projects/{project['id']}/nodes", json={"title": "Second", "parent_id": root_id}).json()
+            self.create_node(client, project, **{"title": "First", "parent_id": root_id})
+            second = self.create_node(client, project, **{"title": "Second", "parent_id": root_id}).json()
 
             # 繞過 API 的直接 SQL 寫入也必須被 DB trigger／partial unique index 阻擋。
             from db.database import async_session
@@ -331,17 +346,17 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Branch project"}).json()
             root_id = project["root_node_id"]
-            child = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={"title": "Source", "parent_id": root_id},
+            child = self.create_node(
+                client, project,
+                **{"title": "Source", "parent_id": root_id},
             ).json()
-            source_main = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={"title": "Source main", "parent_id": child["id"]},
+            source_main = self.create_node(
+                client, project,
+                **{"title": "Source main", "parent_id": child["id"]},
             ).json()
-            source_side = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={"title": "Source side", "parent_id": child["id"]},
+            source_side = self.create_node(
+                client, project,
+                **{"title": "Source side", "parent_id": child["id"]},
             ).json()
             formal_payload = {
                 "workflow_status": "review", "file_paths": ["docs/branch.md"],
@@ -349,11 +364,11 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 "constraints_text": "branch constraint", "examples_text": "branch example",
                 "questions_text": "branch question", "decision_notes": "branch decision",
             }
-            self.assertEqual(client.patch(f"/api/nodes/{child['id']}", json=formal_payload).status_code, 200)
+            self.assertEqual(self.patch_node(client, project["id"], child["id"], formal_payload).status_code, 200)
 
             created = client.post(
                 f"/api/projects/{project['id']}/branches",
-                json={"name": "Alternative", "source_node_id": child["id"]},
+                json={"expected_project_revision": self.project_revision(client, project["id"]), "name": "Alternative", "source_node_id": child["id"]},
             )
             self.assertEqual(created.status_code, 201)
             branch = created.json()
@@ -370,9 +385,9 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual({row["title"] for row in branch_root["children"]}, {"Source main", "Source side"})
             self.assertNotEqual(source_main["id"], source_side["id"])
 
-            added = client.post(
-                f"/api/projects/{project['id']}/nodes",
-                json={
+            added = self.create_node(
+                client, project,
+                **{
                     "title": "Branch-only child",
                     "parent_id": branch_root["id"],
                     "branch_id": branch["id"],
@@ -390,27 +405,40 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
 
             invalid_target = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": branch_root["id"]},
+                json={"target_node_id": branch_root["id"], "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": branch["revision"], "expected_target_revision": branch_root["revision"]},
             )
             self.assertEqual(invalid_target.status_code, 400)
 
+            root_before_merge = client.get(f"/api/nodes/{root_id}").json()
+            branch_nodes_before = {row["id"]: row["revision"] for row in [refreshed, *refreshed["children"]]}
+            project_before_merge = self.project_revision(client, project["id"])
             merged = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": root_id},
+                json={"target_node_id": root_id, "expected_project_revision": project_before_merge, "expected_revision": branch["revision"], "expected_target_revision": root_before_merge["revision"]},
             )
             self.assertEqual(merged.status_code, 200)
             self.assertTrue(merged.json()["ok"])
-            self.assertEqual(client.get(f"/api/branches/{branch['id']}").json()["status"], "merged")
+            self.assertEqual(self.project_revision(client, project["id"]), project_before_merge + 1)
+            self.assertEqual(client.get(f"/api/nodes/{root_id}").json()["revision"], root_before_merge["revision"] + 1)
+            merged_branch = client.get(f"/api/branches/{branch['id']}").json()
+            self.assertEqual(merged_branch["status"], "merged")
+            self.assertEqual(merged_branch["revision"], branch["revision"] + 1)
+            nodes_after = {row["id"]: row for row in client.get(f"/api/projects/{project['id']}/nodes").json()}
+            for node_id, revision in branch_nodes_before.items():
+                self.assertEqual(nodes_after[node_id]["revision"], revision + 1)
+                self.assertIsNone(client.get(f"/api/nodes/{node_id}").json()["branch_id"])
+            merged_edge = next(row for row in client.get(f"/api/projects/{project['id']}/edges?relation_type=child_of").json() if row["from_node_id"] == root_id and row["to_node_id"] == branch_root["id"])
+            self.assertEqual(merged_edge["revision"], 1)
 
             archived = client.post(
                 f"/api/projects/{project['id']}/branches",
-                json={"name": "Archive me", "source_node_id": child["id"]},
+                json={"expected_project_revision": self.project_revision(client, project["id"]), "name": "Archive me", "source_node_id": child["id"]},
             ).json()
-            archived_response = client.delete(f"/api/branches/{archived['id']}")
+            archived_response = client.request("DELETE", f"/api/branches/{archived['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"]})
             self.assertEqual(archived_response.status_code, 204)
             self.assertEqual(client.get(f"/api/branches/{archived['id']}").json()["status"], "archived")
             self.assertEqual(
-                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id}).status_code,
+                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"] + 1, "expected_target_revision": client.get(f"/api/nodes/{root_id}").json()["revision"]}).status_code,
                 400,
             )
 

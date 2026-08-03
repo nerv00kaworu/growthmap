@@ -8,7 +8,7 @@ SESSION_TOKEN = os.getenv("GROWTHMAP_SESSION_TOKEN", "")
 
 class DesktopSessionMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if not DESKTOP_MODE:
+        if request.url.path.startswith("/agent/v1") or not DESKTOP_MODE:
             return await call_next(request)
         if not SESSION_TOKEN:
             return JSONResponse({"detail": "Desktop session is not initialized"}, status_code=503)

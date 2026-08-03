@@ -26,6 +26,7 @@ The release launcher and backend are localhost-only: non-loopback frontend/backe
 - **Node Types** — idea, concept, task, question, decision, risk, resource, note, module
 - **Mainline tracking** — mark primary child paths for structured work
 - **Parallel branches** — create, switch, merge, and archive proposal branches
+- **Provider-neutral Agent Port v1** — scoped grants, revision-safe proposals/direct batches, context packets, progress and implementation readback over REST/CLI/MCP
 - **DB auto-backup** — local SQLite backup before destructive operations
 - **Dark theme** throughout
 
@@ -110,8 +111,11 @@ growthmap/
 
 ```
 Browser ──► Next.js (3100) ──► FastAPI (8100) ──► SQLite
+Agent CLI/MCP ───────────────► /agent/v1 REST (localhost, scoped bearer grant)
                                       └──► LLM API (OpenAI/compat)
 ```
+
+Agent Port protocol and product invariants are normative in [`docs/PRODUCT-CORE-v1.md`](docs/PRODUCT-CORE-v1.md) and [`docs/AGENT-PORT-v1.md`](docs/AGENT-PORT-v1.md). GrowthMap does not execute external agents or bind the port to a provider/model. The desktop sidecar includes the Agent Port REST implementation and schema support; the optional repository-level `scripts/growthmap_agent.py` and `scripts/growthmap_mcp.py` clients are source-distribution tools and are not promised as entries inside the packaged desktop ASAR.
 
 ## ✅ Quality Gates
 
@@ -149,3 +153,7 @@ Please keep all user-facing text in Traditional Chinese (繁體中文), and main
 ## 📄 License
 
 MIT
+
+### License issuance Phase 1
+
+Payment-independent device activation and desktop unlock are specified in [`docs/LICENSE-ISSUANCE-v1.md`](docs/LICENSE-ISSUANCE-v1.md). This source module is not a deployed issuance service: production HSM/KMS, API authentication/TLS, rollback-resistant storage, recovery controls, and Windows signed-package validation remain release gates.

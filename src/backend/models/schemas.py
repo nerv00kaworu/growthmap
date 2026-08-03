@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Optional, Any
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # === Project ===
@@ -16,6 +16,7 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
+    expected_project_revision: int
     name: Optional[str] = None
     description: Optional[str] = None
     goal: Optional[str] = None
@@ -33,6 +34,7 @@ class ProjectOut(BaseModel):
     settings: dict
     created_at: datetime
     updated_at: datetime
+    revision: int = 1
 
     model_config = {"from_attributes": True}
 
@@ -40,6 +42,8 @@ class ProjectOut(BaseModel):
 # === Node ===
 
 class NodeCreate(BaseModel):
+    expected_project_revision: int
+    expected_parent_revision: Optional[int] = None
     title: str
     summary: str = ""
     node_type: str = "idea"
@@ -48,8 +52,18 @@ class NodeCreate(BaseModel):
     description: str = ""
     tags: list[str] = []
 
+    @model_validator(mode="after")
+    def parent_cas_is_mandatory(self):
+        if self.parent_id is not None and self.expected_parent_revision is None:
+            raise ValueError("expected_parent_revision is required when parent_id is provided")
+        if self.parent_id is None and self.expected_parent_revision is not None:
+            raise ValueError("expected_parent_revision requires parent_id")
+        return self
+
 
 class NodeUpdate(BaseModel):
+    expected_project_revision: int
+    expected_revision: int
     title: Optional[str] = None
     summary: Optional[str] = None
     node_type: Optional[str] = None
@@ -96,6 +110,10 @@ class NodeOut(BaseModel):
     branch_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    revision: int = 1
+    authoritative_project_revision: Optional[int] = None
+    authoritative_parent_id: Optional[str] = None
+    authoritative_parent_revision: Optional[int] = None
 
     @field_validator(
         "summary", "description", "rules_text", "constraints_text", "examples_text",
@@ -132,6 +150,7 @@ class NodeOut(BaseModel):
 class NodeBrief(BaseModel):
     """輕量版，用於樹狀列表"""
     id: str
+    revision: int = 1
     title: str
     node_type: str
     status: str
@@ -144,6 +163,7 @@ class NodeBrief(BaseModel):
 # === Edge ===
 
 class EdgeCreate(BaseModel):
+    expected_project_revision: int
     from_node_id: str
     to_node_id: str
     relation_type: str = "child_of"
@@ -153,6 +173,8 @@ class EdgeCreate(BaseModel):
 
 
 class EdgeUpdate(BaseModel):
+    expected_project_revision: int
+    expected_revision: int
     weight: Optional[float] = None
     note: Optional[str] = None
 
@@ -167,6 +189,7 @@ class EdgeOut(BaseModel):
     note: str = ""
     is_mainline: bool
     created_at: datetime
+    revision: int = 1
 
     @field_validator("weight", mode="before")
     @classmethod
@@ -186,12 +209,17 @@ class EdgeOut(BaseModel):
 # === Content Block ===
 
 class ContentBlockCreate(BaseModel):
+    expected_project_revision: int
+    expected_node_revision: int
     block_type: str = "paragraph"
     content: Any = {}
     order_index: int = 0
 
 
 class ContentBlockUpdate(BaseModel):
+    expected_project_revision: int
+    expected_node_revision: int
+    expected_revision: int
     block_type: Optional[str] = None
     content: Optional[Any] = None
     order_index: Optional[int] = None
@@ -206,6 +234,7 @@ class ContentBlockOut(BaseModel):
     created_by: str
     created_at: datetime
     updated_at: datetime
+    revision: int = 1
 
     model_config = {"from_attributes": True}
 
@@ -214,6 +243,10 @@ class ContentBlockOut(BaseModel):
 
 class NodeMoveRequest(BaseModel):
     new_parent_id: str
+    expected_project_revision: int
+    expected_revision: int
+    expected_new_parent_revision: int
+    expected_old_parent_revision: Optional[int] = None
 
 
 class AncestorNode(BaseModel):
@@ -345,6 +378,7 @@ class ProviderConfigOut(BaseModel):
 
 
 class BranchCreate(BaseModel):
+    expected_project_revision: int
     source_node_id: str
     name: str
     description: str = ""
@@ -358,8 +392,26 @@ class BranchOut(BaseModel):
     source_node_id: Optional[str]
     status: str
     created_at: datetime
+    revision: int = 1
 
     model_config = {"from_attributes": True}
+
+
+class ProjectRevisionRequest(BaseModel):
+    expected_project_revision: int
+
+
+class EntityRevisionRequest(ProjectRevisionRequest):
+    expected_revision: int
+
+
+class NodeEntityRevisionRequest(EntityRevisionRequest):
+    expected_node_revision: int
+
+
+class BranchMergeRequest(EntityRevisionRequest):
+    target_node_id: str
+    expected_target_revision: int
 
 
 # === Agent Session ===
@@ -372,6 +424,8 @@ class AgentArtifactCreate(BaseModel):
 
 class AgentArtifactReview(BaseModel):
     review_note: str = ""
+    expected_project_revision: Optional[int] = None
+    expected_node_revision: Optional[int] = None
 
 
 class AgentArtifactOut(BaseModel):

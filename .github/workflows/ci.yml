@@ -9,6 +9,24 @@ permissions:
   contents: read
 
 jobs:
+  public-config-payments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/payments/requirements.lock
+      # The payments lock is hash-enforced and already includes its test runner.
+      # Do not combine it with unhashed backend requirements: pip enables
+      # require-hashes for the whole invocation when any input is hashed.
+      - run: pip install -r services/payments/requirements.lock
+      - run: pip install -r src/backend/packaging/requirements-test.txt
+      - run: python3 tools/generate-public-config.py --check
+      - run: python3 -m compileall -q services/payments/growthmap_payments tools
+      - run: PYTHONPATH=services/payments:src/backend python3 -m pytest -q services/payments/tests
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -25,6 +43,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
+      - run: npm run test:deterministic-build
+      - run: git diff --exit-code -- desktop/generated/csp-script-hashes.json
 
   backend:
     runs-on: ubuntu-latest
@@ -32,7 +52,10 @@ jobs:
       run:
         working-directory: src/backend
     env:
-      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      # Concurrent AsyncSessions must use independent SQLite connections.
+      # A shared :memory: connection lets one loser's rollback corrupt the
+      # winning branch transaction in the CAS race tests.
+      DATABASE_URL: "sqlite+aiosqlite:///./ci-test.db"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
