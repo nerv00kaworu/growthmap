@@ -41,6 +41,7 @@
       "secret-store.js",
       "lifecycle.js",
       "database-manager.js",
+      "database-workspace.js",
       "request-policy.js",
       "update-policy.js",
       "purchase-portal.js",
