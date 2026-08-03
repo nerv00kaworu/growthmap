@@ -8,6 +8,6 @@ module.exports={
   extraResources:[
     ...base.extraResources.filter(entry=>entry.to!=='commercial-config.json'&&entry.to!=='commercial/license_public_key.pem'),
     {from:'noncommercial-config.json',to:'commercial-config.json'},
-    {from:'noncommercial-license-public-key.pem',to:'commercial/noncommercial-license-public-key.pem'},
+    {from:'noncommercial-license-public-key.pem',to:'commercial/license_public_key.pem'},
   ],
 };
