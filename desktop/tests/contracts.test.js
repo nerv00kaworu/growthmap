@@ -21,6 +21,8 @@ test('entitlement changes invalidate renderer state without weakening the IPC or
  assert.match(page,/entitlement === null \? "Checking entitlement…"/);assert.match(page,/mutations_allowed !== true/);
 });
 
+test('entitlement preflight binds fresh existing-trial paid and extraction startup modes',()=>{assert.match(main,/entitlementStatus\(userData,trialMode\)/);assert.match(main,/trialMode==='existing'\?'trial':trialMode==='fresh'\?'fresh':'extraction'/);assert.match(main,/GROWTHMAP_FRESH_INSTALL:probeMode==='fresh'\?'1':'0'/);assert.match(main,/entitlementStatus\(userData,trial\.mode\)/);});
+
 test('license import and extraction-to-trial transitions revalidate authoritative entitlement',()=>{
  const page=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/app/page.tsx'),'utf8');
  const hook=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/lib/entitlement.ts'),'utf8');
