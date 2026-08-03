@@ -26,11 +26,18 @@ async function close(run){await run.page.close();const deadline=Date.now()+20000
   await stageWait(run,'fresh-trial',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';let entitlement;try{const response=await fetch('/api/desktop/entitlement');entitlement=response.ok?await response.json():{http_status:response.status};}catch(error){return {error:`entitlement request failed: ${error?.name||'Error'}`};}if(status.startsWith('Trial ·')&&entitlement.state==='trial'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;if(status.includes('Read-only')||entitlement.state==='extraction')return {error:`unexpected entitlement: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`};return false;},30000);
   for(const name of ['trial-marker.bin','installation-identity.bin','trial-state.json']){const target=path.join(userData,name);if(!fs.existsSync(target)||fs.statSync(target).size===0)throw Error(`fresh-trial: missing initialized artifact ${name}`);}
   await run.page.getByTestId('desktop-settings-button').click();
-  await run.page.getByTestId('database-management').waitFor();
+  await run.page.getByText('LLM Provider 設定').waitFor();
+  if(await run.page.getByTestId('database-workspace').count()||await run.page.getByTestId('database-management').count())throw Error('database controls leaked into LLM Provider settings');
+  await run.page.getByRole('button',{name:'×'}).click();
+  await run.page.getByTestId('database-workspace-button').click();
+  await run.page.getByTestId('database-workspace').waitFor();
+  const initialPath=await run.page.getByTestId('database-path').textContent();
+  if(!initialPath||!initialPath.toLowerCase().endsWith('growthmap.db'))throw Error(`database workspace did not expose canonical path: ${initialPath}`);
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-import').click();
   await stageWait(run,'import',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture'))return true;const e=[...document.querySelectorAll('div')].map(x=>x.textContent||'').find(x=>x.includes('資料庫操作失敗')||x.includes('原有資料未變更'));return e?{error:e.slice(0,300)}:false;},90000);
-  await run.page.getByTestId('desktop-settings-button').click();
+  await run.page.getByTestId('database-workspace-button').click();
+  await run.page.getByTestId('database-workspace').waitFor();
   await run.page.getByTestId('database-backup').click();
   await stageWait(run,'backup',()=>{const t=document.body.innerText;if(t.includes('備份完成'))return true;return t.includes('資料庫操作失敗')?{error:'database operation failed'}:false;},90000);
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
@@ -39,7 +46,8 @@ async function close(run){await run.page.close();const deadline=Date.now()+20000
   run=await launch(userData,fixture);
   await stageWait(run,'restart-trial',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';const response=await fetch('/api/desktop/entitlement');if(!response.ok)return {error:`entitlement HTTP ${response.status}`};const entitlement=await response.json();if(status.startsWith('Trial ·')&&entitlement.state==='trial'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;return status.includes('Read-only')||entitlement.state==='extraction'?{error:`trial identity not preserved: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`}:false;},30000);
   await stageWait(run,'mutated-restart',()=>document.body.innerText.includes('Mutated Fixture'),90000);
-  await run.page.getByTestId('desktop-settings-button').click();
+  await run.page.getByTestId('database-workspace-button').click();
+  await run.page.getByTestId('database-workspace').waitFor();
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-restore').first().click();
   await stageWait(run,'restore',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture')&&!t.includes('Mutated Fixture'))return true;return t.includes('資料庫操作失敗')?{error:'database operation failed'}:false;},90000);
