@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path');
 function samePath(left,right,isWindows){const normalize=value=>{let raw=String(value).replaceAll('\\','/');if(isWindows){if(raw.toLowerCase().startsWith('//?/unc/'))raw=`//${raw.slice(8)}`;else if(raw.startsWith('//?/'))raw=raw.slice(4);return path.win32.resolve(raw).replaceAll('\\','/').toLowerCase();}return path.resolve(raw).replaceAll('\\','/');};return normalize(left)===normalize(right);}
 function windowsStable(opened,linked){const comparable=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&a!==0&&b!==0;return opened.size===linked.size&&opened.mtimeMs===linked.mtimeMs&&opened.birthtimeMs===linked.birthtimeMs&&(!comparable(opened.dev,linked.dev)||opened.dev===linked.dev)&&(!comparable(opened.ino,linked.ino)||opened.ino===linked.ino);}
 function readStableRegularFile(file,{maxBytes=65536,fsImpl=fs}={}){
- const hasNoFollow=Number.isInteger(fs.constants.O_NOFOLLOW)&&fs.constants.O_NOFOLLOW!==0,isWindows=process.platform==='win32';
+ const isWindows=process.platform==='win32',hasNoFollow=!isWindows&&Number.isInteger(fs.constants.O_NOFOLLOW)&&fs.constants.O_NOFOLLOW!==0;
  // Windows has no O_NOFOLLOW and may not expose matching nonzero inode/device
  // values for path and handle stats. Resolve before/after open and compare the
  // stable metadata it does expose. The signed license or safeStorage-encrypted
