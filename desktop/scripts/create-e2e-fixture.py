@@ -29,4 +29,8 @@ CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.we
 CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight,note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
 PRAGMA user_version=1;
 """)
-c.execute("INSERT INTO projects(id,name,status,revision) VALUES('fixture','Desktop Fixture','active',1)");c.commit();c.close()
+created_at="2026-08-03T00:00:00+00:00"
+c.execute("INSERT INTO projects(id,name,status,revision,created_at,updated_at) VALUES(?,?,?,?,?,?)",('fixture','Desktop Fixture','active',1,created_at,created_at));c.commit()
+row=c.execute("SELECT id,name,status,revision,created_at,updated_at FROM projects WHERE id='fixture'").fetchone()
+if row != ('fixture','Desktop Fixture','active',1,created_at,created_at): raise SystemExit("E2E fixture project contract mismatch")
+c.close()
