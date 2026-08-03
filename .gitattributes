@@ -1,0 +1,8 @@
+# Public release configuration is byte-pinned. Keep canonical input, review pin,
+# and generated artifacts identical on Windows and Unix checkouts.
+/config/commercial-public-config.json text eol=lf
+/config/commercial-public-config.sha256 text eol=lf
+/desktop/commercial-config.json text eol=lf
+/desktop/generated/public-config.js text eol=lf
+/services/payments/public-config.json text eol=lf
+/services/payments/growthmap_payments/_public_config_digest.py text eol=lf

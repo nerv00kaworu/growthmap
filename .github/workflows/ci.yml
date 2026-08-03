@@ -22,6 +22,7 @@ jobs:
       # Do not combine it with unhashed backend requirements: pip enables
       # require-hashes for the whole invocation when any input is hashed.
       - run: pip install -r services/payments/requirements.lock
+      - run: pip install -r src/backend/packaging/requirements-test.txt
       - run: python3 tools/generate-public-config.py --check
       - run: python3 -m compileall -q services/payments/growthmap_payments tools
       - run: PYTHONPATH=services/payments:src/backend python3 -m pytest -q services/payments/tests
