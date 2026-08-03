@@ -28,6 +28,29 @@ def test_accepts_canonical_edge_integrity_objects_only(tmp_path):
  c.execute("CREATE TRIGGER trg_edges_not_canonical AFTER INSERT ON edges BEGIN SELECT 1; END");c.close()
  with pytest.raises(ValueError,match='unapproved'):dm.validate(p2)
 
+def test_accepts_exact_canonical_gameplay_extension_and_rejects_lookalikes(tmp_path):
+ p=tmp_path/'abyss.db';fixture(p);c=sqlite3.connect(p)
+ columns=dm.EXTENSION_TABLE_COLUMNS['schema_migrations']
+ c.execute('''CREATE TABLE schema_migrations (
+              migration_id TEXT PRIMARY KEY,
+              checksum VARCHAR(64) NOT NULL,
+              applied_at DATETIME NOT NULL
+            )''')
+ c.close();assert dm.validate(p)['valid'] is True
+ p2=tmp_path/'wrong-columns.db';fixture(p2);c=sqlite3.connect(p2);c.execute('CREATE TABLE schema_migrations(migration_id TEXT PRIMARY KEY,checksum TEXT,applied_at TEXT,secret TEXT)');c.close()
+ with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p2)
+ p3=tmp_path/'wrong-owner.db';fixture(p3);c=sqlite3.connect(p3);c.execute('CREATE INDEX idx_game_events_pack ON projects(name)');c.close()
+ with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p3)
+ p4=tmp_path/'forged-trigger.db';fixture(p4);c=sqlite3.connect(p4)
+ c.execute('CREATE TABLE player_event_resolutions(id TEXT PRIMARY KEY,run_id TEXT,content_pack_id TEXT,event_id TEXT,choice_id TEXT,sequence_no INTEGER,idempotency_key TEXT,content_version TEXT,event_key TEXT,choice_key TEXT,known_state_json TEXT,input_refs_json TEXT,outcome_json TEXT,effects_json TEXT,outputs_json TEXT,resolved_at TEXT,integrity_hash TEXT)')
+ c.execute('CREATE TRIGGER trg_resolution_immutable_delete BEFORE DELETE ON player_event_resolutions BEGIN SELECT 1; END');c.close()
+ with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p4)
+
+def test_installed_canonical_abyss_database_contract_when_supplied():
+ fixture_path=os.getenv('GROWTHMAP_CANONICAL_ABYSS_DB')
+ if not fixture_path: pytest.skip('canonical Abyss database fixture not supplied')
+ meta=dm.validate(Path(fixture_path));assert meta['valid'] is True;assert meta['counts']['projects']>=1
+
 def test_validated_snapshot_rejects_hardlink_and_uses_combined_validation(tmp_path):
  p=tmp_path/'a.db';fixture(p);hard=tmp_path/'hard.db';os.link(p,hard)
  with pytest.raises(ValueError,match='single-link'):dm.validated_snapshot(hard,tmp_path/'out.db')
