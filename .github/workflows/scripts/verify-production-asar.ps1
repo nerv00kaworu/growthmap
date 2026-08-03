@@ -379,9 +379,10 @@ if ($package.main -cne 'main.js') { throw "Production package main must be main.
 # runtime loads it from process.resourcesPath. Verify that exact resource,
 # rather than falsely requiring/extracting an ASAR copy.
 $commercialPath = Join-Path $resources 'commercial-config.json'
-$sourceCommercialPath = (Resolve-Path 'desktop/commercial-config.json').Path
+$sourceConfig = if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1') { 'desktop/commercial-config.json' } else { 'desktop/noncommercial-config.json' }
+$sourceCommercialPath = (Resolve-Path $sourceConfig).Path
 if ((Get-FileHash $commercialPath -Algorithm SHA256).Hash -cne (Get-FileHash $sourceCommercialPath -Algorithm SHA256).Hash) {
-  throw 'Packaged commercial-config.json hash differs from the production source resource'
+  throw "Packaged commercial-config.json hash differs from the expected source resource: $sourceConfig"
 }
 $commercialText = Get-Content $commercialPath -Raw
 $commercial = $commercialText | ConvertFrom-Json
@@ -389,6 +390,12 @@ $expectedCommercial = @('schemaVersion','productMajor','licenseIssuer','supportE
 $actualCommercial = @($commercial.psobject.Properties.Name) | Sort-Object
 if (Compare-Object $expectedCommercial $actualCommercial) { throw 'Commercial config schema mismatch' }
 if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1' -and ($commercialText -match 'REPLACE|EXAMPLE|TBD|UNAPPROVED')) { throw 'Commercial resource contains placeholder trust configuration' }
+if ($env:GROWTHMAP_COMMERCIAL_RELEASE -ne '1') {
+  if ($commercial.publisherStatus -cne 'NONCOMMERCIAL_UNSIGNED') { throw 'Unsigned resource must be explicitly noncommercial' }
+  foreach ($field in @('activationApiOrigin','purchasePortalOrigin','purchasePortalUrl','updateUrl','updateOrigin')) {
+    if ($commercial.$field -cne '') { throw "Unsigned resource unexpectedly enables online authority: $field" }
+  }
+}
 
 Write-Host "Production ASAR and resources verified from final installer dist: $asar"
 Remove-Item $tmp -Recurse -Force

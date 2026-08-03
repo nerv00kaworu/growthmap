@@ -10,15 +10,23 @@ $required = @(
   (Join-Path $resources 'legal/EULA.md'),
   (Join-Path $resources 'legal/PRIVACY.md'),
   (Join-Path $resources 'legal/THIRD_PARTY_NOTICES.md'),
-  (Join-Path $resources 'commercial-config.json'),
-  (Join-Path $resources 'commercial/license_public_key.pem')
+  (Join-Path $resources 'commercial-config.json')
 )
 foreach ($item in $required) {
   if (-not (Test-Path $item -PathType Leaf)) { throw "Missing packaged resource: $item" }
 }
 $config = Get-Content (Join-Path $resources 'commercial-config.json') -Raw | ConvertFrom-Json
-$keyHash = (Get-FileHash (Join-Path $resources 'commercial/license_public_key.pem') -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1' -and ($config.licensePublicKeySha256 -ne $keyHash -or $config.publisherStatus -ne 'APPROVED')) { throw 'Packaged commercial trust config/key mismatch' }
+$keyPath = Join-Path $resources $config.licensePublicKeyResource
+if (-not (Test-Path $keyPath -PathType Leaf)) { throw "Configured license public key missing: $keyPath" }
+$keyHash = (Get-FileHash $keyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($config.licensePublicKeySha256 -ne $keyHash) { throw 'Packaged license public key hash mismatch' }
+if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1' -and $config.publisherStatus -ne 'APPROVED') { throw 'Packaged commercial trust config mismatch' }
+if ($env:GROWTHMAP_COMMERCIAL_RELEASE -ne '1') {
+  if ($config.publisherStatus -ne 'NONCOMMERCIAL_UNSIGNED') { throw 'Unsigned package is not explicitly noncommercial' }
+  foreach ($field in @('activationApiOrigin','purchasePortalOrigin','purchasePortalUrl','updateUrl','updateOrigin')) {
+    if ($config.$field -ne '') { throw "Unsigned package unexpectedly enables online authority: $field" }
+  }
+}
 
 $port = Get-Random -Minimum 20000 -Maximum 50000
 $token = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))

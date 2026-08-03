@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 4,
+  "productMajor": 1,
+  "licenseIssuer": "Growthmap",
+  "supportEmail": "nerv00kaworu@gmail.com",
+  "supportUrl": "https://x.com/nerv00kaworu",
+  "licensePublicKeyResource": "commercial/noncommercial-license-public-key.pem",
+  "licensePublicKeySha256": "47a6ec6931a64f95b4c150dc16a264456e4d15564755e2643c5684fef08eff9f",
+  "activationApiOrigin": "",
+  "purchasePortalOrigin": "",
+  "purchasePortalUrl": "",
+  "updateUrl": "",
+  "updateOrigin": "",
+  "publisher": "月影塵（nerv00kaworu）",
+  "publisherStatus": "NONCOMMERCIAL_UNSIGNED"
+}
