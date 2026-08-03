@@ -444,11 +444,15 @@ def test_public_config_loader_fail_closed_tmp_fixtures(tmp_path):
  assert attempt()['baseNetwork']=='eip155:8453'
  for raw in (b'{"baseNetwork":"x","baseNetwork":"eip155:8453","basePayee":"0x81d30e175a22c1c2f78b3db6fc0600a6e1cb3591"}',b'{"baseNetwork":"eip155:8453","BASENETWORK":"eip155:8453","basePayee":"0x81d30e175a22c1c2f78b3db6fc0600a6e1cb3591"}',b'\xff'):
   with pytest.raises(RuntimeError):attempt(raw)
- with pytest.raises(RuntimeError):attempt(good,0o622)
+ # Unix mode bits are authoritative only on POSIX. Windows package ACLs are
+ # validated by the dedicated packaging verifier rather than Python chmod.
+ if os.name=='posix':
+  with pytest.raises(RuntimeError):attempt(good,0o622)
  target=tmp_path/'target';target.write_bytes(good);link=tmp_path/'link';link.symlink_to(target)
  with pytest.raises(RuntimeError):load_public_config(link,expected_digest=hashlib.sha256(good).hexdigest())
- fifo=tmp_path/'fifo';os.mkfifo(fifo)
- with pytest.raises(RuntimeError):load_public_config(fifo,expected_digest=hashlib.sha256(good).hexdigest())
+ if os.name=='posix':
+  fifo=tmp_path/'fifo';os.mkfifo(fifo)
+  with pytest.raises(RuntimeError):load_public_config(fifo,expected_digest=hashlib.sha256(good).hexdigest())
  huge=b'{}'+b' '*5000
  with pytest.raises(RuntimeError):attempt(huge)
 
