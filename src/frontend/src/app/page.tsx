@@ -6,6 +6,7 @@ import { MindMap } from "@/components/MindMap";
 import { NodePanel } from "@/components/NodePanel";
 import { Toast } from "@/components/Toast";
 import { Settings } from "@/components/Settings";
+import { DatabaseWorkspace } from "@/components/DatabaseWorkspace";
 import { AgentSessions } from "@/components/AgentSessions";
 import { AgentPortPanel } from "@/components/AgentPortPanel";
 import { api } from "@/lib/api";
@@ -44,6 +45,7 @@ export default function HomePage() {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [showDatabaseWorkspace, setShowDatabaseWorkspace] = useState(false);
   const [showAgentSessions, setShowAgentSessions] = useState(false);
   const [showAgentPort, setShowAgentPort] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -388,7 +390,8 @@ export default function HomePage() {
           )}
         </div>
 
-        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title="設定">⚙️</button>
+        {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="database-workspace-button" type="button" onClick={() => setShowDatabaseWorkspace(true)} className="rounded-md border border-blue-700/50 bg-blue-950/30 px-2.5 py-1.5 text-xs text-blue-200 hover:text-blue-100 shrink-0" title="資料庫工作區">🗄️ DB</button>}
+        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title="LLM Provider 設定">⚙️ LLM</button>
         <button
           type="button"
           onClick={() => setShowShortcuts(true)}
@@ -540,6 +543,7 @@ export default function HomePage() {
 
       {/* Settings Modal */}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showDatabaseWorkspace && <DatabaseWorkspace onClose={() => setShowDatabaseWorkspace(false)} />}
       {showAgentSessions && currentProject && rootNode && <AgentSessions projectId={currentProject.id} rootNode={rootNode} branches={branches} onClose={() => setShowAgentSessions(false)} />}
       {showAgentPort && currentProject && rootNode && <AgentPortPanel projectId={currentProject.id} rootNode={rootNode} onClose={() => setShowAgentPort(false)} />}
 

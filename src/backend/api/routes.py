@@ -621,6 +621,30 @@ async def get_children(node_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/nodes/{node_id}/subtree")
 async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
     """遞迴取得子樹（bulk-loaded to avoid per-node query fan-out）"""
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        text=__import__("sqlalchemy").text
+        node_rows=(await db.execute(text("SELECT id,project_id,branch_id,title,summary,node_type,status,maturity,priority,confidence,description,rules_text,constraints_text,examples_text,questions_text,decision_notes,tags,created_by,last_edited_by,position_x,position_y,workflow_status,file_paths,created_at,updated_at FROM nodes WHERE project_id=(SELECT project_id FROM nodes WHERE id=:node_id)"),{"node_id":node_id})).mappings().all()
+        nodes={str(row["id"]):dict(row) for row in node_rows}
+        if node_id not in nodes: raise HTTPException(404,"Node not found")
+        edge_rows=(await db.execute(text("SELECT id,from_node_id,to_node_id,is_mainline FROM edges WHERE project_id=:project_id AND relation_type='child_of' ORDER BY created_at,id"),{"project_id":nodes[node_id]["project_id"]})).mappings().all()
+        child_map:dict[str,list[str]]={};edge_meta={}
+        for row in edge_rows:
+            child_map.setdefault(str(row["from_node_id"]),[]).append(str(row["to_node_id"]));edge_meta[str(row["to_node_id"])]={"edge_id":str(row["id"]),"edge_revision":1,"is_mainline":bool(row["is_mainline"])}
+        block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"),{"project_id":nodes[node_id]["project_id"]})).mappings().all()
+        blocks={}
+        for row in block_rows:
+            item=dict(row);item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {});item["revision"]=1;blocks.setdefault(str(row["node_id"]),[]).append(item)
+        def tree(nid:str,depth:int=0,ancestors:list|None=None):
+            row=nodes[nid];ancestor_path=list(ancestors or []);children=[]
+            if depth<10:
+                next_path=ancestor_path+[{"id":nid,"title":row["title"],"node_type":row["node_type"]}]
+                children=[tree(child,depth+1,next_path) for child in child_map.get(nid,[]) if child in nodes]
+            def value(name,default=""):
+                return row[name] if row[name] is not None else default
+            def sequence(name):
+                raw=row[name];return json.loads(raw) if isinstance(raw,str) else (raw or [])
+            return {"id":nid,"project_id":str(row["project_id"]),"branch_id":str(row["branch_id"]) if row["branch_id"] else None,"title":row["title"],"summary":value("summary"),"node_type":row["node_type"],"status":row["status"],"maturity":row["maturity"],"priority":value("priority",0),"confidence":value("confidence",0.5),"description":value("description"),"rules_text":value("rules_text"),"constraints_text":value("constraints_text"),"examples_text":value("examples_text"),"questions_text":value("questions_text"),"decision_notes":value("decision_notes"),"workflow_status":value("workflow_status","draft"),"tags":sequence("tags"),"file_paths":sequence("file_paths"),"created_by":value("created_by"),"last_edited_by":value("last_edited_by"),"position_x":value("position_x",0),"position_y":value("position_y",0),"meta":edge_meta.get(nid,{}),"content_blocks":blocks.get(nid,[]),"ancestor_path":ancestor_path,"created_at":str(value("created_at")),"updated_at":str(value("updated_at")),"revision":1,"children":children}
+        return tree(node_id)
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
@@ -747,6 +771,10 @@ async def demote_mainline_siblings(db: AsyncSession, parent_id: str, *, except_e
 
 @router.get("/projects/{project_id}/edges", response_model=list[EdgeOut])
 async def list_project_edges(project_id: str, relation_type: str | None = None, db: AsyncSession = Depends(get_db)):
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        query="SELECT id,project_id,from_node_id,to_node_id,relation_type,weight,note,is_mainline,created_at FROM edges WHERE project_id=:project_id";params={"project_id":project_id}
+        if relation_type: query+=" AND relation_type=:relation_type";params["relation_type"]=relation_type
+        query+=" ORDER BY created_at";rows=(await db.execute(__import__("sqlalchemy").text(query),params)).mappings().all();return [{**dict(row),"revision":1} for row in rows]
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -1075,6 +1103,8 @@ async def get_branch_roots(project_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/nodes/{node_id}/blocks", response_model=list[ContentBlockOut])
 async def list_blocks(node_id: str, db: AsyncSession = Depends(get_db)):
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        rows=(await db.execute(__import__("sqlalchemy").text("SELECT id,node_id,block_type,content,order_index,created_by,created_at,updated_at FROM content_blocks WHERE node_id=:node_id ORDER BY order_index"),{"node_id":node_id})).mappings().all();return [{**dict(row),"content":json.loads(row["content"]) if isinstance(row["content"],str) else (row["content"] or {}),"revision":1} for row in rows]
     result = await db.execute(
         select(ContentBlock).where(ContentBlock.node_id == node_id).order_by(ContentBlock.order_index)
     )
@@ -1766,6 +1796,10 @@ async def create_branch(project_id: str, data: BranchCreate, db: AsyncSession = 
 
 @router.get("/projects/{project_id}/branches", response_model=list[BranchOut])
 async def list_branches(project_id: str, include_inactive: bool = False, db: AsyncSession = Depends(get_db)):
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        query="SELECT id,project_id,name,description,source_node_id,status,created_at FROM branches WHERE project_id=:project_id";params={"project_id":project_id}
+        if not include_inactive: query+=" AND status='active'"
+        query+=" ORDER BY created_at DESC";rows=(await db.execute(__import__("sqlalchemy").text(query),params)).mappings().all();return [{**dict(row),"revision":1} for row in rows]
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")

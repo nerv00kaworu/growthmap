@@ -114,16 +114,30 @@ jobs:
         run: |
           $exe = Resolve-Path desktop/dist/win-unpacked/GrowthMap.exe
           $profile = Join-Path $env:RUNNER_TEMP 'growthmap-final-main-smoke'
+          New-Item $profile -ItemType Directory -Force | Out-Null
+          $legacyDb = Join-Path $profile 'growthmap.db'
+          @'
+import sqlite3,sys
+c=sqlite3.connect(sys.argv[1]);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at DATETIME,updated_at DATETIME);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT,branch_id TEXT,title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,workflow_status TEXT,file_paths JSON,created_at DATETIME,updated_at DATETIME);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT,weight FLOAT,note TEXT,is_mainline BOOLEAN,created_at DATETIME);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,created_by TEXT,created_at DATETIME,updated_at DATETIME);CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT,name TEXT,description TEXT,source_node_id TEXT,status TEXT,created_at DATETIME);""")
+for i in range(6):
+ p=f'p{i}';r=f'r{i}';c.execute("INSERT INTO projects VALUES(?,?,?,?,?,?,?,?,?)",(p,f'Legacy Project {i}','', '',r,'active','{}','2020-01-01','2020-01-01'));c.execute("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(r,p,None,f'Root {i}','', 'concept','active','seed',0,.5,'','','','','','','[]','human','human',0,0,'draft','[]','2020-01-01','2020-01-01'))
+c.commit()
+'@ | python - $legacyDb
+          $beforeHash = (Get-FileHash $legacyDb -Algorithm SHA256).Hash
+          $beforeTime = (Get-Item $legacyDb).LastWriteTimeUtc
+          $beforeSize = (Get-Item $legacyDb).Length
           $out = Join-Path $env:RUNNER_TEMP 'growthmap-final-main.stdout.log'
           $err = Join-Path $env:RUNNER_TEMP 'growthmap-final-main.stderr.log'
-          New-Item $profile -ItemType Directory -Force | Out-Null
           $process = Start-Process $exe -ArgumentList "--user-data-dir=$profile" -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
           try {
             $deadline = [DateTime]::UtcNow.AddSeconds(90)
             $ready = $false
             while ([DateTime]::UtcNow -lt $deadline -and -not $process.HasExited) {
               $sidecar = Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'growthmap-sidecar.exe' -and $_.ParentProcessId -eq $process.Id }
-              if ($sidecar) { $ready = $true; break }
+              if ($sidecar) {
+                $renderer = Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $process.Id -and $_.CommandLine -match '--type=renderer' }
+                if ($renderer) { $ready = $true; break }
+              }
               Start-Sleep -Milliseconds 500
             }
             if (-not $ready) {
@@ -131,6 +145,10 @@ jobs:
               $stderr = if (Test-Path $err) { Get-Content $err -Raw } else { '' }
               throw "Final unsigned package real main failed startup. exited=$($process.HasExited) stdout=$stdout stderr=$stderr"
             }
+            Start-Sleep -Seconds 5
+            if ((Get-FileHash $legacyDb -Algorithm SHA256).Hash -ne $beforeHash -or (Get-Item $legacyDb).Length -ne $beforeSize -or (Get-Item $legacyDb).LastWriteTimeUtc -ne $beforeTime) { throw 'Read-only legacy DB changed during final package UI smoke' }
+            $stderr = if (Test-Path $err) { Get-Content $err -Raw } else { '' }
+            if ($stderr -match 'Internal Server Error|no such column|OperationalError') { throw "Final package could not render legacy DB data: $stderr" }
           }
           finally {
             taskkill /PID $process.Id /T /F 2>$null | Out-Null

@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DEFAULT_MODELS, loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
 import type { ProviderConfig } from "@/lib/types";
-import type { DesktopBackup, DesktopDatabaseStatus } from "@/desktop";
 
 interface SettingsProps {
   onClose: () => void;
@@ -31,29 +30,6 @@ export function Settings({ onClose }: SettingsProps) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [database, setDatabase] = useState<DesktopDatabaseStatus | null>(null);
-  const [backups, setBackups] = useState<DesktopBackup[]>([]);
-  const [databaseBusy, setDatabaseBusy] = useState(false);
-
-  const refreshDatabase = async () => {
-    if (!window.growthmapDesktop) return;
-    const [status, rows] = await Promise.all([window.growthmapDesktop.database.status(), window.growthmapDesktop.database.listBackups()]);
-    setDatabase(status); setBackups(rows);
-  };
-
-  const databaseAction = async (action: "backup" | "import" | "restore", backup?: DesktopBackup) => {
-    const desktop = window.growthmapDesktop;
-    if (!desktop) return;
-    if (action !== "backup" && !confirm(action === "import" ? "匯入會先自動備份，然後以選取的資料庫取代目前本機資料並重啟。確定繼續？" : `還原此備份會先自動備份目前資料並重啟（${backup?.projects ?? 0} 個專案）。確定繼續？`)) return;
-    setDatabaseBusy(true); setMessage("");
-    try {
-      const result = action === "backup" ? await desktop.database.backup() : action === "import" ? await desktop.database.import() : await desktop.database.restore(backup!.id);
-      if (result) setMessage(action === "backup" ? "✅ 備份完成。" : "✅ 資料庫已安全替換並重新載入。");
-      await refreshDatabase();
-    } catch { setMessage("資料庫操作失敗；原有資料未變更。"); }
-    finally { setDatabaseBusy(false); }
-  };
-
   const loadProfiles = async () => {
     const rows = await api.listProviders();
     setProfiles(rows);
@@ -65,7 +41,6 @@ export function Settings({ onClose }: SettingsProps) {
 
   useEffect(() => {
     loadProfiles().catch((error: unknown) => setMessage(`讀取設定失敗：${(error as Error).message}`));
-    refreshDatabase().catch(() => setMessage("無法讀取資料庫狀態。"));
   }, []);
 
   const selectProfile = (id: string) => {
@@ -137,14 +112,6 @@ export function Settings({ onClose }: SettingsProps) {
           </div>
           <button type="button" onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
         </div>
-
-        {window.growthmapDesktop && <section data-testid="database-management" className="space-y-3 rounded-lg border border-blue-800/40 bg-blue-950/20 p-4">
-          <div><h3 className="text-sm font-semibold text-blue-100">資料管理</h3><p className="mt-1 text-xs text-blue-200/60">資料庫操作期間服務會暫停；匯入與還原只會取代，不會合併。</p></div>
-          {database && <div className="grid grid-cols-2 gap-2 text-xs text-gray-300"><span>目前：{database.basename}</span><span>{database.projects} 個專案</span><span>{(database.size/1024).toFixed(1)} KB</span><span>最近備份：{database.lastBackup ? new Date(database.lastBackup).toLocaleString() : "尚無"}</span></div>}
-          <div className="flex flex-wrap gap-2"><button data-testid="database-backup" disabled={databaseBusy} onClick={() => databaseAction("backup")} className="rounded bg-blue-700 px-3 py-2 text-xs text-white disabled:opacity-50">立即備份</button><button data-testid="database-import" disabled={databaseBusy} onClick={() => databaseAction("import")} className="rounded border border-amber-700 px-3 py-2 text-xs text-amber-200 disabled:opacity-50">匯入既有 DB</button><button disabled={databaseBusy} onClick={() => window.growthmapDesktop?.database.revealFolder()} className="rounded border border-gray-600 px-3 py-2 text-xs text-gray-300">開啟備份資料夾</button></div>
-          <div className="max-h-36 space-y-2 overflow-y-auto">{backups.length === 0 ? <p className="text-xs text-gray-500">尚無 app 管理的備份。</p> : backups.map((item) => <div key={item.id} className="flex items-center justify-between rounded border border-gray-800 bg-gray-950/40 p-2 text-xs"><div><div>{new Date(item.createdAt).toLocaleString()} · {item.projects} 個專案 · {(item.size/1024).toFixed(1)} KB</div><div className="font-mono text-[10px] text-gray-600">SHA-256 {item.sha256.slice(0,16)}…</div></div><button data-testid="database-restore" disabled={databaseBusy} onClick={() => databaseAction("restore", item)} className="rounded border border-red-800 px-2 py-1 text-red-300 disabled:opacity-50">還原</button></div>)}</div>
-          {databaseBusy && <div className="text-xs text-blue-200">處理中，請勿關閉應用程式…</div>}
-        </section>}
 
         <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">
           API key 不會出現在這個畫面、localStorage 或 SQLite。桌面版使用 Windows DPAPI／macOS Keychain；安全儲存不可用時會拒絕儲存。

@@ -1,5 +1,5 @@
 export {};
-export interface DesktopDatabaseStatus { basename:string; size:number; projects:number; lastBackup:string|null; busy:boolean }
+export interface DesktopDatabaseStatus { basename:string; directory:string; databasePath:string; size:number; projects:number; sha256:string; lastBackup:string|null; busy:boolean }
 export interface CommercialPublicConfig { licenseIssuer:string; supportEmail:string; supportUrl:string }
 export interface DesktopBackup { id:string; createdAt:string; size:number; projects:number; sha256:string }
 declare global {
@@ -15,6 +15,7 @@ declare global {
       readonly updates: { check():Promise<unknown> };
       readonly database: {
         status():Promise<DesktopDatabaseStatus>;
+        chooseWorkspace():Promise<{ok:true;restarting:true;directory:string}|null>;
         import():Promise<{ok:true}|null>;
         backup():Promise<{ok:true;projects:number}>;
         listBackups():Promise<DesktopBackup[]>;

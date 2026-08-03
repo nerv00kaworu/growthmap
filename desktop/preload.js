@@ -10,5 +10,5 @@ contextBridge.exposeInMainWorld('growthmapDesktop',Object.freeze({
  support:Object.freeze({open:()=>ipcRenderer.invoke('commercial:support-open')}),
  entitlement:Object.freeze({onChanged:callback=>{if(typeof callback!=='function')throw new TypeError('callback must be a function');const listener=()=>callback();ipcRenderer.on('desktop:entitlement-changed',listener);return()=>ipcRenderer.removeListener('desktop:entitlement-changed',listener);}}),
  updates:Object.freeze({check:()=>ipcRenderer.invoke('updates:check')}),
- database:Object.freeze({status:()=>ipcRenderer.invoke('database:status'),import:()=>ipcRenderer.invoke('database:import'),backup:()=>ipcRenderer.invoke('database:backup'),listBackups:()=>ipcRenderer.invoke('database:list-backups'),restore:id=>ipcRenderer.invoke('database:restore',id),revealFolder:()=>ipcRenderer.invoke('database:reveal')})
+ database:Object.freeze({status:()=>ipcRenderer.invoke('database:status'),chooseWorkspace:()=>ipcRenderer.invoke('database:choose-workspace'),import:()=>ipcRenderer.invoke('database:import'),backup:()=>ipcRenderer.invoke('database:backup'),listBackups:()=>ipcRenderer.invoke('database:list-backups'),restore:id=>ipcRenderer.invoke('database:restore',id),revealFolder:()=>ipcRenderer.invoke('database:reveal')})
 }));
