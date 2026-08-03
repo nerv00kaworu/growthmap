@@ -7,6 +7,18 @@ _CONFIG_PATH=Path(__file__).parents[1]/"public-config.json"
 _EXACT_KEYS={"baseNetwork","basePayee"}
 _MAX_BYTES=4096
 
+def _validate_platform_metadata(opened:os.stat_result)->None:
+ # POSIX exposes trustworthy owner and group/other write bits through stat.
+ # Windows does not implement getuid and its st_mode permission bits do not
+ # represent NTFS ACLs. There the loader still enforces a non-followed stable
+ # regular-file handle plus the independently reviewed byte digest; installer
+ # ACL verification remains a separate packaging gate.
+ if os.name=="posix":
+  if opened.st_uid not in {os.getuid(),0}:raise RuntimeError("payment public config owner is not trusted")
+  if opened.st_mode&(stat.S_IWGRP|stat.S_IWOTH):raise RuntimeError("payment public config permissions are unsafe")
+ elif os.name!="nt":
+  raise RuntimeError("payment public config platform is unsupported")
+
 def _pairs(items):
  result={};exact=set();folded=set()
  for key,value in items:
@@ -27,8 +39,7 @@ def load_public_config(path:Path=_CONFIG_PATH,*,expected_digest:str=PUBLIC_CONFI
   try:listed=os.stat(path,follow_symlinks=False)
   except OSError as error:raise RuntimeError("payment public config changed during open") from error
   if not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(listed.st_mode) or (opened.st_dev,opened.st_ino)!=(listed.st_dev,listed.st_ino):raise RuntimeError("payment public config is not a stable regular file")
-  if opened.st_uid not in {os.getuid(),0}:raise RuntimeError("payment public config owner is not trusted")
-  if opened.st_mode&(stat.S_IWGRP|stat.S_IWOTH):raise RuntimeError("payment public config permissions are unsafe")
+  _validate_platform_metadata(opened)
   if opened.st_size<=0 or opened.st_size>_MAX_BYTES:raise RuntimeError("payment public config size is invalid")
   raw=b""
   while len(raw)<=_MAX_BYTES:

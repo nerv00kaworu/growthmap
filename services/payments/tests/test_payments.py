@@ -452,6 +452,23 @@ def test_public_config_loader_fail_closed_tmp_fixtures(tmp_path):
  huge=b'{}'+b' '*5000
  with pytest.raises(RuntimeError):attempt(huge)
 
+def test_public_config_platform_metadata_never_calls_posix_uid_on_windows(monkeypatch):
+ import growthmap_payments.public_config as module
+ class Opened:
+  st_uid=123;st_mode=0o100666
+ monkeypatch.setattr(module.os,'name','nt')
+ monkeypatch.setattr(module.os,'getuid',lambda:(_ for _ in ()).throw(AssertionError('POSIX uid lookup on Windows')),raising=False)
+ module._validate_platform_metadata(Opened())
+
+
+def test_public_config_platform_metadata_rejects_unknown_platform(monkeypatch):
+ import growthmap_payments.public_config as module
+ class Opened:
+  st_uid=0;st_mode=0o100600
+ monkeypatch.setattr(module.os,'name','unsupported')
+ with pytest.raises(RuntimeError,match='platform is unsupported'):module._validate_platform_metadata(Opened())
+
+
 def test_generated_public_config_digest_and_parity():
  import hashlib,subprocess,sys
  root=Path(__file__).parents[3];public=(Path(__file__).parents[1]/'public-config.json').read_bytes()
