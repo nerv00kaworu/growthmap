@@ -103,7 +103,8 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None,ses
  caller_supplied_session_verifier=session_verifier is not None
  if config.production:
   # External production trust roots are not authorized in this composition root.
-  # Dependency class, protocol shape, or injected state must never lift this gate.
+  # A separately validated review manifest is evidence indexing only: it is not
+  # consumed here and dependency shape, state, or manifest validity cannot lift this gate.
   raise RuntimeError("production service blocked: reviewed dependencies unavailable")
  elif not caller_supplied_session_verifier and config.isolated_test is True:
   session_verifier=_IsolatedTestSessionVerifier(config.admin_secret_hash)
@@ -199,6 +200,9 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None,ses
   except ValueError as e:raise HTTPException(409,str(e))
   try:
    settled=facilitator.settle(payment_signature,challenge)
+   if settled.get("state")=="settlement_candidate_finality_pending":
+    service.record_settlement_candidate(intent["intent_id"],settled.get("candidate_transaction"),settled.get("payer"),settled.get("network"),int(settled.get("amount")),settled.get("source"),settled.get("response_hash"))
+    raise RuntimeError("settlement candidate recorded; independent finality required")
    if not settled.get("success"):raise RuntimeError("ambiguous")
    evidence=settled.get("evidence",settled);service.record_settlement_result(intent["intent_id"],settled["transaction"],hashlib.sha256(json.dumps(evidence,sort_keys=True).encode()).hexdigest(),settled.get("source","isolated-test-facilitator"),settled.get("finality_at"),payer=settled.get("payer"),finality_basis=settled.get("finality_basis"));service.finalize_x402_intent(intent["intent_id"])
   except Exception as e:

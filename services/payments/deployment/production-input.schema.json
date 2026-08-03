@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://growthmap.invalid/schemas/x402-production-input-v1.json",
+  "title": "GrowthMap x402 production composition input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "version", "environment", "release_commit", "deployment_identity", "public_config_sha256", "review_manifest", "review_manifest_sha256", "ceremony_context_id", "dependency_pins", "paths", "authority_identity", "facilitator_origin", "finality_rpc_origin"],
+  "properties": {
+    "schema": {"const": "growthmap-x402-production-input"},
+    "version": {"const": 1},
+    "environment": {"const": "production"},
+    "release_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "deployment_identity": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:/-]{2,127}$"},
+    "public_config_sha256": {"$ref": "#/$defs/digest"},
+    "review_manifest": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "review_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "ceremony_context_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:/-]{1,127}$"},
+    "facilitator_origin": {"const": "https://facilitator.payai.network"},
+    "finality_rpc_origin": {"const": "https://mainnet.base.org"},
+    "dependency_pins": {
+      "type": "object", "additionalProperties": false,
+      "required": ["facilitator", "finality", "authority_transport", "session_boundary", "monitoring_backup_gate"],
+      "properties": {
+        "facilitator": {"$ref": "#/$defs/pins"}, "finality": {"$ref": "#/$defs/pins"},
+        "authority_transport": {"$ref": "#/$defs/pins"}, "session_boundary": {"$ref": "#/$defs/pins"},
+        "monitoring_backup_gate": {"$ref": "#/$defs/pins"}
+      }
+    },
+    "paths": {
+      "type": "object", "additionalProperties": false,
+      "required": ["payments_db", "settlement_checkpoint", "settlement_mac_key_file", "admin_session_hash_file", "finality_public_key_file", "finality_socket", "finality_transport_key_file", "authority_public_key_file", "authority_socket", "authority_transport_key_file", "signing_key_provider_config", "backup_directory"],
+      "properties": {
+        "payments_db": {"$ref": "#/$defs/path"}, "settlement_checkpoint": {"$ref": "#/$defs/path"},
+        "settlement_mac_key_file": {"$ref": "#/$defs/path"}, "admin_session_hash_file": {"$ref": "#/$defs/path"},
+        "finality_public_key_file": {"$ref": "#/$defs/path"}, "finality_socket": {"$ref": "#/$defs/path"}, "finality_transport_key_file": {"$ref": "#/$defs/path"},
+        "authority_public_key_file": {"$ref": "#/$defs/path"}, "authority_socket": {"$ref": "#/$defs/path"}, "authority_transport_key_file": {"$ref": "#/$defs/path"},
+        "signing_key_provider_config": {"$ref": "#/$defs/path"}, "backup_directory": {"$ref": "#/$defs/path"}
+      }
+    },
+    "authority_identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["authority_id", "key_id", "generation", "public_key_sha256", "attestation"],
+      "properties": {
+        "authority_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"},
+        "key_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
+        "generation": {"type": "integer", "minimum": 1}, "public_key_sha256": {"$ref": "#/$defs/digest"},
+        "attestation": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "pins": {"type": "object", "additionalProperties": false, "required": ["artifact_sha256", "config_sha256", "evidence_sha256"], "properties": {"artifact_sha256": {"$ref": "#/$defs/digest"}, "config_sha256": {"$ref": "#/$defs/digest"}, "evidence_sha256": {"$ref": "#/$defs/digest"}}}
+  }
+}

@@ -18,12 +18,8 @@ function validatePurchasePortalUrl(value,configuredOrigin){
  return url.href;
 }
 function purchasePortalTarget(value,configuredOrigin){return validatePurchasePortalUrl(value,configuredOrigin);}
-function purchaseTargetForArgs(args,config,validPaypalUrl){
- if(!Array.isArray(args)||args.length!==1)throw new Error('Purchase request has invalid arguments');
- const rail=args[0];
- if(typeof rail!=='string')throw new Error('Purchase request is not configured for this build');
- if(rail==='x402')return purchasePortalTarget(config.purchasePortalUrl,config.purchasePortalOrigin);
- if(rail==='paypal'&&validPaypalUrl(config.paypalUrl))return config.paypalUrl;
- throw new Error('Purchase request is not configured for this build');
+function purchaseTargetForArgs(args,config){
+ if(!Array.isArray(args)||args.length!==0)throw new Error('Purchase request has invalid arguments');
+ return purchasePortalTarget(config.purchasePortalUrl,config.purchasePortalOrigin);
 }
 module.exports={forbiddenPublicLiteralHost,strictCanonicalPublicHttpsOrigin,validatePurchasePortalUrl,purchasePortalTarget,purchaseTargetForArgs};

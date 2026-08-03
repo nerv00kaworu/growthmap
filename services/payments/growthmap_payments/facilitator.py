@@ -6,6 +6,7 @@ import json
 import re
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 from .service import BASE_NETWORK, BASE_USDC
@@ -13,6 +14,8 @@ from .service import BASE_NETWORK, BASE_USDC
 _TX = re.compile(r"0x[0-9a-fA-F]{64}")
 _ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 _ORIGIN_ERROR = "facilitator endpoint must be a canonical public-DNS HTTPS origin"
+PAYAI_FACILITATOR_ORIGIN = "https://facilitator.payai.network"
+_PAYAI_SUPPORTED_MAX_BYTES = 65_536
 # Fail closed on syntactically recognizable IANA/IETF special-use namespaces.
 # ``arpa`` intentionally covers the entire infrastructure namespace, including
 # reverse DNS and AS112/resolver names. ``test`` is handled separately because
@@ -35,6 +38,65 @@ def _is_legacy_numeric_ipv4(host: str) -> bool:
 class FacilitatorClientProvider(Protocol):
     """Dependency-construction seam; it is not an authorization boundary."""
     def build_x402_client(self, *, endpoint: str, timeout: float) -> Any: ...
+
+
+@dataclass(frozen=True)
+class PayAICapabilityEvidence:
+    """Non-authorizing snapshot of the public PayAI capability document."""
+
+    document_sha256: str
+    base_exact_v2: bool
+    evm_signers: tuple[str, ...]
+
+
+def _strict_capability_object(items: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    folded: set[str] = set()
+    for key, value in items:
+        if not isinstance(key, str) or key.casefold() in folded:
+            raise ValueError("invalid PayAI capability document")
+        folded.add(key.casefold())
+        result[key] = value
+    return result
+
+
+def inspect_payai_capabilities(raw: bytes) -> PayAICapabilityEvidence:
+    """Validate the minimum public Base/x402-v2 profile without authorizing startup.
+
+    The returned digest is suitable for a later independently reviewed pin.  A
+    live `/supported` response, its signer list, or this function succeeding is
+    evidence only and must never lift the production composition hard block.
+    """
+    if not isinstance(raw, bytes) or not raw or len(raw) > _PAYAI_SUPPORTED_MAX_BYTES:
+        raise ValueError("invalid PayAI capability document")
+    try:
+        document = json.loads(raw.decode("utf-8", "strict"), object_pairs_hook=_strict_capability_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("invalid PayAI capability document") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("kinds"), list):
+        raise ValueError("invalid PayAI capability document")
+    base_exact = any(
+        type(kind) is dict
+        and kind.get("x402Version") == 2
+        and type(kind.get("x402Version")) is int
+        and kind.get("scheme") == "exact"
+        and kind.get("network") == BASE_NETWORK
+        for kind in document["kinds"]
+    )
+    signers = document.get("signers")
+    evm = signers.get("eip155:*") if type(signers) is dict else None
+    if not base_exact or type(evm) is not list or not evm:
+        raise ValueError("PayAI Base x402 v2 exact capability unavailable")
+    normalized: list[str] = []
+    for signer in evm:
+        if type(signer) is not str or not _ADDRESS.fullmatch(signer):
+            raise ValueError("invalid PayAI capability signer")
+        lowered = signer.lower()
+        if lowered in normalized:
+            raise ValueError("invalid PayAI capability signer")
+        normalized.append(lowered)
+    return PayAICapabilityEvidence(hashlib.sha256(raw).hexdigest(), True, tuple(normalized))
+
 
 class OfficialX402Facilitator:
     """Synchronous boundary used by the durable ledger.
@@ -111,6 +173,16 @@ class OfficialX402Facilitator:
             raise RuntimeError("facilitator provider returned invalid client")
         return cls(origin, timeout=timeout, client=client, allowed_origin=allowed_origin, _allow_test_origin=_allow_test_origin)
 
+    @classmethod
+    def from_payai_provider(cls, provider: FacilitatorClientProvider, *, timeout: float = 20.0):
+        """Construct the exact reviewed PayAI origin; this is not authorization."""
+        return cls.from_client_provider(
+            PAYAI_FACILITATOR_ORIGIN,
+            provider,
+            timeout=timeout,
+            allowed_origin=PAYAI_FACILITATOR_ORIGIN,
+        )
+
     @staticmethod
     def _models(signature: str, challenge: dict[str, Any]):
         from x402.http import decode_payment_signature_header
@@ -176,6 +248,17 @@ class OfficialX402Facilitator:
             raise RuntimeError("facilitator settlement response ambiguous")
         # SDK 2.17 SettleResponse proves facilitator acceptance and identifies a
         # transaction, but contains no chain receipt/block/finality timestamp.
-        # Therefore this adapter cannot manufacture `finality_at` from local time;
-        # a separately authenticated receipt/finality reconciler must promote it.
-        raise RuntimeError("settlement accepted but receipt finality is unavailable; reconciliation required")
+        # Preserve only a lookup candidate: it cannot authorize paid state,
+        # entitlement, or finality and must be promoted by independent evidence.
+        return {
+            "success": False,
+            "state": "settlement_candidate_finality_pending",
+            "candidate_transaction": result.transaction.lower(),
+            "payer": result.payer.lower(),
+            "network": str(result.network),
+            "amount": result.amount,
+            "response_hash": hashlib.sha256(
+                json.dumps(raw, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            ).hexdigest(),
+            "source": "payai.facilitator.accepted",
+        }

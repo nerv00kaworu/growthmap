@@ -11,8 +11,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,Ed25519PublicKey
 ENTITLEMENT_ACK_DOMAIN=b"growthmap-entitlement-authority-ack-v1\0";REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
 BASE_NETWORK="eip155:8453";BASE_USDC="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";EARLY_LIMIT=50
-EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=11
-MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7"),8:("008_device_activation_entitlements.sql","2c72ffee4fbd739c84f85c9ae7d8cf267bdffb84bea88779198e50e78e6e71af"),9:("009_authority_revocation_outbox.sql","367b701a724639518e9854fd0159d24bb2ce78309242f58fe64206f9367989fc"),10:("010_terminal_payer_basis_immutability.sql","101c8dc450685c8b26eaabb427e0b1c2f96765c0cbd74ace70f1cd3f66fcbd07"),11:("011_authority_signer_identity_binding.sql","1d585bb206d86e018794a96ff8adbc91b84e02355d4d12daf45e09c94d195d42")}
+EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=12
+MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7"),8:("008_device_activation_entitlements.sql","2c72ffee4fbd739c84f85c9ae7d8cf267bdffb84bea88779198e50e78e6e71af"),9:("009_authority_revocation_outbox.sql","367b701a724639518e9854fd0159d24bb2ce78309242f58fe64206f9367989fc"),10:("010_terminal_payer_basis_immutability.sql","101c8dc450685c8b26eaabb427e0b1c2f96765c0cbd74ace70f1cd3f66fcbd07"),11:("011_authority_signer_identity_binding.sql","1d585bb206d86e018794a96ff8adbc91b84e02355d4d12daf45e09c94d195d42"),12:("012_facilitator_candidate_settlement.sql","88c4b81c4b5926179546b69a67c7efd5d2d68555511c42a49effb3944e9a159a")}
 TRANSITIONS={"reject":{"pending_payment","manual_review"},"refund":{"payment_confirmed","license_issued"},"revoke":{"license_issued"}}
 _CHECKPOINT_LOCKS_GUARD=threading.Lock();_CHECKPOINT_LOCKS:dict[str,threading.RLock]={}
 def _checkpoint_serialized(method):
@@ -77,7 +77,7 @@ class PaymentService:
  def _schema_snapshot(self,db):
   return [{"type":r[0],"name":r[1],"table":r[2],"sql":re.sub(r"\s+"," ",r[3].strip())} for r in db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name")]
  def _issuance_snapshot(self,db):
-  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ())+(("entitlement_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entitlement_outbox'").fetchone() else ())+(("revocation_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_outbox'").fetchone() else ());closure={}
+  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ())+(("entitlement_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entitlement_outbox'").fetchone() else ())+(("revocation_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_outbox'").fetchone() else ())+(("settlement_candidates",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settlement_candidates'").fetchone() else ());closure={}
   for table in tables:
    cols=[r[1] for r in db.execute(f"PRAGMA table_info({table})")];order=",".join('"'+c+'"' for c in cols);closure[table]=[dict(r) for r in db.execute(f'SELECT * FROM "{table}" ORDER BY {order}')]
   schema=self._schema_snapshot(db);raw=json.dumps({"schema":schema,"rows":closure},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
@@ -284,6 +284,25 @@ class PaymentService:
    if not hmac.compare_digest(i["evidence_binding"] or "",expected):raise ValueError("settlement evidence binding mismatch")
    if i["state"]=="finalized_paid":return dict(db.execute("SELECT * FROM orders WHERE id=?",(i["order_id"],)).fetchone())
    result=self._issue_reserved(db,i,i["tx_hash"],datetime.now(timezone.utc),"x402.finalize");self._commit_terminal(db);return result
+ @_checkpoint_serialized
+ def record_settlement_candidate(self,intent_id,tx_hash,payer,network,amount_minor,source,response_hash):
+  if (not re.fullmatch(r"0x[0-9a-f]{64}",tx_hash or "") or not re.fullmatch(r"0x[0-9a-f]{40}",payer or "") or
+      network!=BASE_NETWORK or type(amount_minor) is not int or amount_minor<=0 or
+      not re.fullmatch(r"[a-z0-9][a-z0-9._:/-]{0,127}",source or "") or not re.fullmatch(r"[a-f0-9]{64}",response_hash or "")):
+   raise ValueError("invalid settlement candidate")
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);i=db.execute("SELECT * FROM settlement_intents WHERE intent_id=?",(intent_id,)).fetchone()
+   if not i:raise KeyError("intent")
+   if i["state"] not in {"prepared","ambiguous"} or not i["verified_payer"] or payer!=i["verified_payer"] or amount_minor!=i["amount_minor"]:raise ValueError("settlement candidate binding mismatch")
+   existing=db.execute("SELECT * FROM settlement_candidates WHERE intent_id=?",(intent_id,)).fetchone()
+   values=(intent_id,tx_hash,payer,network,amount_minor,source,self.now(),response_hash)
+   if existing:
+    if tuple(existing[k] for k in ("intent_id","tx_hash","payer","network","amount_minor","source","response_hash"))!=values[:6]+values[7:]:raise ValueError("conflicting settlement candidate")
+    db.rollback();return dict(existing)
+   try:db.execute("INSERT INTO settlement_candidates VALUES(?,?,?,?,?,?,?,?)",values)
+   except sqlite3.IntegrityError as e:raise ValueError("settlement candidate already used") from e
+   if i["state"]=="prepared":db.execute("UPDATE settlement_intents SET state='ambiguous',updated_at=? WHERE intent_id=?",(self.now(),intent_id))
+   db.execute("UPDATE orders SET state='manual_review',updated_at=? WHERE id=?",(self.now(),i["order_id"]));self._audit(db,"x402.settle","settlement.candidate_recorded",i["order_id"],{"intent_id":intent_id,"tx_hash":self._hash(tx_hash),"response_hash":response_hash,"source":source});self._commit_trusted(db);return dict(db.execute("SELECT * FROM settlement_candidates WHERE intent_id=?",(intent_id,)).fetchone())
  @_checkpoint_serialized
  def mark_intent_ambiguous(self,intent_id,reason):
   with self._db() as db:

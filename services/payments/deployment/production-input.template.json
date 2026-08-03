@@ -1,0 +1,35 @@
+{
+  "schema": "growthmap-x402-production-input",
+  "version": 1,
+  "environment": "production",
+  "release_commit": "<REVIEWED_RELEASE_COMMIT>",
+  "deployment_identity": "<INDEPENDENT_DEPLOYMENT_IDENTITY>",
+  "public_config_sha256": "<REVIEWED_PUBLIC_CONFIG_SHA256>",
+  "review_manifest": "<PRODUCTION_REVIEW_MANIFEST_PATH>",
+  "review_manifest_sha256": "<REVIEWED_MANIFEST_SHA256>",
+  "ceremony_context_id": "<AUTHENTICATED_CEREMONY_CONTEXT_ID>",
+  "facilitator_origin": "https://facilitator.payai.network",
+  "finality_rpc_origin": "https://mainnet.base.org",
+  "dependency_pins": {
+    "facilitator": {"artifact_sha256": "<SHA256>", "config_sha256": "<SHA256>", "evidence_sha256": "<SHA256>"},
+    "finality": {"artifact_sha256": "<SHA256>", "config_sha256": "<SHA256>", "evidence_sha256": "<SHA256>"},
+    "authority_transport": {"artifact_sha256": "<SHA256>", "config_sha256": "<SHA256>", "evidence_sha256": "<SHA256>"},
+    "session_boundary": {"artifact_sha256": "<SHA256>", "config_sha256": "<SHA256>", "evidence_sha256": "<SHA256>"},
+    "monitoring_backup_gate": {"artifact_sha256": "<SHA256>", "config_sha256": "<SHA256>", "evidence_sha256": "<SHA256>"}
+  },
+  "paths": {
+    "payments_db": "<GROWTHMAP_PAYMENTS_DB>",
+    "settlement_checkpoint": "<GROWTHMAP_SETTLEMENT_CHECKPOINT_FILE>",
+    "settlement_mac_key_file": "<GROWTHMAP_SETTLEMENT_MAC_KEY_FILE>",
+    "admin_session_hash_file": "<GROWTHMAP_ADMIN_SESSION_HASH_FILE>",
+    "finality_public_key_file": "<FINALITY_SIDECAR_PUBLIC_KEY_FILE>",
+    "finality_socket": "<FINALITY_SIDECAR_UNIX_SOCKET>",
+    "finality_transport_key_file": "<FINALITY_TRANSPORT_KEY_FILE>",
+    "authority_public_key_file": "<GROWTHMAP_AUTHORITY_PUBLIC_KEY_FILE>",
+    "authority_socket": "<AUTHORITY_UNIX_SOCKET>",
+    "authority_transport_key_file": "<AUTHORITY_TRANSPORT_KEY_FILE>",
+    "signing_key_provider_config": "<SIGNING_KEY_PROVIDER_CONFIG_PATH>",
+    "backup_directory": "<BACKUP_DIRECTORY>"
+  },
+  "authority_identity": {"authority_id": "<GROWTHMAP_AUTHORITY_ID>", "key_id": "<GROWTHMAP_AUTHORITY_KEY_ID>", "generation": 1, "public_key_sha256": "<GROWTHMAP_AUTHORITY_PUBLIC_KEY_SHA256>", "attestation": "<GROWTHMAP_AUTHORITY_ATTESTATION>"}
+}

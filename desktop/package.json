@@ -44,6 +44,7 @@
       "request-policy.js",
       "update-policy.js",
       "purchase-portal.js",
+      "activation-client.js",
       "updater.js",
       "update-recovery.js",
       "managed-backup.js",
@@ -64,8 +65,7 @@
       "!e2e-main.js",
       "package.json",
       "csp.js",
-      "generated/csp-script-hashes.json",
-      "generated/public-config.js"
+      "generated/csp-script-hashes.json"
     ],
     "extraResources": [
       {

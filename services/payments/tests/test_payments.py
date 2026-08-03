@@ -247,10 +247,13 @@ def test_production_recipient_gate_precedes_other_credentials(tmp_path,monkeypat
  assert 'recipient missing or not approved' not in str(caught.value)
 
 
-def test_public_recipient_config_matches_desktop_truth():
+def test_public_recipient_config_is_server_only_and_absent_from_desktop():
  public=json.loads((Path(__file__).parents[1]/'public-config.json').read_text())
  desktop=json.loads((Path(__file__).parents[3]/'desktop/commercial-config.json').read_text())
- assert public=={'baseNetwork':desktop['baseNetwork'],'basePayee':desktop['basePayee']}
+ assert public=={'baseNetwork':BASE_NETWORK,'basePayee':APPROVED_BASE_RECIPIENT}
+ for field in ('baseNetwork','baseUsdc','basePayee','earlyLimit','earlyPriceMicros','regularPriceMicros','paypalUrl','paymentApiOrigin'):
+  assert field not in desktop
+ assert desktop['activationApiOrigin'] and desktop['purchasePortalUrl']
  assert public['basePayee']==APPROVED_BASE_RECIPIENT
 
 

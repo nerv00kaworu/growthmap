@@ -1,6 +1,7 @@
 """Authenticated, fail-closed boundary for externally determined x402 finality."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -8,9 +9,13 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Protocol
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from .service import BASE_NETWORK, BASE_USDC
 
 _DOMAIN = b"growthmap-authenticated-finality-v1\0"
+_SIGNED_DOMAIN = b"growthmap-signed-finality-v1\0"
 _MAX_DOCUMENT = 16_384
 _MAX_JSON_DEPTH = 32
 _HASH = re.compile(r"[0-9a-f]{64}")
@@ -76,6 +81,63 @@ def sign_test_document(payload: dict[str, Any], key: bytes) -> bytes:
     """Build an authenticated fixture document. Test-only; never a production input loader."""
     mac = hmac.new(key, _DOMAIN + canonical_payload(payload), hashlib.sha256).hexdigest()
     return canonical_payload({"mac": mac, "payload": payload})
+
+
+class SignedFinalityReconciler:
+    """Verify finality sidecar evidence with a pinned Ed25519 public key only.
+
+    The payment process never receives the sidecar signing key. The sidecar
+    transport and signer identity still require independent deployment pins;
+    successful signature verification does not authorize production startup.
+    """
+
+    def __init__(self, provider: FinalityEvidenceProvider, reviewed_public_key: bytes, *, payee: str,
+                 network: str = BASE_NETWORK, asset: str = BASE_USDC,
+                 now: Callable[[], datetime] | None = None, max_document: int = _MAX_DOCUMENT):
+        try:
+            key = serialization.load_pem_public_key(reviewed_public_key)
+        except Exception as exc:
+            raise RuntimeError("signed finality public key invalid") from exc
+        if not isinstance(key, Ed25519PublicKey):
+            raise RuntimeError("signed finality public key must be Ed25519")
+        if not _ADDRESS.fullmatch(payee.lower()):
+            raise RuntimeError("signed finality payee invalid")
+        if max_document < 512 or max_document > _MAX_DOCUMENT:
+            raise RuntimeError("signed finality document bound invalid")
+        self.provider, self.public_key = provider, key
+        self.payee, self.network, self.asset = payee.lower(), network, asset.lower()
+        self._now, self.max_document = now or (lambda: datetime.now(timezone.utc)), max_document
+
+    def reconcile(self, intent: dict[str, Any]) -> dict[str, Any]:
+        try: raw = self.provider.finality_evidence(dict(intent))
+        except Exception as exc: raise ValueError("signed finality provider unavailable") from exc
+        if not isinstance(raw, bytes) or not raw or len(raw) > self.max_document:
+            raise ValueError("invalid signed finality document")
+        try: document = json.loads(raw.decode("utf-8"), object_pairs_hook=_strict_object)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("invalid signed finality document") from exc
+        _reject_excessive_depth(document)
+        if type(document) is not dict or set(document) != {"signature", "payload"}:
+            raise ValueError("invalid signed finality envelope")
+        signature, payload = document["signature"], document["payload"]
+        if type(signature) is not str or type(payload) is not dict or set(payload) != _FIELDS:
+            raise ValueError("invalid signed finality schema")
+        try:
+            raw_signature = base64.b64decode(signature, validate=True)
+            if len(raw_signature) != 64: raise ValueError
+            self.public_key.verify(raw_signature, _SIGNED_DOMAIN + canonical_payload(payload))
+        except Exception as exc:
+            raise ValueError("signed finality verification failed") from exc
+        # Reuse the exact semantic validator without exposing or fabricating a MAC.
+        semantic = AuthenticatedFinalityReconciler.__new__(AuthenticatedFinalityReconciler)
+        semantic.payee, semantic.network, semantic.asset, semantic._now = self.payee, self.network, self.asset, self._now
+        semantic._validate(payload, intent)
+        normalized = {key: payload[key] for key in (
+            "outcome", "proof_hash", "nonce_hash", "order_id", "payer",
+            "evidence_hash", "source", "finality_at", "finality_basis",
+        )}
+        if payload["outcome"] == "paid": normalized["tx_hash"] = payload["tx_hash"]
+        return normalized
 
 
 class AuthenticatedFinalityReconciler:

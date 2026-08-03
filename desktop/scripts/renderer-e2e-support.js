@@ -30,7 +30,7 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const metadata=JSON.parse(asar.extractFile(asarPath,'package.json').toString('utf8'));
  if(metadata.main!=='e2e-main.js')throw Error(`E2E app.asar main must be e2e-main.js, got ${JSON.stringify(metadata.main)}`);
  const configPath=path.join(resourcesPath,'commercial-config.json'),config=JSON.parse(fs.readFileSync(configPath,'utf8'));
- if(config.publisherStatus!=='E2E_ONLY'||config.paymentApiOrigin||config.purchasePortalOrigin||config.purchasePortalUrl||config.paypalUrl||config.updateUrl||config.updateOrigin)throw Error('E2E commercial config status/network settings are invalid');
+ if(config.publisherStatus!=='E2E_ONLY'||config.activationApiOrigin||config.purchasePortalOrigin||config.purchasePortalUrl||config.updateUrl||config.updateOrigin)throw Error('E2E commercial config endpoint settings are invalid');
  const key=path.resolve(resourcesPath,config.licensePublicKeyResource),root=`${path.resolve(resourcesPath)}${path.sep}`;
  if(!key.startsWith(root)||!fs.existsSync(key))throw Error('E2E commercial public key is missing or outside resources');
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');

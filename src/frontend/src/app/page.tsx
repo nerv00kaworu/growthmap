@@ -11,7 +11,6 @@ import { AgentPortPanel } from "@/components/AgentPortPanel";
 import { api } from "@/lib/api";
 import { useEntitlement } from "@/lib/entitlement";
 import { useAgentPortDesktopControl } from "@/lib/agent-port-control";
-import type { CommercialPublicConfig } from "../desktop";
 
 export default function HomePage() {
   const agentPortDesktopControl = useAgentPortDesktopControl();
@@ -41,12 +40,9 @@ export default function HomePage() {
   const selectBranch = useStore((s) => s.selectBranch);
   const archiveBranch = useStore((s) => s.archiveBranch);
 
-  const [commercialPublic, setCommercialPublic] = useState<CommercialPublicConfig | null>(null);
-  const [copyPayeeStatus, setCopyPayeeStatus] = useState<"idle"|"copied"|"error">("idle");
   const [showNewProject, setShowNewProject] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
-  useEffect(() => { let active=true; window.growthmapDesktop?.purchase.publicConfig().then(value=>{if(active)setCommercialPublic(value);}).catch(()=>{}); return()=>{active=false;}; }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [showAgentSessions, setShowAgentSessions] = useState(false);
   const [showAgentPort, setShowAgentPort] = useState(false);
@@ -59,6 +55,8 @@ export default function HomePage() {
   // Keep mutation controls fail-closed until the backend has answered authoritatively.
   const readOnly = entitlement?.mutations_allowed !== true;
   const importRef = useRef<HTMLInputElement>(null);
+  const [activationKey, setActivationKey] = useState("");
+  const [activating, setActivating] = useState(false);
   const moreMenuRef = useRef<HTMLDivElement>(null);
 
   // Build id->title map for search display
@@ -180,17 +178,22 @@ export default function HomePage() {
     } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
-  const openPurchase = async (rail: "x402" | "paypal") => {
-    if (!window.growthmapDesktop) { setToast("購買僅在桌面版提供"); return; }
-    try { await window.growthmapDesktop.purchase.open(rail); }
+  const openPurchase = async () => {
+    if (!window.growthmapDesktop) { setToast("購買頁面僅在桌面版提供"); return; }
+    try { await window.growthmapDesktop.purchase.open(); }
     catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
-  const copyBasePayee = async () => {
-    if (!window.growthmapDesktop) { setCopyPayeeStatus("error"); return; }
-    setCopyPayeeStatus("idle");
-    try { await window.growthmapDesktop.purchase.copyBasePayee(); setCopyPayeeStatus("copied"); }
-    catch (e: unknown) { setCopyPayeeStatus("error"); useStore.setState({ error: (e as Error).message }); }
+  const activateLicense = async () => {
+    if (!window.growthmapDesktop) { setToast("授權啟用僅在桌面版提供"); return; }
+    setActivating(true);
+    try {
+      await window.growthmapDesktop.license.activate(activationKey);
+      setActivationKey("");
+      await refreshEntitlement();
+      setToast("✅ 授權已啟用，此裝置可離線驗證");
+    } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
+    finally { setActivating(false); }
   };
 
   const checkUpdates = async () => {
@@ -434,7 +437,7 @@ export default function HomePage() {
               </button>
               <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">⚙️ LLM 設定</button>
               <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
-              {entitlement?.state !== "paid" && <section data-testid="purchase-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>購買 v1 永久授權</strong><p className="text-[10px] text-amber-200/70">首 50 筆確認付款 10；其後 29。永久、同主版本更新、2 部個人裝置、無專案上限。</p>{commercialPublic?.basePayee && <p data-testid="base-payee">Base 收款地址：<code>{commercialPublic.basePayee}</code> <button data-testid="copy-base-payee" type="button" onClick={copyBasePayee} className="rounded border px-1">複製</button> <span data-testid="copy-base-payee-status" role="status">{copyPayeeStatus==="copied"?"已複製":copyPayeeStatus==="error"?"複製失敗":""}</span></p>}<button type="button" onClick={() => openPurchase("x402")} className="mr-2 rounded border border-amber-600 px-2 py-1">USDC on Base（安全入口）</button><button type="button" onClick={() => openPurchase("paypal")} className="rounded border border-amber-600 px-2 py-1">PayPal manual</button>{commercialPublic && <p data-testid="commercial-support">聯絡：<button type="button" onClick={()=>window.growthmapDesktop?.support.open()}>X</button> · <span>{commercialPublic.supportEmail}</span></p>}<p className="text-[10px] text-gray-400">PayPal 交易 ID 須人工核對；截圖不構成付款證明。付款後下載的 JSON 仍須按「匯入 License」由本機驗證。</p></section>}
+              {entitlement?.state !== "paid" && <section data-testid="activation-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>啟用 GrowthMap</strong><p className="text-[10px] text-amber-200/70">付款在網頁完成。取得授權碼後貼在這裡，首次啟用完成即可由此裝置離線驗證。</p><input data-testid="activation-key-input" type="text" value={activationKey} onChange={e=>setActivationKey(e.target.value)} placeholder="GM1.…" autoComplete="off" spellCheck={false} maxLength={128} className="w-full rounded border border-amber-700/60 bg-gray-950/60 px-2 py-1.5 font-mono text-xs"/><div className="flex gap-2"><button data-testid="activate-license-button" type="button" disabled={!activationKey.trim()||activating} onClick={activateLicense} className="rounded border border-amber-600 px-2 py-1 disabled:opacity-40">{activating?"啟用中…":"輸入授權碼解鎖"}</button><button type="button" onClick={openPurchase} className="rounded border border-gray-600 px-2 py-1">前往購買網頁</button></div><p className="text-[10px] text-gray-400">桌面程式不包含錢包、付款 SDK、Base RPC、收款地址或價格設定。</p></section>}
               {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
               <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>

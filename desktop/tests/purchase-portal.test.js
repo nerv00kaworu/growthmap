@@ -22,8 +22,8 @@ test('purchase target has no renderer context, query, or fragment transport',()=
  const target=new URL(purchasePortalTarget(base,origin));assert.equal(target.search,'');assert.equal(target.hash,'');
  assert.equal(purchasePortalTarget.length,2);
 });
-test('purchase IPC target selection requires exact one-rail arity for x402 and PayPal',()=>{
- const config={purchasePortalUrl:base,purchasePortalOrigin:origin,paypalUrl:'https://paypal.test/exact'},paypal=value=>value===config.paypalUrl;
- assert.equal(purchaseTargetForArgs(['x402'],config,paypal),base);assert.equal(purchaseTargetForArgs(['paypal'],config,paypal),config.paypalUrl);
- for(const args of [[],['x402',null],['x402',{}],['paypal',null],['paypal',{}],['paypal','extra'],['unknown'],[Symbol('rail')],[{}],[1],[true],['x'.repeat(1_000_000)]])assert.throws(()=>purchaseTargetForArgs(args,config,paypal),error=>error.message==='Purchase request has invalid arguments'||error.message==='Purchase request is not configured for this build');
+test('purchase IPC always opens one exact website and accepts no rail or context',()=>{
+ const config={purchasePortalUrl:base,purchasePortalOrigin:origin};
+ assert.equal(purchaseTargetForArgs([],config),base);
+ for(const args of [['x402'],['paypal'],[null],[{}],[1],[true],['x'.repeat(1_000_000)],['extra',null]])assert.throws(()=>purchaseTargetForArgs(args,config),error=>error.message==='Purchase request has invalid arguments');
 });

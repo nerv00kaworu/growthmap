@@ -385,7 +385,7 @@ if ((Get-FileHash $commercialPath -Algorithm SHA256).Hash -cne (Get-FileHash $so
 }
 $commercialText = Get-Content $commercialPath -Raw
 $commercial = $commercialText | ConvertFrom-Json
-$expectedCommercial = @('schemaVersion','productMajor','licenseIssuer','supportEmail','supportUrl','licensePublicKeyResource','licensePublicKeySha256','paymentApiOrigin','purchasePortalOrigin','purchasePortalUrl','baseNetwork','baseUsdc','basePayee','earlyLimit','earlyPriceMicros','regularPriceMicros','paypalUrl','updateUrl','updateOrigin','publisher','publisherStatus') | Sort-Object
+$expectedCommercial = @('schemaVersion','productMajor','licenseIssuer','supportEmail','supportUrl','licensePublicKeyResource','licensePublicKeySha256','activationApiOrigin','purchasePortalOrigin','purchasePortalUrl','updateUrl','updateOrigin','publisher','publisherStatus') | Sort-Object
 $actualCommercial = @($commercial.psobject.Properties.Name) | Sort-Object
 if (Compare-Object $expectedCommercial $actualCommercial) { throw 'Commercial config schema mismatch' }
 if ($env:GROWTHMAP_COMMERCIAL_RELEASE -eq '1' -and ($commercialText -match 'REPLACE|EXAMPLE|TBD|UNAPPROVED')) { throw 'Commercial resource contains placeholder trust configuration' }
