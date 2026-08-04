@@ -1,16 +1,12 @@
-import asyncio, sqlite3, subprocess, sys
-from datetime import datetime, timezone
+import ast, asyncio, os, sqlite3, subprocess, sys
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine
 
-from db.database import Base
 from db.migrations import migrate_sqlite
 from db.schema_contract import ORM_READ_COLUMNS
 from desktop import database_maintenance as dm
-from models.models import Branch
-from models.schemas import BranchOut
 
 FIXTURE = Path(__file__).parents[3] / "desktop/scripts/create-e2e-fixture.py"
 BRANCH_FIELDS = {"id", "project_id", "name", "description", "source_node_id", "status", "created_at", "revision"}
@@ -22,10 +18,32 @@ def fixture(tmp_path):
     return path
 
 
-def test_branch_contract_is_complete_for_mapped_and_response_fields():
-    assert set(Branch.__table__.columns.keys()) == BRANCH_FIELDS
+def isolated_model_check(tmp_path, body):
+    database = tmp_path / "isolated-model.db"
+    environment = {**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{database}", "APP_ENV": "test"}
+    result = subprocess.run(
+        [sys.executable, "-c", body], cwd=Path(__file__).parents[1],
+        env=environment, text=True, capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return result
+
+
+def test_branch_contract_is_complete_for_mapped_and_response_fields(tmp_path):
     assert set(ORM_READ_COLUMNS["branches"]) == BRANCH_FIELDS
-    assert BRANCH_FIELDS == set(BranchOut.model_fields)
+    isolated_model_check(tmp_path, """
+from models.models import Branch
+from models.schemas import BranchOut
+expected={'id','project_id','name','description','source_node_id','status','created_at','revision'}
+assert set(Branch.__table__.columns.keys())==expected
+assert set(BranchOut.model_fields)==expected
+""")
+
+
+def test_collection_imports_do_not_initialize_global_database_or_models():
+    tree = ast.parse(Path(__file__).read_text())
+    imports = {node.module for node in tree.body if isinstance(node, ast.ImportFrom)}
+    assert not ({"db.database", "models.models", "models.schemas", "main"} & imports)
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -51,23 +69,33 @@ def test_incomplete_branch_table_rejected_before_acceptance(tmp_path, version):
 
 
 def test_branch_orm_read_and_response_serialization(tmp_path):
-    path = tmp_path / "branch-orm.db"
-    async def run():
-        engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
-        async with engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-            await migrate_sqlite(connection)
-        factory = async_sessionmaker(engine, expire_on_commit=False)
-        stamp = datetime(2026, 8, 3, tzinfo=timezone.utc)
-        async with factory() as session:
-            branch = Branch(id="branch", project_id="project", name="Branch", description="kept", source_node_id=None, status="active", created_at=stamp)
-            session.add(branch); await session.commit()
-        async with factory() as session:
-            loaded = await session.get(Branch, "branch")
-            output = BranchOut.model_validate(loaded).model_dump(mode="json")
-        await engine.dispose()
-        assert output == {"id":"branch","project_id":"project","name":"Branch","description":"kept","source_node_id":None,"status":"active","created_at":"2026-08-03T00:00:00","revision":1}
-    asyncio.run(run())
+    result = isolated_model_check(tmp_path, """
+import asyncio
+from datetime import datetime, timezone
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from db.database import Base
+from db.migrations import migrate_sqlite
+from models.models import Branch
+from models.schemas import BranchOut
+
+async def run():
+    engine=create_async_engine(__import__('os').environ['DATABASE_URL'])
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(connection)
+    factory=async_sessionmaker(engine,expire_on_commit=False)
+    stamp=datetime(2026,8,3,tzinfo=timezone.utc)
+    async with factory() as session:
+        session.add(Branch(id='branch',project_id='project',name='Branch',description='kept',source_node_id=None,status='active',created_at=stamp))
+        await session.commit()
+    async with factory() as session:
+        loaded=await session.get(Branch,'branch')
+        output=BranchOut.model_validate(loaded).model_dump(mode='json')
+    await engine.dispose()
+    assert output=={'id':'branch','project_id':'project','name':'Branch','description':'kept','source_node_id':None,'status':'active','created_at':'2026-08-03T00:00:00','revision':1},output
+asyncio.run(run())
+""")
+    assert result.stdout == ""
 
 
 @pytest.mark.parametrize("version", [1, 2])
