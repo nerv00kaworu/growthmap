@@ -1,1 +1,2 @@
-import {Product} from '../../../components/Localized'; import {parseLocale} from '../../../content/i18n'; import {notFound} from 'next/navigation'; export default async function P({params}:{params:Promise<{locale:string}>}){const locale=parseLocale((await params).locale);if(!locale)notFound();return <Product locale={locale}/>}
+import {permanentRedirect} from 'next/navigation';
+export default async function ProductAlias({params}:{params:Promise<{locale:string}>}){permanentRedirect(`/${(await params).locale}/ai-neutral`)}
