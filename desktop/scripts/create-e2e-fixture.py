@@ -16,7 +16,7 @@ out=fixture_output(sys.argv[1]); c=sqlite3.connect(out)
 # Canonical fixture surface required by desktop validation and schema preflight.
 c.executescript("""
 CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT,revision INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT,source_node_id TEXT,name TEXT,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source_node_id TEXT,name TEXT NOT NULL,description TEXT,status TEXT,created_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',branch_id VARCHAR(36),created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT,is_mainline BOOLEAN NOT NULL,created_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);

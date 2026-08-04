@@ -17,6 +17,15 @@ test('packaged E2E keeps import input outside the fresh profile and verifies tri
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
 });
 
+test('packaged E2E pins canonical fixture reads and Markdown through same-origin app API',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(source,/fetch\(url,\{credentials:'same-origin'/);
+ for(const route of ['/api/projects/fixture','/api/nodes/root','/api/nodes/child','/api/projects/fixture/nodes','/api/projects/fixture/edges?relation_type=child_of','/api/nodes/root/blocks','/api/projects/fixture/export'])assert.ok(source.includes(route),route);
+ for(const token of ['fixture-edge','from_node_id','to_node_id','child_of','fixture body','import-canonical-api','restart-canonical-api','restore-canonical-api'])assert.ok(source.includes(token),token);
+ const assertionBody=source.slice(source.indexOf('async function assertCanonicalFixture'),source.indexOf('(async()=>'));
+ assert.doesNotMatch(assertionBody,/sqlite3|fixture\.sqlite|growthmap\.db/);
+});
+
 test('CDP version probe records HTTP response and connection errors',async()=>{
  const server=http.createServer((request,response)=>{assert.equal(request.url,'/json/version');response.writeHead(200,{'content-type':'application/json'});response.end('{"Browser":"test"}');});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

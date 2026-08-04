@@ -32,6 +32,7 @@ def _s(affinity, not_null=False, default=None): return (affinity, not_null, defa
 ROW_REQUIRED_NON_NULL = {
  "projects":("created_at","updated_at"), "nodes":("created_at","updated_at"),
  "edges":("created_at",), "content_blocks":("created_at","updated_at"),
+ "branches":("project_id","name","description","status","created_at"),
 }
 
 ORM_READ_COLUMNS = {
@@ -43,6 +44,8 @@ ORM_READ_COLUMNS = {
   "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",True),"from_node_id":_s("TEXT",True),"to_node_id":_s("TEXT",True),"relation_type":_s("TEXT",True),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),True,(None,"0")),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
  "content_blocks": {
   "id":_s("TEXT",(False,True)),"node_id":_s("TEXT",True),"block_type":_s("TEXT",True),"content":_s("JSON",True),"order_index":_s("INTEGER",True),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+ "branches": {
+  "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"name":_s("TEXT",(False,True)),"description":_s("TEXT"),"source_node_id":_s("TEXT"),"status":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
 }
 
 

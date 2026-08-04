@@ -137,8 +137,11 @@ def schema_status(path):
     problem=orm_column_problem(rows.get(column),expected)
     if problem:reasons.append(f"{problem}_orm_column:{table}.{column}")
   for table,columns in ROW_REQUIRED_NON_NULL.items():
+   present={row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
    for column in columns:
-    if connection.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1').fetchone():reasons.append(f"null_data:{table}.{column}")
+    # Missing tables/columns are already reported by the strict ORM contract;
+    # avoid turning a coherent rejection into an inspection exception.
+    if column in present and connection.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1').fetchone():reasons.append(f"null_data:{table}.{column}")
   for spec in COLUMNS:
    row=next((item for item in connection.execute(f'PRAGMA table_info("{spec[0]}")') if item[1]==spec[1]),None)
    if row is None:reasons.append(f"column:{spec[0]}.{spec[1]}")
