@@ -4,7 +4,7 @@ import pytest
 from desktop import database_maintenance as dm
 
 def fixture(path):
- c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,status TEXT,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),from_node_id TEXT REFERENCES nodes(id),to_node_id TEXT REFERENCES nodes(id),relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id),block_type TEXT,content TEXT,order_index INTEGER);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);""");c.execute("insert into projects values('p','x','active','','')");c.commit();c.close()
+ c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),from_node_id TEXT REFERENCES nodes(id),to_node_id TEXT REFERENCES nodes(id),relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id),block_type TEXT,content TEXT,order_index INTEGER);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);""");c.execute("insert into projects values('p','x','','',NULL,'active','{}','','')");c.commit();c.close()
 
 def test_durability_metadata_matches_platform_contract(tmp_path):
  p=tmp_path/'flush.bin';p.write_bytes(b'durability-evidence')
@@ -63,6 +63,37 @@ def test_version_one_with_compatibility_surface_still_requires_version_advanceme
  for sql in (__import__('db.migrations',fromlist=['INDEX_SQL']).INDEX_SQL,*__import__('db.migrations',fromlist=['TRIGGERS']).TRIGGERS.values()):c.execute(sql)
  c.execute('PRAGMA user_version=1');c.close()
  status=dm.schema_status(p);assert status['migrationNeeded'] is True and status['reasons']==['user_version:1']
+
+
+def _make_current(path):
+ c=sqlite3.connect(path);c.execute('CREATE TABLE IF NOT EXISTS branches(id TEXT PRIMARY KEY)')
+ for sql in ("ALTER TABLE edges ADD COLUMN is_mainline BOOLEAN DEFAULT 0","ALTER TABLE edges ADD COLUMN weight FLOAT DEFAULT 1","ALTER TABLE edges ADD COLUMN note TEXT DEFAULT ''"):
+  try:c.execute(sql)
+  except sqlite3.OperationalError as error:
+   if 'duplicate column' not in str(error):raise
+ for spec in __import__('db.schema_contract',fromlist=['COLUMNS']).COLUMNS:
+  if spec[1] not in {row[1] for row in c.execute(f'pragma table_info({spec[0]})')}:c.execute(spec[5])
+ contract=__import__('db.schema_contract',fromlist=['OBJECT_SQL'])
+ for sql in contract.OBJECT_SQL.values():
+  try:c.execute(sql)
+  except sqlite3.OperationalError as error:
+   if 'already exists' not in str(error):raise
+ c.execute(f'pragma user_version={contract.CURRENT_USER_VERSION}');c.close()
+
+@pytest.mark.parametrize('ddl,reason',[
+ ("ALTER TABLE projects RENAME TO old_projects; CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT,revision TEXT NOT NULL DEFAULT 1); INSERT INTO projects SELECT * FROM old_projects; DROP TABLE old_projects","incompatible_column:projects.revision"),
+ ("DROP TRIGGER trg_edges_normalize_null_insert; CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges BEGIN SELECT 1; END","incompatible_object:trg_edges_normalize_null_insert"),
+ ("DROP INDEX ux_edges_one_mainline_per_parent; CREATE INDEX ux_edges_one_mainline_per_parent ON edges(to_node_id)","incompatible_object:ux_edges_one_mainline_per_parent"),
+])
+def test_forged_v2_compatibility_surface_never_reports_current(tmp_path,ddl,reason):
+ p=tmp_path/'forged.db';fixture(p);_make_current(p);c=sqlite3.connect(p);c.executescript(ddl);c.close()
+ status=dm.schema_status(p);assert status['migrationNeeded'] is True and reason in status['reasons']
+
+
+def test_exact_v2_is_current_and_newer_version_fails_closed(tmp_path):
+ p=tmp_path/'current.db';fixture(p);_make_current(p);assert dm.schema_status(p)['migrationNeeded'] is False
+ c=sqlite3.connect(p);c.execute('pragma user_version=3');c.close()
+ with pytest.raises(ValueError,match='newer'):dm.schema_status(p)
 
 
 def test_installed_canonical_abyss_database_contract_when_supplied():

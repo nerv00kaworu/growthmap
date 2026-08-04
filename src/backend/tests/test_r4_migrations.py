@@ -10,7 +10,7 @@ CREATE TABLE branches(id TEXT PRIMARY KEY);
 CREATE TABLE nodes(id TEXT PRIMARY KEY, branch_id VARCHAR(36), workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft', file_paths JSON DEFAULT '[]');
 CREATE TABLE edges(id TEXT PRIMARY KEY, from_node_id TEXT, relation_type TEXT, is_mainline BOOLEAN, weight FLOAT, note TEXT);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY);
-CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128));
+CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128) DEFAULT '');
 INSERT INTO projects VALUES ('p',7);
 """
 
@@ -72,3 +72,17 @@ def test_populated_old_and_partial_compatible_upgrade(tmp_path): asyncio.run(_po
 def test_incompatible_column_and_index_fail_closed(tmp_path): asyncio.run(_incompatible_column_and_index_fail_closed(tmp_path))
 def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch): asyncio.run(_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch))
 def test_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path): asyncio.run(_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path))
+
+async def _missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path):
+    sql=OLD.replace("secret_env_key VARCHAR(128) DEFAULT ''","name TEXT")+"\nINSERT INTO provider_configs VALUES ('provider','kept');\nPRAGMA user_version=1;"
+    engine=await db(tmp_path,sql)
+    async with engine.begin() as conn:await migrate_sqlite(conn)
+    async with engine.begin() as conn:await migrate_sqlite(conn)
+    async with engine.connect() as conn:
+        assert (await conn.execute(text("select id,name,secret_env_key from provider_configs"))).one()==("provider","kept","")
+        row=next(row for row in (await conn.execute(text("pragma table_info(provider_configs)"))).all() if row[1]=="secret_env_key")
+        assert (row[2],bool(row[3]),row[4])==("VARCHAR(128)",False,"''")
+        assert (await conn.execute(text("pragma user_version"))).scalar()==CURRENT_USER_VERSION
+    await engine.dispose()
+
+def test_missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path):asyncio.run(_missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path))

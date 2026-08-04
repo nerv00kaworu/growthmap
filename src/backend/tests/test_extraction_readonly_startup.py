@@ -32,3 +32,11 @@ with TestClient(app) as c:
  env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'0','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{db}','GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(trial)}
  r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
  after=(hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns,sqlite3.connect(db).execute("select group_concat(name,',') from sqlite_master where type='table'").fetchone()[0]);assert after==before
+
+def test_query_only_export_rejects_malformed_content_without_detail_or_write(tmp_path):
+ db=tmp_path/'malformed.db';c=sqlite3.connect(db);c.executescript('''CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT,title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER);INSERT INTO projects VALUES('p','safe','','','root','active','{}','','');INSERT INTO nodes VALUES('root','p','Root','','concept','active','seed');INSERT INTO content_blocks VALUES('b','root','note','not-json',0);''');c.close()
+ before=(hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns)
+ code='''from fastapi.testclient import TestClient\nfrom main import app\nwith TestClient(app) as c:\n r=c.get('/api/projects/p/export',headers={'Authorization':'Bearer t'});assert r.status_code==409 and r.json()=={'detail':'Project data is not compatible with Markdown export'}\n assert c.get('/api/projects/p/export').status_code==401\n'''
+ env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{db}'}
+ r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
+ assert (hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns)==before

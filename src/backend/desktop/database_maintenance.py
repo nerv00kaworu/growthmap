@@ -1,8 +1,7 @@
 """Offline SQLite maintenance used by the packaged desktop sidecar."""
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
-
-CURRENT_USER_VERSION=2
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, OBJECT_SQL, column_matches, normalize_sql
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
@@ -37,18 +36,10 @@ EXTENSION_SQL_SHA256={
  'trg_action_receipt_immutable_delete':'548fac38db24707efa603837d5dd8917d9620a070e1188fe188072699ece56c5','trg_action_receipt_immutable_update':'ea6caa6f0b194ae5dab11a00446504b54e81a33d1531214d8d381146fa955fd3','trg_action_receipt_pins_before_insert':'03ee702b611f09a003f789af8948d7d43af3719d523bcea6553e7c332d383fa1','trg_active_content_pack_delete':'e74387f247a8493046d793026388aa34ca202b6a5e7400defc23dd9262f5257b','trg_active_content_pack_update':'d2de23359b1db95468cd78e2815dc42e224ef3f2245b6566559c7863239a7cce','trg_active_pack_choice_delete':'cb265ab617dc1a4bee811eb9771c75c6eb88f997ed8f33efdd22009518be4092','trg_active_pack_choice_insert':'f0b87077b0079bea9c08360a12ac4be7b6547baf7565b963ab8ab463ab585793','trg_active_pack_choice_update':'466fc312307c7b3e29f684328ee791c79122b232cef3c4af7b015fb46efb2f38','trg_active_pack_event_delete':'d6c97f74db0f3e6eee55a0bbcac838a61158a8cc3a7bcd3a5f9bb503f25d87a9','trg_active_pack_event_insert':'dbf485a307790f85e683123d79b63adcbb9637984fc53dd437dc2edc8ad387bf','trg_active_pack_event_update':'4e487b47217bc748ac08ca5e53641b0ac33415bc7d6c9b3be96ddbc2ee4f509c','trg_content_release_immutable_delete':'423726d14a733cba383650a657fead038200531ef6cfd8efe43c5f3f78bc8bda','trg_content_release_immutable_update':'42536a2dc970c32cfa5444e1c75922d73b48ce087f3641948ca8237253f14d60','trg_grant_immutable_delete':'fa40a0550c45fe93bffa1411a14a15111bedc4244094ab14ce0c5ea7a4265b83','trg_grant_immutable_update':'96e290900bd9524f3a7fd828a95dcdba2c149671a304594901965d8a2be1bfef','trg_player_idempotency_immutable_delete':'fe4c97a6adeb47e162b74183b3f133646b77ebcf8db421b8a0a96f8a80798b79','trg_player_idempotency_immutable_update':'3e8c2d25625ad3f23345c48fdb71a0632aa3cd90f85f0d446a7dfc163dc039cf','trg_replay_pins_immutable_delete':'129b01e392f94986a52adbec93b766b8eb0f623510e0e1817e6ebfb8314fb33d','trg_replay_pins_immutable_update':'447c449e18946d8188c7cedfb2026905efb0ceceb209e27f93bfc79777f3a64c','trg_replay_pins_release_before_insert':'4c66b35de4c75ef49e8a9ebbafb129df82552e85d67340ffbca2af2faa12ee0f','trg_resolution_immutable_delete':'0a942781f3faf2d27fa852cda8038f881b76d84dadeb7fc599157f0e55f0bc43','trg_resolution_immutable_update':'e1c75e17f5990a80546209c6b3154756f170f15476deb4a9fadd67a91144713e',
 }
 REQUIRED={
- "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
+ "projects":{"id","name","status","created_at","updated_at"},
+ "nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
-# Must stay aligned with db.migrations.COLUMNS. The desktop preflight may only
-# declare a schema current when ordinary ORM reads/exports have every column
-# added by the authoring compatibility migration.
-COMPATIBILITY_COLUMNS=(
- ("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),
- ("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),
- ("edges","revision"),("content_blocks","revision"),("branches","revision"),
-)
-COMPATIBILITY_OBJECTS=("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update")
 
 def _attributes(path):
  if os.name!="nt": return 0
@@ -139,14 +130,19 @@ def schema_status(path):
  if not source.exists(): return {"exists":False,"migrationNeeded":True,"reasons":["database_missing"]}
  connection,meta=_open_validated(source)
  try:
-  columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("projects","nodes","edges","content_blocks","branches","provider_configs")}
-  objects={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('index','trigger')")}
   reasons=[]
-  for table,column in COMPATIBILITY_COLUMNS:
-   if column not in columns[table]: reasons.append(f"column:{table}.{column}")
-  for name in COMPATIBILITY_OBJECTS:
-   if name not in objects: reasons.append(f"object:{name}")
-  if meta["userVersion"]!=CURRENT_USER_VERSION: reasons.append(f"user_version:{meta['userVersion']}")
+  for table,required in (("projects",{"description","goal","root_node_id"}),("nodes",{"summary"})):
+   actual={row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+   for column in sorted(required-actual):reasons.append(f"read_column:{table}.{column}")
+  for spec in COLUMNS:
+   row=next((item for item in connection.execute(f'PRAGMA table_info("{spec[0]}")') if item[1]==spec[1]),None)
+   if row is None:reasons.append(f"column:{spec[0]}.{spec[1]}")
+   elif not column_matches(row,spec):reasons.append(f"incompatible_column:{spec[0]}.{spec[1]}")
+  for name,sql in OBJECT_SQL.items():
+   row=connection.execute("SELECT sql FROM sqlite_schema WHERE name=?",(name,)).fetchone()
+   if row is None:reasons.append(f"object:{name}")
+   elif normalize_sql(row[0])!=normalize_sql(sql):reasons.append(f"incompatible_object:{name}")
+  if meta["userVersion"]!=CURRENT_USER_VERSION:reasons.append(f"user_version:{meta['userVersion']}")
   return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
  finally: connection.close()
 

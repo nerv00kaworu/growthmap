@@ -9,7 +9,7 @@ CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,created_by TEXT,created_at DATETIME,updated_at DATETIME);
 CREATE TABLE suggestions(id TEXT PRIMARY KEY,project_id TEXT,target_node_id TEXT,action_type TEXT,status TEXT,payload JSON,provider_id TEXT,provider_model TEXT,cost_estimate FLOAT,created_at DATETIME,reviewed_at DATETIME,reviewed_by TEXT);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
-CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,endpoint TEXT,auth_type TEXT,secret_env_key VARCHAR(128),model_name TEXT,capabilities JSON,cost_level TEXT,enabled BOOLEAN,settings JSON,created_at DATETIME,updated_at DATETIME);
+CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,endpoint TEXT,auth_type TEXT,secret_env_key VARCHAR(128) DEFAULT '',model_name TEXT,capabilities JSON,cost_level TEXT,enabled BOOLEAN,settings JSON,created_at DATETIME,updated_at DATETIME);
 CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT,name TEXT,description TEXT,source_node_id TEXT,status TEXT,created_at DATETIME);
 INSERT INTO projects VALUES('p','Legacy Project','kept description','kept goal','root','active','{}','2020-01-01','2020-01-01');
 INSERT INTO nodes VALUES('root','p',NULL,'Root','','concept','active','seed',0,0.5,'','','','','','','[]','human','human',0,0,'draft','[]','2020-01-01','2020-01-01');

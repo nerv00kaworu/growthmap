@@ -1318,7 +1318,9 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"),{"project_id":project_id})).mappings().all()
         blocks_by_node:dict[str,list]={}
         for row in block_rows:
-            item=dict(row);item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {})
+            item=dict(row)
+            try: item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {})
+            except (json.JSONDecodeError,TypeError): raise HTTPException(409,"Project data is not compatible with Markdown export")
             blocks_by_node.setdefault(str(item["node_id"]),[]).append(SimpleNamespace(**item))
     else:
         project = await db.get(Project, project_id)

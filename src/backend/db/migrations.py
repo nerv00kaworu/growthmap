@@ -1,60 +1,38 @@
-"""Ordered fail-closed SQLite schema migrations.
-
-Migration-owned objects are introspected rather than created under broad exception
-handlers. The caller supplies a transaction; ``user_version`` advances only after
-all columns and objects validate.
-"""
-import os, re
+"""Ordered fail-closed SQLite schema migrations."""
+import os
 from sqlalchemy import text
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, column_matches, normalize_sql
 
-CURRENT_USER_VERSION = 2
-COLUMNS = (
-    ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
-    ("nodes", "workflow_status", "VARCHAR(20)", True, "draft", "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'"),
-    ("nodes", "file_paths", "JSON", False, "[]", "ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'"),
-    ("provider_configs", "secret_env_key", "VARCHAR(128)", False, None, "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''"),
-    ("projects", "revision", "INTEGER", True, "1", "ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-    ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-    ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-    ("content_blocks", "revision", "INTEGER", True, "1", "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-    ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-)
-INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"
-TRIGGERS = {
-"trg_edges_one_mainline_insert": """CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1); END""",
-"trg_edges_one_mainline_update": """CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id, relation_type, is_mainline ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1 AND id != OLD.id); END""",
-"trg_edges_normalize_null_insert": """CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
-"trg_edges_normalize_null_update": """CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight, note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
-}
+async def _column(conn, table, name):
+    rows=(await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()
+    return next((row for row in rows if row[1]==name),None)
 
-def _norm(sql): return re.sub(r"\s+", " ", sql.strip()).replace("IF NOT EXISTS ", "").lower()
-def _default(value): return None if value is None else str(value).strip("()").strip("'\"")
-
-async def _validate_column(conn, table, name, expected_type, not_null, default):
-    rows = (await conn.execute(text(f'PRAGMA table_info("{table}")'))).mappings().all()
-    row = next((r for r in rows if r["name"] == name), None)
-    if not row: return False
-    if str(row["type"]).upper() != expected_type or bool(row["notnull"]) != not_null or _default(row["dflt_value"]) != default:
-        raise RuntimeError(f"incompatible migration column {table}.{name}")
+async def _validate_column(conn,spec):
+    row=await _column(conn,spec[0],spec[1])
+    if row is None:return False
+    if not column_matches(row,spec):raise RuntimeError(f"incompatible migration column {spec[0]}.{spec[1]}")
     return True
 
+async def _validate_objects(conn,create_missing):
+    expected={"ux_edges_one_mainline_per_parent":("index",INDEX_SQL),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
+    for name,(kind,sql) in expected.items():
+        row=(await conn.execute(text("SELECT type,sql FROM sqlite_schema WHERE name=:name"),{"name":name})).first()
+        if row is None:
+            if not create_missing:raise RuntimeError(f"missing migration {kind} {name}")
+            await conn.execute(text(sql));continue
+        if row[0]!=kind or normalize_sql(row[1])!=normalize_sql(sql):raise RuntimeError(f"incompatible migration {kind} {name}")
+
 async def migrate_sqlite(conn):
-    version = int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
-    if version > CURRENT_USER_VERSION: raise RuntimeError("database schema is newer than this application")
-    if version < CURRENT_USER_VERSION:
-        for ordinal, spec in enumerate(COLUMNS, 1):
-            if not await _validate_column(conn, *spec[:5]):
-                await conn.execute(text(spec[5]))
-            if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER") == str(ordinal):
-                raise RuntimeError("injected migration failure")
-        row = (await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='index' AND name='ux_edges_one_mainline_per_parent'"))).scalar()
-        if row is None: await conn.execute(text(INDEX_SQL))
-        elif _norm(row) != _norm(INDEX_SQL): raise RuntimeError("incompatible migration index ux_edges_one_mainline_per_parent")
-        for name, sql in TRIGGERS.items():
-            existing = (await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name=:name"), {"name":name})).scalar()
-            if existing is None: await conn.execute(text(sql))
-            elif _norm(existing) != _norm(sql): raise RuntimeError(f"incompatible migration trigger {name}")
-        for spec in COLUMNS: assert await _validate_column(conn, *spec[:5])
-        await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
-    final = int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
-    if final != CURRENT_USER_VERSION: raise RuntimeError("migration version did not validate")
+    version=int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
+    if version>CURRENT_USER_VERSION:raise RuntimeError("database schema is newer than this application")
+    upgrading=version<CURRENT_USER_VERSION
+    for ordinal,spec in enumerate(COLUMNS,1):
+        present=await _validate_column(conn,spec)
+        if not present:
+            if not upgrading:raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
+            await conn.execute(text(spec[5]))
+        if upgrading and os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER")==str(ordinal):raise RuntimeError("injected migration failure")
+    await _validate_objects(conn,upgrading)
+    for spec in COLUMNS:assert await _validate_column(conn,spec)
+    if upgrading:await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
+    if int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)!=CURRENT_USER_VERSION:raise RuntimeError("migration version did not validate")
