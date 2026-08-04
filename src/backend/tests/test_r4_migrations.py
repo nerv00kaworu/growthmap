@@ -6,13 +6,13 @@ from db.migrations import migrate_sqlite, CURRENT_USER_VERSION
 from db.schema_contract import ORM_READ_COLUMNS
 
 OLD = """
-CREATE TABLE projects(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE branches(id TEXT PRIMARY KEY);
-CREATE TABLE nodes(id TEXT PRIMARY KEY, branch_id VARCHAR(36), workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft', file_paths JSON DEFAULT '[]');
-CREATE TABLE edges(id TEXT PRIMARY KEY, from_node_id TEXT, relation_type TEXT, is_mainline BOOLEAN, weight FLOAT, note TEXT);
-CREATE TABLE content_blocks(id TEXT PRIMARY KEY);
+CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,branch_id VARCHAR(36),workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME,updated_at DATETIME);
+CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,is_mainline BOOLEAN NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',created_at DATETIME);
+CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME,updated_at DATETIME);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128) DEFAULT '');
-INSERT INTO projects VALUES ('p',7);
+INSERT INTO projects(id,name,status,revision) VALUES ('p','kept','active',7);
 """
 
 async def db(tmp_path, sql=OLD):
@@ -28,7 +28,7 @@ async def db(tmp_path, sql=OLD):
                 if name not in present:
                     spec=next((item for item in __import__('db.schema_contract',fromlist=['COLUMNS']).COLUMNS if item[0]==table and item[1]==name),None)
                     if spec:continue
-                    declared=expected if isinstance(expected,str) else expected[0]
+                    declared=expected[0] if isinstance(expected[0],str) else expected[0][0]
                     await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {declared}'))
     return engine
 
@@ -65,7 +65,7 @@ async def _injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monk
 
 
 async def _version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path):
-    sql = OLD.replace("revision INTEGER NOT NULL DEFAULT 1", "name TEXT", 1) + "\nPRAGMA user_version=1;\nINSERT INTO projects VALUES ('legacy','kept');\n"
+    sql = OLD.replace("revision INTEGER NOT NULL DEFAULT 1", "legacy_marker TEXT", 1).replace(",revision) VALUES ('p','kept','active',7)",",legacy_marker) VALUES ('p','kept','active','kept')") + "\nPRAGMA user_version=1;\n"
     engine = await db(tmp_path, sql)
     async with engine.begin() as conn:
         before = {table:(await conn.execute(text(f"select count(*) from {table}"))).scalar() for table in ("projects","nodes","edges","content_blocks")}
@@ -74,7 +74,7 @@ async def _version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(
     async with engine.connect() as conn:
         after = {table:(await conn.execute(text(f"select count(*) from {table}"))).scalar() for table in before}
         assert after == before
-        assert (await conn.execute(text("select name,revision from projects where id='legacy'"))).one() == ("kept",1)
+        assert (await conn.execute(text("select name,revision from projects where id='p'"))).one() == ("kept",1)
         assert (await conn.execute(text("pragma user_version"))).scalar() == CURRENT_USER_VERSION
     await engine.dispose()
 

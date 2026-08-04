@@ -2,13 +2,12 @@
 import re
 
 CURRENT_USER_VERSION = 2
+# table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
     ("nodes", "workflow_status", "VARCHAR(20)", True, "draft", "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'"),
     ("nodes", "file_paths", "JSON", False, "[]", "ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'"),
-    # Existing fresh SQLAlchemy schemas historically omitted a server default;
-    # the v2 ALTER path adds '' so legacy rows receive a deterministic value.
-    ("provider_configs", "secret_env_key", "VARCHAR(128)", False, (None, ""), "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''"),
+    ("provider_configs", "secret_env_key", "VARCHAR(128)", False, "", "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''"),
     ("projects", "revision", "INTEGER", True, "1", "ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
@@ -24,35 +23,18 @@ TRIGGERS = {
 }
 OBJECT_SQL = {"ux_edges_one_mainline_per_parent": INDEX_SQL, **TRIGGERS}
 
-# Every column selected by the four ORM entities used by ordinary authoring
-# reads and writable Markdown export. Types are normalized to SQLite affinity;
-# legacy VARCHAR/TEXT and DATETIME/TEXT declarations are intentionally accepted.
+# affinity, NOT NULL, normalized declared default. Primary-key NOT NULL varies
+# between equivalent SQLite declarations, so id columns intentionally allow both.
+def _s(affinity, not_null=False, default=None): return (affinity, not_null, default)
 ORM_READ_COLUMNS = {
-    "projects": {
-        "id":"TEXT", "name":"TEXT", "description":"TEXT", "goal":"TEXT",
-        "root_node_id":"TEXT", "status":"TEXT", "settings":"JSON",
-        "created_at":("TEXT","NUMERIC"), "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
-    },
-    "nodes": {
-        "id":"TEXT", "project_id":"TEXT", "title":"TEXT", "summary":"TEXT",
-        "node_type":"TEXT", "status":"TEXT", "maturity":"TEXT", "priority":"INTEGER",
-        "confidence":"REAL", "description":"TEXT", "rules_text":"TEXT",
-        "constraints_text":"TEXT", "examples_text":"TEXT", "questions_text":"TEXT",
-        "decision_notes":"TEXT", "tags":"JSON", "workflow_status":"TEXT",
-        "file_paths":"JSON", "branch_id":"TEXT", "created_by":"TEXT",
-        "last_edited_by":"TEXT", "position_x":"REAL", "position_y":"REAL",
-        "created_at":("TEXT","NUMERIC"), "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
-    },
-    "edges": {
-        "id":"TEXT", "project_id":"TEXT", "from_node_id":"TEXT", "to_node_id":"TEXT",
-        "relation_type":"TEXT", "weight":"REAL", "note":"TEXT", "is_mainline":("INTEGER","NUMERIC"),
-        "created_at":("TEXT","NUMERIC"), "revision":"INTEGER",
-    },
-    "content_blocks": {
-        "id":"TEXT", "node_id":"TEXT", "block_type":"TEXT", "content":"JSON",
-        "order_index":"INTEGER", "created_by":"TEXT", "created_at":("TEXT","NUMERIC"),
-        "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
-    },
+ "projects": {
+  "id":_s("TEXT",(False,True)),"name":_s("TEXT",(False,True)),"description":_s("TEXT"),"goal":_s("TEXT"),"root_node_id":_s("TEXT"),"status":_s("TEXT",(False,True)),"settings":_s("JSON"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+ "nodes": {
+  "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"title":_s("TEXT",(False,True)),"summary":_s("TEXT"),"node_type":_s("TEXT",(False,True)),"status":_s("TEXT",(False,True)),"maturity":_s("TEXT",(False,True)),"priority":_s("INTEGER"),"confidence":_s("REAL"),"description":_s("TEXT"),"rules_text":_s("TEXT"),"constraints_text":_s("TEXT"),"examples_text":_s("TEXT"),"questions_text":_s("TEXT"),"decision_notes":_s("TEXT"),"tags":_s("JSON"),"workflow_status":_s("TEXT",True,"draft"),"file_paths":_s("JSON",False,"[]"),"branch_id":_s("TEXT"),"created_by":_s("TEXT"),"last_edited_by":_s("TEXT"),"position_x":_s("REAL"),"position_y":_s("REAL"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+ "edges": {
+  "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"from_node_id":_s("TEXT",(False,True)),"to_node_id":_s("TEXT",(False,True)),"relation_type":_s("TEXT",(False,True)),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),(False,True),(None,"0")),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+ "content_blocks": {
+  "id":_s("TEXT",(False,True)),"node_id":_s("TEXT",(False,True)),"block_type":_s("TEXT",(False,True)),"content":_s("JSON",(False,True)),"order_index":_s("INTEGER",(False,True)),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
 }
 
 
@@ -66,24 +48,29 @@ def sqlite_affinity(declared_type):
     return "NUMERIC"
 
 
-def orm_column_problem(row, expected):
+def normalize_default(value):
+    if value is None:return None
+    value=str(value).strip()
+    while len(value)>=2 and value[0]=='(' and value[-1]==')':value=value[1:-1].strip()
+    if len(value)>=2 and value[0] in "'\"" and value[-1]==value[0]:value=value[1:-1].replace(value[0]*2,value[0])
+    return value
+
+
+def orm_column_problem(row, spec):
     if row is None:return "missing"
-    allowed=expected if isinstance(expected,tuple) else (expected,)
-    return None if sqlite_affinity(row[2]) in allowed else "incompatible"
+    affinities=spec[0] if isinstance(spec[0],tuple) else (spec[0],)
+    nulls=spec[1] if isinstance(spec[1],tuple) else (spec[1],)
+    if sqlite_affinity(row[2]) not in affinities:return "incompatible"
+    if bool(row[3]) not in nulls:return "incompatible"
+    defaults=spec[2] if isinstance(spec[2],tuple) else (spec[2],)
+    return None if normalize_default(row[4]) in defaults else "incompatible"
 
 
 def normalize_sql(sql):
-    value = re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", sql or "", flags=re.I)
-    value = re.sub(r"\s+", " ", value.strip()).lower()
-    return re.sub(r"\s*([(),;=!])\s*", r"\1", value)
+    value=re.sub(r"\bIF\s+NOT\s+EXISTS\b","",sql or "",flags=re.I)
+    value=re.sub(r"\s+"," ",value.strip()).lower()
+    return re.sub(r"\s*([(),;=!])\s*",r"\1",value)
 
 
-def normalize_default(value):
-    if value is None:
-        return None
-    return str(value).strip("()").strip("'\"")
-
-
-def column_matches(row, spec):
-    expected_default=spec[4] if isinstance(spec[4],tuple) else (spec[4],)
-    return str(row[2]).upper()==spec[2] and bool(row[3])==spec[3] and normalize_default(row[4]) in expected_default
+def column_matches(row,spec):
+    return str(row[2]).upper()==spec[2] and bool(row[3])==spec[3] and normalize_default(row[4])==spec[4]

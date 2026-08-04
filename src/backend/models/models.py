@@ -169,7 +169,7 @@ class ProviderConfig(Base):
     provider_type = Column(String(30), nullable=False)
     endpoint = Column(Text, default="")
     auth_type = Column(String(20), default="env")
-    secret_env_key = Column(String(128), default="")
+    secret_env_key = Column(String(128), default="", server_default="")
     model_name = Column(Text, default="")
     capabilities = Column(JSON, default=[])
     cost_level = Column(String(10), default="low")

@@ -1305,6 +1305,11 @@ def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
     lines.append("")
     return lines
 
+def _is_json_deserialization_error(error: Exception) -> bool:
+    if isinstance(error,json.JSONDecodeError):return True
+    return isinstance(error,StatementError) and isinstance(error.orig,json.JSONDecodeError)
+
+
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
     """Export entire project tree as Markdown document (bulk-loaded)."""
@@ -1336,7 +1341,7 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
                 blocks_result = await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index))
                 for b in blocks_result.scalars().all(): blocks_by_node.setdefault(str(b.node_id), []).append(b)
             except (json.JSONDecodeError,StatementError) as error:
-                if isinstance(error,StatementError) and not isinstance(error.orig,(json.JSONDecodeError,TypeError,ValueError)):raise
+                if not _is_json_deserialization_error(error):raise
                 raise HTTPException(409,"Project data is not compatible with Markdown export") from error
     if not project.root_node_id:
         raise HTTPException(404, "No root node")

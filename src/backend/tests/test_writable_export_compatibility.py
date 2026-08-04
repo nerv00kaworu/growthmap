@@ -1,5 +1,8 @@
-import os,sqlite3,subprocess,sys
+import json,os,sqlite3,subprocess,sys
 from pathlib import Path
+import pytest
+from sqlalchemy.exc import StatementError
+from api.routes import _is_json_deserialization_error
 
 
 def test_writable_export_malformed_json_is_controlled_and_auth_is_preserved(tmp_path):
@@ -8,3 +11,13 @@ def test_writable_export_malformed_json_is_controlled_and_auth_is_preserved(tmp_
  env={**os.environ,'DATABASE_URL':f'sqlite+aiosqlite:///{db}','RAW_DB':str(db),'APP_ENV':'test'}
  result=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True)
  assert result.returncode==0,result.stdout+result.stderr
+
+@pytest.mark.parametrize('original',[ValueError('unrelated'),TypeError('unrelated')])
+def test_unrelated_statement_processor_errors_are_not_json_compatibility_errors(original):
+ error=StatementError('processor failed','select 1',(),original)
+ assert _is_json_deserialization_error(error) is False
+
+def test_json_decode_error_is_recognized_narrowly():
+ original=json.JSONDecodeError('bad','x',0)
+ assert _is_json_deserialization_error(original) is True
+ assert _is_json_deserialization_error(StatementError('processor failed','select 1',(),original)) is True

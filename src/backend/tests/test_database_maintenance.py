@@ -73,7 +73,7 @@ def _make_current(path):
  for table,columns in contract.ORM_READ_COLUMNS.items():
   present={row[1] for row in c.execute(f'pragma table_info({table})')}
   for name,expected in columns.items():
-   if name not in present:c.execute(f'ALTER TABLE {table} ADD COLUMN {name} {expected if isinstance(expected,str) else expected[0]}')
+   if name not in present:c.execute(f'ALTER TABLE {table} ADD COLUMN {name} {expected[0] if isinstance(expected[0],str) else expected[0][0]}')
  for sql in ("ALTER TABLE edges ADD COLUMN is_mainline BOOLEAN DEFAULT 0","ALTER TABLE edges ADD COLUMN weight FLOAT DEFAULT 1","ALTER TABLE edges ADD COLUMN note TEXT DEFAULT ''"):
   try:c.execute(sql)
   except sqlite3.OperationalError as error:
@@ -121,3 +121,25 @@ def test_installed_canonical_abyss_database_contract_when_supplied():
 def test_validated_snapshot_rejects_hardlink_and_uses_combined_validation(tmp_path):
  p=tmp_path/'a.db';fixture(p);hard=tmp_path/'hard.db';os.link(p,hard)
  with pytest.raises(ValueError,match='single-link'):dm.validated_snapshot(hard,tmp_path/'out.db')
+
+@pytest.mark.parametrize('table,column,ddl',[
+ ('projects','settings',"ALTER TABLE projects DROP COLUMN settings;ALTER TABLE projects ADD COLUMN settings JSON DEFAULT '{}';"),
+ ('nodes','priority',"ALTER TABLE nodes DROP COLUMN priority;ALTER TABLE nodes ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;"),
+ ('edges','created_at',"ALTER TABLE edges DROP COLUMN created_at;ALTER TABLE edges ADD COLUMN created_at DATETIME DEFAULT '';"),
+ ('content_blocks','created_by',"ALTER TABLE content_blocks DROP COLUMN created_by;ALTER TABLE content_blocks ADD COLUMN created_by TEXT NOT NULL DEFAULT 'human';"),
+ ('provider_configs','secret_env_key',"ALTER TABLE provider_configs DROP COLUMN secret_env_key;ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128);"),
+])
+def test_wrong_nullability_or_default_is_preflighted_and_migration_fails_closed(tmp_path,table,column,ddl):
+ import asyncio
+ from sqlalchemy.ext.asyncio import create_async_engine
+ from db.migrations import migrate_sqlite
+ p=tmp_path/'wrong-contract.db';fixture(p);_make_current(p);c=sqlite3.connect(p);c.executescript(ddl);c.close()
+ status=dm.schema_status(p);assert status['migrationNeeded'] is True
+ assert any(column in reason for reason in status['reasons'])
+ async def run():
+  engine=create_async_engine(f'sqlite+aiosqlite:///{p}')
+  with pytest.raises(RuntimeError,match='incompatible'):
+   async with engine.begin() as connection:await migrate_sqlite(connection)
+  async with engine.connect() as connection:assert (await connection.exec_driver_sql('pragma user_version')).scalar()==2
+  await engine.dispose()
+ asyncio.run(run())

@@ -31,7 +31,7 @@ with TestClient(app) as c:
  nodes=c.get('/api/projects/fixture/nodes');assert nodes.status_code==200,nodes.text;node=nodes.json()[0]
  assert c.get('/api/nodes/'+node['id']).status_code==200
  blocks=c.get('/api/nodes/'+node['id']+'/blocks');assert blocks.status_code==200,blocks.text;assert blocks.json()[0]['content']['body']=='fixture body'
- assert c.get('/api/projects/fixture/edges').status_code==200
+ edges=c.get('/api/projects/fixture/edges');assert edges.status_code==200,edges.text;edge=edges.json()[0];assert (edge['id'],edge['from_node_id'],edge['to_node_id'],edge['relation_type'])==('fixture-edge','root','child','child_of')
  patched=c.patch('/api/nodes/'+node['id'],json={'expected_project_revision':c.get('/api/projects/fixture').json()['revision'],'expected_revision':node['revision'],'summary':'committed'});assert patched.status_code==200,patched.text
  md=c.get('/api/projects/fixture/export');assert md.status_code==200,md.text;assert 'committed' in md.text and 'fixture body' in md.text
  print(c.get('/api/projects/fixture').json()['name'])`,f.live],{encoding:'utf8',cwd:path.resolve(__dirname,'../../src/backend')});assert.equal(out.status,0,out.stderr);assert.equal(out.stdout.trim(),'Desktop Fixture');assert.equal((await manager.list()).length,1,'replacement rollback backup must remain valid managed evidence');});

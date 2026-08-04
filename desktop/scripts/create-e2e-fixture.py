@@ -15,11 +15,11 @@ if len(sys.argv)!=2: raise SystemExit("usage: create-e2e-fixture.py TEMP_FIXTURE
 out=fixture_output(sys.argv[1]); c=sqlite3.connect(out)
 # Canonical fixture surface required by desktop validation and schema preflight.
 c.executescript("""
-CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT DEFAULT '',goal TEXT DEFAULT '',root_node_id TEXT,status TEXT NOT NULL DEFAULT 'active',settings JSON DEFAULT '{}',created_at TEXT,updated_at TEXT,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT,source_node_id TEXT,name TEXT,revision INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT DEFAULT '',node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT,priority INTEGER DEFAULT 0,confidence FLOAT DEFAULT 0.5,description TEXT DEFAULT '',rules_text TEXT DEFAULT '',constraints_text TEXT DEFAULT '',examples_text TEXT DEFAULT '',questions_text TEXT DEFAULT '',decision_notes TEXT DEFAULT '',tags JSON DEFAULT '[]',workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',branch_id VARCHAR(36),created_by TEXT DEFAULT 'human',last_edited_by TEXT DEFAULT 'human',position_x FLOAT DEFAULT 0,position_y FLOAT DEFAULT 0,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',is_mainline BOOLEAN NOT NULL DEFAULT 0,created_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,created_by TEXT DEFAULT 'human',created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',branch_id VARCHAR(36),created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT,weight FLOAT DEFAULT 1.0,note TEXT,is_mainline BOOLEAN NOT NULL,created_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER,created_by TEXT,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '');
 CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of' AND is_mainline=1;
@@ -30,9 +30,11 @@ CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight,note ON ed
 PRAGMA user_version=2;
 """)
 created_at="2026-08-03T00:00:00+00:00"
-c.execute("INSERT INTO projects(id,name,root_node_id,status,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",('fixture','Desktop Fixture','root','active',1,created_at,created_at))
-c.execute("INSERT INTO nodes(id,project_id,title,node_type,status,maturity,workflow_status,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?)",('root','fixture','Root','concept','active','seed','draft',created_at,created_at,1))
-c.execute("INSERT INTO content_blocks(id,node_id,block_type,content,order_index,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?)",('block','root','note','{\"body\":\"fixture body\"}',0,created_at,created_at,1));c.commit()
+c.execute("INSERT INTO projects(id,name,description,goal,root_node_id,status,settings,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",('fixture','Desktop Fixture','','','root','active','{}',1,created_at,created_at))
+c.execute("INSERT INTO nodes(id,project_id,title,summary,node_type,status,maturity,workflow_status,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)",('root','fixture','Root','','concept','active','seed','draft',created_at,created_at,1))
+c.execute("INSERT INTO nodes(id,project_id,title,summary,node_type,status,maturity,workflow_status,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)",('child','fixture','Child','','idea','active','seed','draft',created_at,created_at,1))
+c.execute("INSERT INTO edges(id,project_id,from_node_id,to_node_id,relation_type,weight,note,is_mainline,created_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?)",('fixture-edge','fixture','root','child','child_of',1.0,'',1,created_at,1))
+c.execute("INSERT INTO content_blocks(id,node_id,block_type,content,order_index,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?)",('block','root','note','{\"body\":\"fixture body\"}',0,'human',created_at,created_at,1));c.commit()
 row=c.execute("SELECT id,name,status,revision,created_at,updated_at FROM projects WHERE id='fixture'").fetchone()
 if row != ('fixture','Desktop Fixture','active',1,created_at,created_at): raise SystemExit("E2E fixture project contract mismatch")
 c.close()
