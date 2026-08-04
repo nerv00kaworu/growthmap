@@ -37,11 +37,73 @@ function replaceRoot(value, root) {
   }
   return out;
 }
+function decodeQueryComponentOnce(value) {
+  if (/%(?![0-9a-f]{2})/i.test(value)) return null;
+  try { return decodeURIComponent(value.replaceAll("+", " ")); } catch { return null; }
+}
+function rootRelativePath(value, root) {
+  const candidate = slash(value), normalizedRoot = slash(root).replace(/\/+$/, "") || "/";
+  const insensitive = windowsRoot(normalizedRoot);
+  const left = insensitive ? candidate.toLowerCase() : candidate;
+  const right = insensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (left === right) return "";
+  if (!left.startsWith(`${right}/`)) return null;
+  return candidate.slice(normalizedRoot.length + 1);
+}
+function canonicalModuleOption(value, root) {
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return null; }
+  if (!parsed || Object.getPrototypeOf(parsed) !== Object.prototype
+    || Object.keys(parsed).some((key) => key !== "request" && key !== "ids")
+    || typeof parsed.request !== "string" || !Array.isArray(parsed.ids)
+    || parsed.ids.some((id) => typeof id !== "string")) return null;
+  const relative = rootRelativePath(parsed.request, root);
+  if (relative !== null) parsed.request = `<PROJECT_ROOT>${relative ? `/${relative}` : ""}`;
+  return JSON.stringify({ request: parsed.request, ids: parsed.ids });
+}
+function canonicalFlightQuery(query, root) {
+  if (!query || query.includes("#")) return null;
+  const entries = [];
+  for (const pair of query.split("&")) {
+    const separator = pair.indexOf("=");
+    if (separator < 1) return null;
+    const key = decodeQueryComponentOnce(pair.slice(0, separator));
+    const value = decodeQueryComponentOnce(pair.slice(separator + 1));
+    if (key === null || value === null || (key !== "modules" && key !== "server")) return null;
+    entries.push([key, value]);
+  }
+  const modules = entries.filter(([key]) => key === "modules");
+  const servers = entries.filter(([key]) => key === "server");
+  if (!modules.length || servers.length !== 1 || !/^(?:true|false)$/.test(servers[0][1])) return null;
+  const canonicalModules = modules.map(([, value]) => canonicalModuleOption(value, root));
+  if (canonicalModules.some((value) => value === null)) return null;
+  return [...canonicalModules.map((value) => `modules=${encodeURIComponent(value)}`),
+    `server=${servers[0][1]}`].join("&");
+}
+/** Canonicalize only Next 15.5's exact flight client entry loader option schema. */
+export function canonicalizeNextFlightEntryIdentifier(identifier, root) {
+  const input = String(identifier);
+  const loader = /(^|[!|])((?:[^?!|]*[\\/])?next-flight-client-entry-loader\.js)\?([^!|]+)(?=!)/gi;
+  let found = false, failed = false;
+  const output = input.replace(loader, (whole, boundary, loaderPath, query) => {
+    found = true;
+    const canonical = canonicalFlightQuery(query, root);
+    if (canonical === null) { failed = true; return whole; }
+    return `${boundary}${loaderPath}?${canonical}`;
+  });
+  if (failed) return input;
+  if (found) return output;
+  const raw = /^next-flight-client-entry-loader\?([^!|]+)!$/.exec(input);
+  if (!raw) return input;
+  const canonical = canonicalFlightQuery(raw[1], root);
+  return canonical === null ? input : `next-flight-client-entry-loader?${canonical}!`;
+}
 export function normalizeModuleIdentifier(identifier, root) {
   const normalizedRoot = slash(root).replace(/\/+$/, "") || "/";
+  const structured = canonicalizeNextFlightEntryIdentifier(identifier, normalizedRoot);
   return normalizedRoot === "/"
-    ? replaceFilesystemRoot(identifier)
-    : replaceRoot(identifier, normalizedRoot);
+    ? replaceFilesystemRoot(structured)
+    : replaceRoot(structured, normalizedRoot);
 }
 function compareTotal(a, b) {
   // JS relational string comparison is a total UTF-16 code-unit order: unlike

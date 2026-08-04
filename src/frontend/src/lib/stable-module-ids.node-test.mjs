@@ -185,3 +185,40 @@ test("total ordering includes every metadata field and chunk identity",()=>{
  const chunks=(value)=>({key:value,use:value,identifier(){return `${root}/same.ts`}});
  assert.deepEqual(run([chunks("z"),chunks("a")]),run([chunks("a"),chunks("z")]));
 });
+test("extracted client module flight metadata canonicalizes Windows JSON escapes",async()=>{
+ const {canonicalizeNextFlightEntryIdentifier}=await import("./stable-module-ids.mjs");
+ const posixRoot="/home/runner/work/growthmap/growthmap/src/frontend",windowsRoot="D:/a/growthmap/growthmap/src/frontend";
+ const option=(request,ids)=>encodeURIComponent(JSON.stringify({request,ids}));
+ const posixModules=[
+  [`${posixRoot}/src/app/page.tsx`,["default"]],
+  [`${posixRoot}/src/lib/node-history-loader.ts`,["freshNodeHistoryView","loadNodeHistory","NodeHistoryRequestCoordinator","visibleNodeHistoryView"]],
+ ];
+ const windowsModules=[
+  ["D:\\a\\growthmap\\growthmap\\src\\frontend\\src\\app\\page.tsx",["default"]],
+  ["D:\\a\\growthmap\\growthmap\\src\\frontend\\src\\lib\\node-history-loader.ts",["freshNodeHistoryView","loadNodeHistory","NodeHistoryRequestCoordinator","visibleNodeHistoryView"]],
+ ];
+ const request=(loaderRoot,modules,serverFirst=false)=>{
+  const encoded=modules.map(([path,ids])=>`modules=${option(path,ids)}`);
+  const query=serverFirst?["server=false",...encoded]:[...encoded,"server=false"];
+  return `${loaderRoot}/node_modules/next/dist/build/webpack/loaders/next-flight-client-entry-loader.js?${query.join("&")}!`;
+ };
+ const posix=request(posixRoot,posixModules),windows=request("D:\\a\\growthmap\\growthmap\\src\\frontend",windowsModules,true);
+ const normalized=normalizeModuleIdentifier(posix,posixRoot);
+ assert.equal(normalizeModuleIdentifier(windows,windowsRoot),normalized);
+ assert.doesNotMatch(normalized,/%5c|growthmap|[A-Z]%3A/i);
+ const rawWindows=`next-flight-client-entry-loader?${windows.split("?")[1]}`;
+ const rawPosix=`next-flight-client-entry-loader?${posix.split("?")[1]}`;
+ assert.equal(canonicalizeNextFlightEntryIdentifier(rawWindows,windowsRoot),canonicalizeNextFlightEntryIdentifier(rawPosix,posixRoot));
+});
+test("flight metadata normalization stays closed-schema and fail-closed",async()=>{
+ const {canonicalizeNextFlightEntryIdentifier}=await import("./stable-module-ids.mjs");
+ const item=encodeURIComponent(JSON.stringify({request:"C:\\Work\\App\\src\\a.ts",ids:["*"]}));
+ const valid=`next-flight-client-entry-loader?modules=${item}&server=true!`;
+ assert.notEqual(canonicalizeNextFlightEntryIdentifier(valid,"C:/Work/App"),valid);
+ for(const value of [
+  `modules=${item}&server=true!`,
+  `other-flight-client-entry-loader?modules=${item}&server=true!`,
+  `next-flight-client-entry-loader?modules=${item}&server=true&unknown=x!`,
+  `next-flight-client-entry-loader?modules=${encodeURIComponent(item)}&server=true!`,
+ ]) assert.equal(canonicalizeNextFlightEntryIdentifier(value,"C:/Work/App"),value);
+});
