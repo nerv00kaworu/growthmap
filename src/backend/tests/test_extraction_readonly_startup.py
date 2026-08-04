@@ -67,14 +67,29 @@ def test_query_only_export_accepts_decoded_dict_directly(monkeypatch):
  response=asyncio.run(routes.export_project('p',object()))
  assert 'valid' in response
 
-def test_query_only_export_route_propagates_direct_decoder_type_error(monkeypatch):
- import asyncio,pytest
- from api import routes
- monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
+def _patched_query_only_rows():
  async def rows(_db,_project_id):
   return {'id':'p','name':'safe','description':'','goal':'','root_node_id':'root'},[{'id':'root','title':'Root','summary':'','maturity':'seed'}],[],[{'id':'b','node_id':'root','block_type':'note','content':'{}','order_index':0}]
+ return rows
+
+
+def test_query_only_export_route_converts_actual_json_decode_error(monkeypatch):
+ import asyncio
+ from fastapi import HTTPException
+ from api import routes
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
+ def fail(_value):raise json.JSONDecodeError('stored JSON failed','x',0)
+ monkeypatch.setattr(routes,'_query_only_export_rows',_patched_query_only_rows());monkeypatch.setattr(routes,'_decode_export_content',fail)
+ with pytest.raises(HTTPException) as caught:asyncio.run(routes.export_project('p',object()))
+ assert caught.value.status_code==409 and caught.value.detail=='Project data is not compatible with Markdown export'
+
+
+def test_query_only_export_route_propagates_direct_decoder_type_error(monkeypatch):
+ import asyncio
+ from api import routes
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
  def fail(_value):raise TypeError('unrelated decoder failure')
- monkeypatch.setattr(routes,'_query_only_export_rows',rows);monkeypatch.setattr(routes,'_decode_export_content',fail)
+ monkeypatch.setattr(routes,'_query_only_export_rows',_patched_query_only_rows());monkeypatch.setattr(routes,'_decode_export_content',fail)
  with pytest.raises(TypeError,match='unrelated decoder failure'):asyncio.run(routes.export_project('p',object()))
 
 def test_query_only_export_does_not_classify_unrelated_statement_errors():

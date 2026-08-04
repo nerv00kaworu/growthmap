@@ -1347,7 +1347,7 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         for row in block_rows:
             item=dict(row)
             try: item["content"]=_decode_export_content(item["content"])
-            except ExportContentCompatibilityError as error:
+            except (ExportContentCompatibilityError, json.JSONDecodeError) as error:
                 raise HTTPException(409,"Project data is not compatible with Markdown export") from error
             blocks_by_node.setdefault(str(item["node_id"]),[]).append(SimpleNamespace(**item))
     else:
