@@ -1,0 +1,1 @@
+import {Product} from '../../../components/Localized'; import {parseLocale,type Locale} from '../../../content/i18n'; import {notFound} from 'next/navigation'; export default async function P({params}:{params:Promise<{locale:string}>}){const locale=parseLocale((await params).locale);if(!locale)notFound();return <Product locale={locale}/>}

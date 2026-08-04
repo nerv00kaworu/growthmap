@@ -1,0 +1,4 @@
+'use client'; import {usePathname,useRouter} from 'next/navigation'; import {locales,labels,type Locale} from '../content/i18n';
+export function localeFrom(path:string):Locale {const found=locales.find(l=>path===`/${l}`||path.startsWith(`/${l}/`));return found||'zh-TW'}
+export function withoutLocale(path:string){return path.replace(/^\/(zh-TW|zh-CN|en)(?=\/|$)/,'')||'/'}
+export function LocaleNav(){const path=usePathname();const router=useRouter();const current=localeFrom(path);const tail=withoutLocale(path);return <label className="locale"><span className="sr-only">{labels[current].language}</span><select aria-label={labels[current].language} value={current} onChange={e=>router.push(`/${e.target.value}${tail==='/'?'':tail}`)}>{locales.map(l=><option key={l} value={l}>{l==='zh-TW'?labels[current].traditional:l==='zh-CN'?labels[current].simplified:labels[current].english}</option>)}</select></label>}

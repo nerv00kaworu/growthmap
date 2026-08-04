@@ -1,0 +1,2 @@
+import type {MetadataRoute} from 'next';import {site} from '../content/site';import {locales} from '../content/i18n';
+const routes=['','/ai-neutral','/showcase','/download','/buy','/docs','/security','/support','/status'];export default function sitemap():MetadataRoute.Sitemap{if(!site.canonicalBase)return [];return routes.flatMap(route=>locales.map(locale=>({url:`${site.canonicalBase}/${locale}${route}`,lastModified:new Date('2026-08-04'),alternates:{languages:Object.fromEntries(locales.map(l=>[l,`${site.canonicalBase}/${l}${route}`]))}})))}
