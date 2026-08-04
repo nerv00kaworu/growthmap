@@ -120,6 +120,43 @@ def test_expected_legacy_branch_schema_upgrades_idempotently_and_preserves_data(
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("version", [1, 2])
+def test_branch_id_null_fails_preflight_and_migration_without_rewriting(tmp_path, version):
+    path = fixture(tmp_path)
+    connection = sqlite3.connect(path)
+    connection.execute("INSERT INTO branches(id,project_id,name,description,status,created_at,revision) VALUES(NULL,'fixture','bad','','active','2026-08-03',1)")
+    connection.execute(f"PRAGMA user_version={version}")
+    connection.commit()
+    before = connection.execute("SELECT id,project_id,name,revision FROM branches").fetchall()
+    connection.close()
+    status = dm.schema_status(path)
+    assert not status["compatible"] and status["migrationNeeded"]
+    assert "null_data:branches.id" in status["reasons"]
+
+    async def run():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+        with pytest.raises(RuntimeError, match="incompatible NULL data branches.id"):
+            async with engine.begin() as connection:
+                await migrate_sqlite(connection)
+        async with engine.connect() as connection:
+            assert (await connection.exec_driver_sql("PRAGMA user_version")).scalar() == version
+            after = (await connection.exec_driver_sql("SELECT id,project_id,name,revision FROM branches")).all()
+            assert [tuple(row) for row in after] == before
+        await engine.dispose()
+    asyncio.run(run())
+
+
+def test_valid_branch_rows_accept_nullable_source_node_and_only_revision_is_additive(tmp_path):
+    path = fixture(tmp_path)
+    connection = sqlite3.connect(path)
+    connection.execute("INSERT INTO branches(id,project_id,name,description,source_node_id,status,created_at,revision) VALUES('b','fixture','valid','',NULL,'active','2026-08-03',1)")
+    connection.commit(); connection.close()
+    assert dm.schema_status(path)["compatible"] is True
+    from db.schema_contract import COLUMNS
+    assert [(table, column) for table, column, *_ in COLUMNS if table == "branches"] == [("branches", "revision")]
+    assert "source_node_id" not in __import__('db.schema_contract', fromlist=['ROW_REQUIRED_NON_NULL']).ROW_REQUIRED_NON_NULL["branches"]
+
+
 def test_branch_created_at_null_fails_closed(tmp_path):
     path = fixture(tmp_path)
     connection = sqlite3.connect(path)

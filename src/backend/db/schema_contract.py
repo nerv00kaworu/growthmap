@@ -32,7 +32,7 @@ def _s(affinity, not_null=False, default=None): return (affinity, not_null, defa
 ROW_REQUIRED_NON_NULL = {
  "projects":("created_at","updated_at"), "nodes":("created_at","updated_at"),
  "edges":("created_at",), "content_blocks":("created_at","updated_at"),
- "branches":("project_id","name","description","status","created_at"),
+ "branches":("id","project_id","name","description","status","created_at"),
 }
 
 ORM_READ_COLUMNS = {
