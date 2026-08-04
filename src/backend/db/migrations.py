@@ -1,7 +1,7 @@
 """Ordered fail-closed SQLite schema migrations."""
 import os
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, column_matches, normalize_sql, orm_column_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
 
 async def _column(conn, table, name):
     rows=(await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()
@@ -19,6 +19,12 @@ async def _validate_orm_read_contract(conn):
         for name,expected in columns.items():
             problem=orm_column_problem(rows.get(name),expected)
             if problem:raise RuntimeError(f"{problem} ORM read column {table}.{name}")
+
+async def _validate_required_rows(conn):
+    for table,columns in ROW_REQUIRED_NON_NULL.items():
+        for column in columns:
+            if (await conn.execute(text(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1'))).first():
+                raise RuntimeError(f"incompatible NULL data {table}.{column}")
 
 async def _validate_objects(conn,create_missing):
     expected={"ux_edges_one_mainline_per_parent":("index",INDEX_SQL),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
@@ -44,5 +50,6 @@ async def migrate_sqlite(conn):
     # Missing non-migration-owned mapped columns are unsupported partial schemas.
     # Fail before advancing user_version rather than inventing data/defaults.
     await _validate_orm_read_contract(conn)
+    await _validate_required_rows(conn)
     if upgrading:await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
     if int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)!=CURRENT_USER_VERSION:raise RuntimeError("migration version did not validate")

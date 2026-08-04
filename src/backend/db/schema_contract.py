@@ -26,6 +26,14 @@ OBJECT_SQL = {"ux_edges_one_mainline_per_parent": INDEX_SQL, **TRIGGERS}
 # affinity, NOT NULL, normalized declared default. Primary-key NOT NULL varies
 # between equivalent SQLite declarations, so id columns intentionally allow both.
 def _s(affinity, not_null=False, default=None): return (affinity, not_null, default)
+# Classification: nullable historical value fields are normalized by response
+# validators; timestamps have no truthful synthetic default, so nullable table
+# declarations are supported only when every stored row is non-NULL.
+ROW_REQUIRED_NON_NULL = {
+ "projects":("created_at","updated_at"), "nodes":("created_at","updated_at"),
+ "edges":("created_at",), "content_blocks":("created_at","updated_at"),
+}
+
 ORM_READ_COLUMNS = {
  "projects": {
   "id":_s("TEXT",(False,True)),"name":_s("TEXT",True),"description":_s("TEXT"),"goal":_s("TEXT"),"root_node_id":_s("TEXT"),"status":_s("TEXT",True),"settings":_s("JSON"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},

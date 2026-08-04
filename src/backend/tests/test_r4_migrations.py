@@ -12,7 +12,7 @@ CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT N
 CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,is_mainline BOOLEAN NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',created_at DATETIME);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME,updated_at DATETIME);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128) DEFAULT '');
-INSERT INTO projects(id,name,status,revision) VALUES ('p','kept','active',7);
+INSERT INTO projects(id,name,status,created_at,updated_at,revision) VALUES ('p','kept','active','2020-01-01','2020-01-01',7);
 """
 
 async def db(tmp_path, sql=OLD):
@@ -65,7 +65,7 @@ async def _injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monk
 
 
 async def _version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path):
-    sql = OLD.replace("revision INTEGER NOT NULL DEFAULT 1", "legacy_marker TEXT", 1).replace(",revision) VALUES ('p','kept','active',7)",",legacy_marker) VALUES ('p','kept','active','kept')") + "\nPRAGMA user_version=1;\n"
+    sql = OLD.replace("revision INTEGER NOT NULL DEFAULT 1", "legacy_marker TEXT", 1).replace(",revision) VALUES ('p','kept','active','2020-01-01','2020-01-01',7)",",legacy_marker) VALUES ('p','kept','active','2020-01-01','2020-01-01','kept')") + "\nPRAGMA user_version=1;\n"
     engine = await db(tmp_path, sql)
     async with engine.begin() as conn:
         before = {table:(await conn.execute(text(f"select count(*) from {table}"))).scalar() for table in ("projects","nodes","edges","content_blocks")}

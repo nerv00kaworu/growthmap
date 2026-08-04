@@ -40,3 +40,16 @@ def test_query_only_export_rejects_malformed_content_without_detail_or_write(tmp
  env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{db}'}
  r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
  assert (hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns)==before
+
+def test_query_only_export_does_not_convert_direct_type_error(monkeypatch):
+ import pytest
+ from api import routes
+ def fail(_value):raise TypeError('unrelated decoder failure')
+ monkeypatch.setattr(routes,'_decode_export_content',fail)
+ with pytest.raises(TypeError,match='unrelated decoder failure'):routes._decode_export_content('{}')
+
+def test_query_only_export_does_not_classify_unrelated_statement_errors():
+ from sqlalchemy.exc import StatementError
+ from api.routes import _is_json_deserialization_error
+ for original in (ValueError('unrelated'),TypeError('unrelated')):
+  assert _is_json_deserialization_error(StatementError('failed','select 1',(),original)) is False

@@ -1305,6 +1305,20 @@ def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
     lines.append("")
     return lines
 
+def _decode_export_content(value):
+    return json.loads(value) if isinstance(value, str) else (value or {})
+
+
+async def _query_only_export_rows(db: AsyncSession, project_id: str):
+    """Narrow seam for query-only export reads; intentionally performs no writes."""
+    text = __import__("sqlalchemy").text
+    project_row = (await db.execute(text("SELECT id,name,description,goal,root_node_id FROM projects WHERE id=:project_id"), {"project_id": project_id})).mappings().first()
+    node_rows = (await db.execute(text("SELECT id,title,summary,maturity FROM nodes WHERE project_id=:project_id"), {"project_id": project_id})).mappings().all()
+    edge_rows = (await db.execute(text("SELECT from_node_id,to_node_id FROM edges WHERE project_id=:project_id AND relation_type='child_of'"), {"project_id": project_id})).all()
+    block_rows = (await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"), {"project_id": project_id})).mappings().all()
+    return project_row, node_rows, edge_rows, block_rows
+
+
 def _is_json_deserialization_error(error: Exception) -> bool:
     if isinstance(error,json.JSONDecodeError):return True
     return isinstance(error,StatementError) and isinstance(error.orig,json.JSONDecodeError)
@@ -1314,18 +1328,14 @@ def _is_json_deserialization_error(error: Exception) -> bool:
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
     """Export entire project tree as Markdown document (bulk-loaded)."""
     if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
-        text=__import__("sqlalchemy").text
-        project_row=(await db.execute(text("SELECT id,name,description,goal,root_node_id FROM projects WHERE id=:project_id"),{"project_id":project_id})).mappings().first()
+        project_row, node_rows, edge_rows, block_rows = await _query_only_export_rows(db, project_id)
         if not project_row: raise HTTPException(404,"Project not found")
         project=SimpleNamespace(**project_row)
-        node_rows=(await db.execute(text("SELECT id,title,summary,maturity FROM nodes WHERE project_id=:project_id"),{"project_id":project_id})).mappings().all()
         nodes_by_id={str(row["id"]):SimpleNamespace(**row) for row in node_rows}
-        edge_rows=(await db.execute(text("SELECT from_node_id,to_node_id FROM edges WHERE project_id=:project_id AND relation_type='child_of'"),{"project_id":project_id})).all()
-        block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"),{"project_id":project_id})).mappings().all()
         blocks_by_node:dict[str,list]={}
         for row in block_rows:
             item=dict(row)
-            try: item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {})
+            try: item["content"]=_decode_export_content(item["content"])
             except json.JSONDecodeError: raise HTTPException(409,"Project data is not compatible with Markdown export")
             blocks_by_node.setdefault(str(item["node_id"]),[]).append(SimpleNamespace(**item))
     else:
