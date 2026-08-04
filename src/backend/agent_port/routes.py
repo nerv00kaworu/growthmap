@@ -32,6 +32,7 @@ def uuid_value(value,name="id"):
     try: return str(uuid.UUID(value))
     except Exception: raise HTTPException(422,f"Invalid {name}")
 def public_grant(g): return {"id":g.id,"token_prefix":g.token_prefix,"project_id":g.project_id,"permission":g.permission,"node_scope_id":g.node_scope_id,"branch_root_id":g.branch_root_id,"label":g.label,"agent_identity":g.agent_identity,"status":g.status,"expires_at":iso(g.expires_at),"revoked_at":iso(g.revoked_at),"last_used_at":iso(g.last_used_at),"created_at":iso(g.created_at)}
+def public_readback(x,grant=None): return {"id":x.id,"target_node_id":x.target_node_id,**({"source":grant.label,"agent":grant.agent_identity} if grant else {}),"summary":x.summary,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)}
 def hash_secret(secret,salt): return hashlib.scrypt(secret.encode(),salt=bytes.fromhex(salt),n=2**14,r=8,p=1,dklen=32).hex()
 
 class Strict(BaseModel): model_config=ConfigDict(extra="forbid")
@@ -179,9 +180,28 @@ async def revoke(grant_id:str,db:AsyncSession=Depends(get_db)):
     if not g.revoked_at:g.revoked_at=now();g.status="revoked";await db.commit()
     return public_grant(g)
 @human_router.get("/agent-port/activity")
-async def activity(project_id:str,db:AsyncSession=Depends(get_db)):
-    pid=uuid_value(project_id); proposals=(await db.execute(select(AgentProposal).where(AgentProposal.project_id==pid).order_by(AgentProposal.created_at.desc()))).scalars().all();events=(await db.execute(select(AgentEvent).where(AgentEvent.project_id==pid).order_by(AgentEvent.created_at.desc()).limit(100))).scalars().all();readbacks=(await db.execute(select(AgentReadback).where(AgentReadback.project_id==pid).order_by(AgentReadback.created_at.desc()).limit(100))).scalars().all()
-    return {"proposals":[{"id":x.id,"title":x.title,"rationale":x.rationale,"operations":x.operations,"status":x.status,"target_node_id":x.target_node_id,"expected_project_revision":x.expected_project_revision,"review_note":x.review_note,"created_at":iso(x.created_at)} for x in proposals],"events":[{"id":x.id,"event_type":x.event_type,"message":x.message,"target_node_id":x.target_node_id,"payload":x.payload,"created_at":iso(x.created_at)} for x in events],"readbacks":[{"id":x.id,"target_node_id":x.target_node_id,"summary":x.summary,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)} for x in readbacks]}
+async def activity(project_id:str,target_node_id:str|None=None,db:AsyncSession=Depends(get_db)):
+    pid=uuid_value(project_id,"project_id")
+    target=None
+    if target_node_id is not None:
+        target=uuid_value(target_node_id,"target_node_id")
+        node=await db.get(Node,target)
+        # A project mismatch is intentionally indistinguishable from a missing node.
+        if not node or node.project_id!=pid: raise HTTPException(404,"Node not found")
+    proposal_where=[AgentProposal.project_id==pid]
+    event_where=[AgentEvent.project_id==pid]
+    readback_where=[AgentReadback.project_id==pid]
+    if target:
+        proposal_where.append(AgentProposal.target_node_id==target)
+        event_where.append(AgentEvent.target_node_id==target)
+        readback_where.append(AgentReadback.target_node_id==target)
+    proposals=(await db.execute(select(AgentProposal).where(*proposal_where).order_by(AgentProposal.created_at.desc()))).scalars().all()
+    events=(await db.execute(select(AgentEvent).where(*event_where).order_by(AgentEvent.created_at.desc()).limit(100))).scalars().all()
+    # Preserve durable readbacks even if an imported/legacy database cannot
+    # resolve their grant relationship. Grant metadata is useful enrichment,
+    # never a condition for returning implementation evidence.
+    readback_rows=(await db.execute(select(AgentReadback,AgentGrant).outerjoin(AgentGrant,AgentReadback.grant_id==AgentGrant.id).where(*readback_where).order_by(AgentReadback.created_at.desc()).limit(100))).all()
+    return {"proposals":[{"id":x.id,"title":x.title,"rationale":x.rationale,"operations":x.operations,"status":x.status,"target_node_id":x.target_node_id,"expected_project_revision":x.expected_project_revision,"review_note":x.review_note,"created_at":iso(x.created_at)} for x in proposals],"events":[{"id":x.id,"event_type":x.event_type,"message":x.message,"target_node_id":x.target_node_id,"payload":x.payload,"created_at":iso(x.created_at)} for x in events],"readbacks":[public_readback(x,grant) for x,grant in readback_rows]}
 @human_router.post("/agent-port/proposals/{proposal_id}/{decision}")
 async def review(proposal_id:str,decision:Literal["approve","reject"],body:ReviewIn,request:Request,db:AsyncSession=Depends(get_db)):
     row=await db.get(AgentProposal,uuid_value(proposal_id));

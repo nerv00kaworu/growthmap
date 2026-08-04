@@ -1,11 +1,11 @@
 "use client";
 import {useCallback,useEffect,useState} from "react";
-import {api} from "@/lib/api";
+import {api,type AgentPortActivity} from "@/lib/api";
 import {useAgentPortDesktopControl} from "@/lib/agent-port-control";
 import type {GNode} from "@/lib/types";
 export function AgentPortPanel({projectId,rootNode,onClose}:{projectId:string;rootNode:GNode;onClose:()=>void}){
  const desktopControl=useAgentPortDesktopControl();
- const [grants,setGrants]=useState<Record<string,unknown>[]>([]),[activity,setActivity]=useState<{proposals:Record<string,unknown>[];events:Record<string,unknown>[];readbacks:Record<string,unknown>[]}>({proposals:[],events:[],readbacks:[]}),[token,setToken]=useState(""),[label,setLabel]=useState("Local agent"),[identity,setIdentity]=useState("agent"),[permission,setPermission]=useState("propose"),[hours,setHours]=useState(24),[message,setMessage]=useState("");
+ const [grants,setGrants]=useState<Record<string,unknown>[]>([]),[activity,setActivity]=useState<AgentPortActivity>({proposals:[],events:[],readbacks:[]}),[token,setToken]=useState(""),[label,setLabel]=useState("Local agent"),[identity,setIdentity]=useState("agent"),[permission,setPermission]=useState("propose"),[hours,setHours]=useState(24),[message,setMessage]=useState("");
  const reload=useCallback(async()=>{if(!desktopControl)return;setGrants(await api.listAgentGrants(projectId));setActivity(await api.getAgentPortActivity(projectId));},[desktopControl,projectId]);useEffect(()=>{if(desktopControl)void reload().catch(e=>setMessage(String(e)));},[desktopControl,reload]);
  const create=async()=>{if(!desktopControl)return;const row=await api.createAgentGrant({project_id:projectId,permission,label,agent_identity:identity,expires_at:new Date(Date.now()+hours*3600000).toISOString()});setToken(String(row.token));setMessage("權杖只顯示這一次。請立即複製並安全保存。");await reload();};
  const review=async(id:string,decision:"approve"|"reject")=>{if(!desktopControl)return;try{await api.reviewAgentProposal(id,decision);await reload();}catch(e){setMessage(`審核失敗（可能是 revision conflict）：${String(e)}`)}};

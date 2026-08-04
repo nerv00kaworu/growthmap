@@ -1,4 +1,4 @@
-import os,subprocess,sys,tempfile,unittest
+import asyncio,os,subprocess,sys,tempfile,unittest,uuid
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -33,8 +33,39 @@ class AgentPortV1(unittest.TestCase):
   child=self.child().json();scoped=self.grant("write",{"node_scope_id":self.root}).json();cur=self.client.get("/agent/v1/project",headers=self.auth(scoped["token"])).json();self.assertEqual(self.client.post("/agent/v1/batch",headers=self.auth(scoped["token"]),json={"expected_project_revision":cur["revision"],"idempotency_key":"scope-001","operations":[{"op":"update_node","node_id":child["id"],"expected_revision":child["revision"],"fields":{"title":"no"}}]}).status_code,403)
   c1=self.client.get(f"/agent/v1/context/{self.root}",headers=self.auth(write["token"])).json();self.human_patch(description="human changed");c2=self.client.get(f"/agent/v1/context/{self.root}",headers=self.auth(write["token"])).json();self.assertNotEqual(c1["snapshot_digest"],c2["snapshot_digest"])
   self.client.post(f'/api/agent-port/grants/{write["id"]}/revoke',headers=self.human);self.assertEqual(self.client.get("/agent/v1/project",headers=self.auth(write["token"])).status_code,401);self.assertEqual(self.grant(expired=True).status_code,422)
- def test_readback_timeline_and_token_query_forbidden(self):
-  g=self.grant("propose").json();h=self.auth(g["token"]);r=self.client.post("/agent/v1/readbacks",headers=h,json={"idempotency_key":"readback-1","target_node_id":self.root,"summary":"implemented","commit_refs":["abc"],"files":["a.py"],"tests":[{"name":"unit","status":"passed"}]});self.assertEqual(r.status_code,201,r.text);activity=self.client.get(f"/api/agent-port/activity?project_id={self.pid}",headers=self.human).json();self.assertEqual(activity["readbacks"][0]["summary"],"implemented");self.assertEqual(self.client.get(f"/agent/v1/project?token={g['token']}",headers=h).status_code,400)
+ def test_readback_timeline_filter_identity_and_token_query_forbidden(self):
+  other=self.child("second target").json();g=self.grant("propose").json();h=self.auth(g["token"])
+  revision=self.client.get(f"/api/projects/{self.pid}").json()["revision"]
+  for key,target in (("root",self.root),("other",other["id"])):
+   event=self.client.post("/agent/v1/events",headers=h,json={"idempotency_key":f"event-{key}","target_node_id":target,"event_type":"completed","message":f"{key} event"});self.assertEqual(event.status_code,201,event.text)
+   proposal=self.client.post("/agent/v1/proposals",headers=h,json={"idempotency_key":f"proposal-{key}","expected_project_revision":revision,"target_node_id":target,"title":f"{key} proposal","operations":[{"op":"update_node","node_id":target,"expected_revision":other["revision"] if target==other["id"] else self.client.get(f"/api/nodes/{self.root}").json()["revision"],"fields":{"summary":key}}]});self.assertEqual(proposal.status_code,201,proposal.text)
+  complete={"idempotency_key":"readback-root","target_node_id":self.root,"summary":"implemented","commit_refs":["abc"],"files":["a.py"],"tests":[{"name":"unit","status":"passed","detail":"focused"}],"decisions":["keep API bounded"],"risks":["none"],"todos":["review"],"evidence":[{"name":"diff","status":"verified","detail":"clean"}]}
+  r=self.client.post("/agent/v1/readbacks",headers=h,json=complete);self.assertEqual(r.status_code,201,r.text)
+  r=self.client.post("/agent/v1/readbacks",headers=h,json={"idempotency_key":"readback-other","target_node_id":other["id"],"summary":"other node"});self.assertEqual(r.status_code,201,r.text)
+  filtered=self.client.get(f"/api/agent-port/activity?project_id={self.pid}&target_node_id={self.root}",headers=self.human);self.assertEqual(filtered.status_code,200,filtered.text);body=filtered.json();rows=body["readbacks"];self.assertEqual(len(rows),1);self.assertEqual(rows[0]["target_node_id"],self.root);self.assertEqual(rows[0]["agent"],"neutral-test");self.assertEqual(rows[0]["source"],"test");self.assertEqual(rows[0]["decisions"],["keep API bounded"]);self.assertEqual(rows[0]["evidence"][0]["name"],"diff");self.assertEqual([x["title"] for x in body["proposals"]],["root proposal"]);self.assertEqual([x["message"] for x in body["events"]],["root event"])
+  activity=self.client.get(f"/api/agent-port/activity?project_id={self.pid}",headers=self.human).json();self.assertEqual({x["summary"] for x in activity["readbacks"]},{"implemented","other node"});self.assertEqual({x["title"] for x in activity["proposals"]},{"root proposal","other proposal"});self.assertEqual({x["message"] for x in activity["events"]},{"root event","other event"})
+  self.assertEqual(self.client.get(f"/agent/v1/project?token={g['token']}",headers=h).status_code,400)
+ def test_activity_outerjoin_returns_persisted_readback_with_missing_grant(self):
+  from sqlalchemy import text
+  from db.database import engine
+  orphan_id=str(uuid.uuid4());missing_grant=str(uuid.uuid4())
+  async def insert_orphan():
+   # This isolated connection emulates an imported/legacy SQLite row. Restore
+   # FK enforcement before returning it to the pool.
+   async with engine.connect() as conn:
+    await conn.execute(text("PRAGMA foreign_keys=OFF"))
+    try:
+     await conn.execute(text("INSERT INTO agent_readbacks (id,grant_id,project_id,target_node_id,commit_refs,files,tests,decisions,risks,todos,evidence,summary,created_at) VALUES (:id,:grant,:project,:target,'[]','[]','[]','[]','[]','[]','[]','orphan-safe',CURRENT_TIMESTAMP)"),{"id":orphan_id,"grant":missing_grant,"project":self.pid,"target":self.root})
+     await conn.commit()
+    finally:
+     await conn.execute(text("PRAGMA foreign_keys=ON"))
+  asyncio.run(insert_orphan())
+  response=self.client.get(f"/api/agent-port/activity?project_id={self.pid}&target_node_id={self.root}",headers=self.human);self.assertEqual(response.status_code,200,response.text)
+  row=next(x for x in response.json()["readbacks"] if x["id"]==orphan_id);self.assertEqual(row["summary"],"orphan-safe");self.assertNotIn("agent",row);self.assertNotIn("source",row)
+ def test_activity_filter_rejects_invalid_and_cross_project_target_without_leak(self):
+  other_project=self.client.post("/api/projects",json={"name":"other project"}).json()
+  invalid=self.client.get(f"/api/agent-port/activity?project_id={self.pid}&target_node_id=not-a-uuid",headers=self.human);self.assertEqual(invalid.status_code,422)
+  cross=self.client.get(f"/api/agent-port/activity?project_id={self.pid}&target_node_id={other_project['root_node_id']}",headers=self.human);self.assertEqual(cross.status_code,404);self.assertNotIn(other_project["id"],cross.text)
  def test_two_writers_same_revision_exactly_one(self):
   a=self.grant().json();b=self.grant().json();p=self.client.get("/agent/v1/project",headers=self.auth(a["token"])).json();n=self.client.get(f"/api/nodes/{self.root}").json();statuses=[]
   for i,g in enumerate((a,b)):statuses.append(self.client.post("/agent/v1/batch",headers=self.auth(g["token"]),json={"expected_project_revision":p["revision"],"idempotency_key":f"writer-{i}","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":str(i)}}]}).status_code)
