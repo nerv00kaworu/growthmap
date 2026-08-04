@@ -7,7 +7,7 @@ all columns and objects validate.
 import os, re
 from sqlalchemy import text
 
-CURRENT_USER_VERSION = 1
+CURRENT_USER_VERSION = 2
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
     ("nodes", "workflow_status", "VARCHAR(20)", True, "draft", "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'"),
@@ -41,7 +41,7 @@ async def _validate_column(conn, table, name, expected_type, not_null, default):
 async def migrate_sqlite(conn):
     version = int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
     if version > CURRENT_USER_VERSION: raise RuntimeError("database schema is newer than this application")
-    if version < 1:
+    if version < CURRENT_USER_VERSION:
         for ordinal, spec in enumerate(COLUMNS, 1):
             if not await _validate_column(conn, *spec[:5]):
                 await conn.execute(text(spec[5]))

@@ -6,6 +6,7 @@ import os
 import re
 import tempfile
 import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
@@ -1306,33 +1307,34 @@ def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
 async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
     """Export entire project tree as Markdown document (bulk-loaded)."""
-    project = await db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "Project not found")
+    if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
+        text=__import__("sqlalchemy").text
+        project_row=(await db.execute(text("SELECT id,name,description,goal,root_node_id FROM projects WHERE id=:project_id"),{"project_id":project_id})).mappings().first()
+        if not project_row: raise HTTPException(404,"Project not found")
+        project=SimpleNamespace(**project_row)
+        node_rows=(await db.execute(text("SELECT id,title,summary,maturity FROM nodes WHERE project_id=:project_id"),{"project_id":project_id})).mappings().all()
+        nodes_by_id={str(row["id"]):SimpleNamespace(**row) for row in node_rows}
+        edge_rows=(await db.execute(text("SELECT from_node_id,to_node_id FROM edges WHERE project_id=:project_id AND relation_type='child_of'"),{"project_id":project_id})).all()
+        block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"),{"project_id":project_id})).mappings().all()
+        blocks_by_node:dict[str,list]={}
+        for row in block_rows:
+            item=dict(row);item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {})
+            blocks_by_node.setdefault(str(item["node_id"]),[]).append(SimpleNamespace(**item))
+    else:
+        project = await db.get(Project, project_id)
+        if not project: raise HTTPException(404, "Project not found")
+        nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+        nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
+        edge_rows = (await db.execute(select(Edge.from_node_id, Edge.to_node_id).where(Edge.project_id == project_id, Edge.relation_type == "child_of"))).all()
+        all_node_ids = list(nodes_by_id.keys())
+        blocks_by_node: dict[str, list] = {}
+        if all_node_ids:
+            blocks_result = await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index))
+            for b in blocks_result.scalars().all(): blocks_by_node.setdefault(str(b.node_id), []).append(b)
     if not project.root_node_id:
         raise HTTPException(404, "No root node")
-
-    # Bulk load all nodes, edges, blocks for this project
-    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
-    nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
-
-    edges_result = await db.execute(
-        select(Edge.from_node_id, Edge.to_node_id).where(
-            Edge.project_id == project_id, Edge.relation_type == "child_of"
-        )
-    )
     child_map: dict[str, list[str]] = {}
-    for from_id, to_id in edges_result.all():
-        child_map.setdefault(str(from_id), []).append(str(to_id))
-
-    all_node_ids = list(nodes_by_id.keys())
-    blocks_by_node: dict[str, list] = {}
-    if all_node_ids:
-        blocks_result = await db.execute(
-            select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
-        )
-        for b in blocks_result.scalars().all():
-            blocks_by_node.setdefault(str(b.node_id), []).append(b)
+    for from_id, to_id in edge_rows: child_map.setdefault(str(from_id), []).append(str(to_id))
 
     lines = [f"# {project.name}\n"]
     if project.description:

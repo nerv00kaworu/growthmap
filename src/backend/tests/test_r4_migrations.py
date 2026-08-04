@@ -53,6 +53,22 @@ async def _injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monk
     await engine.dispose()
 
 
+async def _version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path):
+    sql = OLD.replace("revision INTEGER NOT NULL DEFAULT 1", "name TEXT", 1) + "\nPRAGMA user_version=1;\nINSERT INTO projects VALUES ('legacy','kept');\n"
+    engine = await db(tmp_path, sql)
+    async with engine.begin() as conn:
+        before = {table:(await conn.execute(text(f"select count(*) from {table}"))).scalar() for table in ("projects","nodes","edges","content_blocks")}
+        await migrate_sqlite(conn)
+    async with engine.begin() as conn: await migrate_sqlite(conn)
+    async with engine.connect() as conn:
+        after = {table:(await conn.execute(text(f"select count(*) from {table}"))).scalar() for table in before}
+        assert after == before
+        assert (await conn.execute(text("select name,revision from projects where id='legacy'"))).one() == ("kept",1)
+        assert (await conn.execute(text("pragma user_version"))).scalar() == CURRENT_USER_VERSION
+    await engine.dispose()
+
+
 def test_populated_old_and_partial_compatible_upgrade(tmp_path): asyncio.run(_populated_old_and_partial_compatible_upgrade(tmp_path))
 def test_incompatible_column_and_index_fail_closed(tmp_path): asyncio.run(_incompatible_column_and_index_fail_closed(tmp_path))
 def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch): asyncio.run(_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkeypatch))
+def test_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path): asyncio.run(_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path))

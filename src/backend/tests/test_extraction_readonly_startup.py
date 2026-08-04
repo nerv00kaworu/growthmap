@@ -25,6 +25,8 @@ with TestClient(app) as c:
  edges=c.get('/api/projects/p/edges',headers=h);assert edges.status_code==200 and edges.json()[0]['revision']==1
  blocks=c.get('/api/nodes/child/blocks',headers=h);assert blocks.status_code==200 and blocks.json()[0]['content']['title']=='legacy'
  branches=c.get('/api/projects/p/branches',headers=h);assert branches.status_code==200 and branches.json()[0]['name']=='legacy branch'
+ exported=c.get('/api/projects/p/export',headers=h);assert exported.status_code==200,exported.text
+ assert '# kept' in exported.text and 'root title' in exported.text and 'child title' in exported.text and 'legacy' in exported.text
  assert c.post('/api/projects',headers=h,json={'name':'no'}).status_code==403
 '''
  env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'0','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{db}','GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(trial)}

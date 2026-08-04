@@ -46,6 +46,25 @@ def test_accepts_exact_canonical_gameplay_extension_and_rejects_lookalikes(tmp_p
  c.execute('CREATE TRIGGER trg_resolution_immutable_delete BEFORE DELETE ON player_event_resolutions BEGIN SELECT 1; END');c.close()
  with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p4)
 
+def test_legacy_canonical_schema_is_accepted_but_never_declared_current(tmp_path):
+ p=tmp_path/'legacy.db';fixture(p);c=sqlite3.connect(p);c.execute('PRAGMA user_version=1');c.close()
+ assert dm.validate(p)['valid'] is True
+ status=dm.schema_status(p);assert status['migrationNeeded'] is True
+ assert 'column:projects.revision' in status['reasons'] and 'column:nodes.revision' in status['reasons'] and 'user_version:1' in status['reasons']
+
+
+def test_version_one_with_compatibility_surface_still_requires_version_advancement(tmp_path):
+ p=tmp_path/'partial.db';fixture(p);c=sqlite3.connect(p)
+ for table in ('projects','nodes','edges','content_blocks'):
+  c.execute(f'ALTER TABLE {table} ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
+ c.execute('CREATE TABLE branches(id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 1)')
+ c.execute("ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36)");c.execute("ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'");c.execute("ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'");c.execute("ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''")
+ c.execute("ALTER TABLE edges ADD COLUMN is_mainline BOOLEAN DEFAULT 0");c.execute("ALTER TABLE edges ADD COLUMN weight FLOAT DEFAULT 1.0");c.execute("ALTER TABLE edges ADD COLUMN note TEXT DEFAULT ''")
+ for sql in (__import__('db.migrations',fromlist=['INDEX_SQL']).INDEX_SQL,*__import__('db.migrations',fromlist=['TRIGGERS']).TRIGGERS.values()):c.execute(sql)
+ c.execute('PRAGMA user_version=1');c.close()
+ status=dm.schema_status(p);assert status['migrationNeeded'] is True and status['reasons']==['user_version:1']
+
+
 def test_installed_canonical_abyss_database_contract_when_supplied():
  fixture_path=os.getenv('GROWTHMAP_CANONICAL_ABYSS_DB')
  if not fixture_path: pytest.skip('canonical Abyss database fixture not supplied')

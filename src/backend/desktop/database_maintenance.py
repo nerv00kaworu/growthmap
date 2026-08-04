@@ -2,7 +2,7 @@
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
 
-CURRENT_USER_VERSION=1
+CURRENT_USER_VERSION=2
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
@@ -40,6 +40,15 @@ REQUIRED={
  "projects":{"id","name","status","created_at","updated_at"},"nodes":{"id","project_id","title","node_type","status","maturity"},
  "edges":{"id","project_id","from_node_id","to_node_id","relation_type"},"content_blocks":{"id","node_id","block_type","content","order_index"},
  "action_logs":{"id","project_id","actor_type","action_type","created_at"},"provider_configs":{"id","name","provider_type","model_name","enabled"}}
+# Must stay aligned with db.migrations.COLUMNS. The desktop preflight may only
+# declare a schema current when ordinary ORM reads/exports have every column
+# added by the authoring compatibility migration.
+COMPATIBILITY_COLUMNS=(
+ ("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),
+ ("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),
+ ("edges","revision"),("content_blocks","revision"),("branches","revision"),
+)
+COMPATIBILITY_OBJECTS=("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update")
 
 def _attributes(path):
  if os.name!="nt": return 0
@@ -133,10 +142,11 @@ def schema_status(path):
   columns={table:{row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} for table in ("projects","nodes","edges","content_blocks","branches","provider_configs")}
   objects={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type IN ('index','trigger')")}
   reasons=[]
-  for table,column in (("nodes","branch_id"),("nodes","workflow_status"),("nodes","file_paths"),("provider_configs","secret_env_key"),("projects","revision"),("nodes","revision"),("edges","revision"),("content_blocks","revision"),("branches","revision")):
+  for table,column in COMPATIBILITY_COLUMNS:
    if column not in columns[table]: reasons.append(f"column:{table}.{column}")
-  for name in ("ux_edges_one_mainline_per_parent","trg_edges_one_mainline_insert","trg_edges_one_mainline_update","trg_edges_normalize_null_insert","trg_edges_normalize_null_update"):
+  for name in COMPATIBILITY_OBJECTS:
    if name not in objects: reasons.append(f"object:{name}")
+  if meta["userVersion"]!=CURRENT_USER_VERSION: reasons.append(f"user_version:{meta['userVersion']}")
   return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
  finally: connection.close()
 
