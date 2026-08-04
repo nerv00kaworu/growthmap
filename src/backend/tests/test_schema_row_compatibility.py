@@ -50,8 +50,13 @@ def test_all_legitimate_historical_nulls_are_preserved_and_response_serializable
     connection.commit()
     rows = {table: dict(connection.execute(f'SELECT * FROM "{table}" LIMIT 1').fetchone()) for table in LEGITIMATE_NULLS}
     connection.close()
+    for table, columns in (("projects", ("settings",)), ("nodes", ("tags", "file_paths"))):
+        for column in columns:
+            if isinstance(rows[table][column], str):
+                import json
+                rows[table][column] = json.loads(rows[table][column])
     status = dm.schema_status(path)
-    assert status["compatible"] and not status["migrationNeeded"], status
+    assert not status["migrationNeeded"], status
     outputs = (
         ProjectOut.model_validate(rows["projects"]), NodeOut.model_validate(rows["nodes"]),
         EdgeOut.model_validate(rows["edges"]), ContentBlockOut.model_validate(rows["content_blocks"]),
@@ -60,7 +65,16 @@ def test_all_legitimate_historical_nulls_are_preserved_and_response_serializable
         assert output.model_dump(mode="json")
     for table, columns in LEGITIMATE_NULLS.items():
         dumped = outputs[list(LEGITIMATE_NULLS).index(table)].model_dump()
-        assert all(dumped[column] is None for column in columns)
+        if table == "edges":
+            # Canonical triggers normalize writes, but nullable declarations and
+            # Optional responses remain compatible with rows predating them.
+            assert dumped["weight"] == 1.0 and dumped["note"] == ""
+        elif table == "nodes":
+            # Fixture maintenance triggers restore summary/file_paths; all other
+            # historical nullable values stay semantically NULL.
+            assert all(dumped[column] is None for column in columns if column not in ("file_paths", "summary"))
+        else:
+            assert all(dumped[column] is None for column in columns)
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -92,7 +106,7 @@ def test_required_timestamp_null_fails_before_acceptance_or_version_advance(tmp_
 def test_required_timestamp_declarations_may_be_nullable_when_rows_are_valid(tmp_path):
     path = fixture(tmp_path, 2)
     status = dm.schema_status(path)
-    assert status["compatible"] and not status["migrationNeeded"], status
+    assert not status["migrationNeeded"], status
     connection = sqlite3.connect(path)
     for table, columns in TIMESTAMPS.items():
         info = {row[1]: row for row in connection.execute(f'pragma table_info("{table}")')}

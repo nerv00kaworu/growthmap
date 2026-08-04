@@ -53,3 +53,21 @@ def test_query_only_export_does_not_classify_unrelated_statement_errors():
  from api.routes import _is_json_deserialization_error
  for original in (ValueError('unrelated'),TypeError('unrelated')):
   assert _is_json_deserialization_error(StatementError('failed','select 1',(),original)) is False
+
+def test_query_only_export_route_propagates_direct_type_error(monkeypatch):
+ import asyncio,pytest
+ from api import routes
+ async def fail(_db,_project_id):raise TypeError('injected direct failure')
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1');monkeypatch.setattr(routes,'_query_only_export_rows',fail)
+ with pytest.raises(TypeError,match='injected direct failure'):asyncio.run(routes.export_project('p',object()))
+
+def test_query_only_export_route_propagates_unrelated_statement_errors(monkeypatch):
+ import asyncio,pytest
+ from sqlalchemy.exc import StatementError
+ from api import routes
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
+ for original in (ValueError('unrelated'),TypeError('unrelated')):
+  async def fail(_db,_project_id,_original=original):raise StatementError('failed','select 1',(),_original)
+  monkeypatch.setattr(routes,'_query_only_export_rows',fail)
+  with pytest.raises(StatementError) as caught:asyncio.run(routes.export_project('p',object()))
+  assert caught.value.orig is original
