@@ -4,7 +4,7 @@ import pytest
 from desktop import database_maintenance as dm
 
 def fixture(path):
- c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),from_node_id TEXT REFERENCES nodes(id),to_node_id TEXT REFERENCES nodes(id),relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT REFERENCES nodes(id),block_type TEXT,content JSON,order_index INTEGER);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);""");c.execute("insert into projects values('p','x','','',NULL,'active','{}','','')");c.commit();c.close()
+ c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),from_node_id TEXT NOT NULL REFERENCES nodes(id),to_node_id TEXT NOT NULL REFERENCES nodes(id),relation_type TEXT NOT NULL);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);""");c.execute("insert into projects values('p','x','','',NULL,'active','{}','','')");c.commit();c.close()
 
 def test_durability_metadata_matches_platform_contract(tmp_path):
  p=tmp_path/'flush.bin';p.write_bytes(b'durability-evidence')
@@ -86,7 +86,7 @@ def _make_current(path):
  c.execute(f'pragma user_version={contract.CURRENT_USER_VERSION}');c.close()
 
 @pytest.mark.parametrize('ddl,reason',[
- ("ALTER TABLE projects RENAME TO old_projects; CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT,revision TEXT NOT NULL DEFAULT 1); INSERT INTO projects SELECT id,name,description,goal,root_node_id,status,settings,created_at,updated_at,COALESCE(revision,1) FROM old_projects; DROP TABLE old_projects","incompatible_column:projects.revision"),
+ ("ALTER TABLE projects RENAME TO old_projects; CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT,revision TEXT NOT NULL DEFAULT 1); INSERT INTO projects SELECT id,name,description,goal,root_node_id,status,settings,created_at,updated_at,COALESCE(revision,1) FROM old_projects; DROP TABLE old_projects","incompatible_column:projects.revision"),
  ("DROP TRIGGER trg_edges_normalize_null_insert; CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges BEGIN SELECT 1; END","incompatible_object:trg_edges_normalize_null_insert"),
  ("DROP INDEX ux_edges_one_mainline_per_parent; CREATE INDEX ux_edges_one_mainline_per_parent ON edges(to_node_id)","incompatible_object:ux_edges_one_mainline_per_parent"),
 ])
@@ -108,7 +108,9 @@ def test_v2_missing_orm_mapped_column_is_never_current(tmp_path,table,column,ddl
 
 
 def test_exact_v2_is_current_and_newer_version_fails_closed(tmp_path):
- p=tmp_path/'current.db';fixture(p);_make_current(p);assert dm.schema_status(p)['migrationNeeded'] is False
+ import subprocess,sys
+ p=tmp_path/'fixture-current.db';script=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(script),str(p)],check=True,capture_output=True)
+ assert dm.schema_status(p)['migrationNeeded'] is False
  c=sqlite3.connect(p);c.execute('pragma user_version=3');c.close()
  with pytest.raises(ValueError,match='newer'):dm.schema_status(p)
 

@@ -27,10 +27,11 @@ os.environ['DATABASE_URL']='sqlite+aiosqlite:///'+sys.argv[1]
 from fastapi.testclient import TestClient
 from main import app
 with TestClient(app) as c:
- assert c.get('/api/projects/fixture').status_code==200
- nodes=c.get('/api/projects/fixture/nodes');assert nodes.status_code==200,nodes.text;node=nodes.json()[0]
- assert c.get('/api/nodes/'+node['id']).status_code==200
- blocks=c.get('/api/nodes/'+node['id']+'/blocks');assert blocks.status_code==200,blocks.text;assert blocks.json()[0]['content']['body']=='fixture body'
+ project=c.get('/api/projects/fixture');assert project.status_code==200,project.text;assert (project.json()['id'],project.json()['name'],project.json()['status'],project.json()['root_node_id'],project.json()['settings'])==('fixture','Desktop Fixture','active','root',{})
+ nodes=c.get('/api/projects/fixture/nodes');assert nodes.status_code==200,nodes.text;assert {n['id'] for n in nodes.json()}=={'root','child'};node=next(n for n in nodes.json() if n['id']=='root')
+ for expected in ('root','child'):
+  detail=c.get('/api/nodes/'+expected);assert detail.status_code==200,detail.text;n=detail.json();assert (n['id'],n['project_id'],n['node_type'],n['status'],n['maturity'])==(expected,'fixture','concept' if expected=='root' else 'idea','active','seed')
+ blocks=c.get('/api/nodes/root/blocks');assert blocks.status_code==200,blocks.text;block=blocks.json()[0];assert (block['id'],block['node_id'],block['block_type'],block['order_index'],block['content'])==('block','root','note',0,{'body':'fixture body'})
  edges=c.get('/api/projects/fixture/edges');assert edges.status_code==200,edges.text;edge=edges.json()[0];assert (edge['id'],edge['from_node_id'],edge['to_node_id'],edge['relation_type'])==('fixture-edge','root','child','child_of')
  patched=c.patch('/api/nodes/'+node['id'],json={'expected_project_revision':c.get('/api/projects/fixture').json()['revision'],'expected_revision':node['revision'],'summary':'committed'});assert patched.status_code==200,patched.text
  md=c.get('/api/projects/fixture/export');assert md.status_code==200,md.text;assert 'committed' in md.text and 'fixture body' in md.text
