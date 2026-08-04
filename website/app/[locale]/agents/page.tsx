@@ -1,1 +1,2 @@
-import {DemoMap} from '../../../components/DemoMap'; import {parseLocale} from '../../../content/i18n'; import {notFound} from 'next/navigation'; export default async function P({params}:{params:Promise<{locale:string}>}){const locale=parseLocale((await params).locale);if(!locale)notFound();return <DemoMap locale={locale}/>}
+import {permanentRedirect} from 'next/navigation';
+export default async function AgentsAlias({params}:{params:Promise<{locale:string}>}){permanentRedirect(`/${(await params).locale}/showcase`)}

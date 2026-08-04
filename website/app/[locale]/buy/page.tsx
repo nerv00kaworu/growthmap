@@ -1,4 +1,4 @@
-import {core,parseLocale} from '../../../content/i18n';
+import {localizedMetadata} from '../../../content/metadata'; export const generateMetadata=({params}:{params:Promise<{locale:string}>})=>localizedMetadata(params,'buy'); import {core,parseLocale} from '../../../content/i18n';
 import {notFound} from 'next/navigation';
 
 const stateLabels={
