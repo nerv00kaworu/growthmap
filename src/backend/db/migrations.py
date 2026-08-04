@@ -1,7 +1,7 @@
 """Ordered fail-closed SQLite schema migrations."""
 import os
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, column_matches, normalize_sql
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, column_matches, normalize_sql, orm_column_problem
 
 async def _column(conn, table, name):
     rows=(await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()
@@ -12,6 +12,13 @@ async def _validate_column(conn,spec):
     if row is None:return False
     if not column_matches(row,spec):raise RuntimeError(f"incompatible migration column {spec[0]}.{spec[1]}")
     return True
+
+async def _validate_orm_read_contract(conn):
+    for table,columns in ORM_READ_COLUMNS.items():
+        rows={row[1]:row for row in (await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()}
+        for name,expected in columns.items():
+            problem=orm_column_problem(rows.get(name),expected)
+            if problem:raise RuntimeError(f"{problem} ORM read column {table}.{name}")
 
 async def _validate_objects(conn,create_missing):
     expected={"ux_edges_one_mainline_per_parent":("index",INDEX_SQL),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
@@ -34,5 +41,8 @@ async def migrate_sqlite(conn):
         if upgrading and os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER")==str(ordinal):raise RuntimeError("injected migration failure")
     await _validate_objects(conn,upgrading)
     for spec in COLUMNS:assert await _validate_column(conn,spec)
+    # Missing non-migration-owned mapped columns are unsupported partial schemas.
+    # Fail before advancing user_version rather than inventing data/defaults.
+    await _validate_orm_read_contract(conn)
     if upgrading:await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
     if int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)!=CURRENT_USER_VERSION:raise RuntimeError("migration version did not validate")

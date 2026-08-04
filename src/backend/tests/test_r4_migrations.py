@@ -3,6 +3,7 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import text
 from db.migrations import migrate_sqlite, CURRENT_USER_VERSION
+from db.schema_contract import ORM_READ_COLUMNS
 
 OLD = """
 CREATE TABLE projects(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 1);
@@ -19,6 +20,16 @@ async def db(tmp_path, sql=OLD):
     async with engine.begin() as conn:
         for statement in sql.split(';'):
             if statement.strip(): await conn.execute(text(statement))
+        # These focused migration fixtures model a legacy database whose
+        # ordinary ORM surface is otherwise complete.
+        for table,columns in ORM_READ_COLUMNS.items():
+            present={row[1] for row in (await conn.execute(text(f'pragma table_info({table})'))).all()}
+            for name,expected in columns.items():
+                if name not in present:
+                    spec=next((item for item in __import__('db.schema_contract',fromlist=['COLUMNS']).COLUMNS if item[0]==table and item[1]==name),None)
+                    if spec:continue
+                    declared=expected if isinstance(expected,str) else expected[0]
+                    await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {name} {declared}'))
     return engine
 
 async def _populated_old_and_partial_compatible_upgrade(tmp_path):
@@ -86,3 +97,30 @@ async def _missing_provider_secret_column_gets_exact_default_and_preserves_rows(
     await engine.dispose()
 
 def test_missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path):asyncio.run(_missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path))
+
+async def _partial_orm_schema_fails_before_version_advance(tmp_path, version, table, column, replacement=None):
+    from db.database import Base
+    from models import models  # noqa: F401
+    path=tmp_path/f'partial-{version}-{table}-{column}.db'
+    engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(conn)
+    # Rebuild through SQLite's supported DROP COLUMN for missing cases; use a
+    # declared incompatible replacement on an otherwise disposable empty DB.
+    async with engine.begin() as conn:
+        await conn.execute(text(f'ALTER TABLE {table} DROP COLUMN {column}'))
+        if replacement:await conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {replacement}'))
+        await conn.execute(text(f'PRAGMA user_version={version}'))
+    with pytest.raises(RuntimeError,match=f'ORM read column {table}.{column}'):
+        async with engine.begin() as conn:await migrate_sqlite(conn)
+    async with engine.connect() as conn:assert (await conn.execute(text('pragma user_version'))).scalar()==version
+    await engine.dispose()
+
+@pytest.mark.parametrize('version,table,column,replacement',[
+ (2,'projects','settings',None),(2,'nodes','priority',None),
+ (2,'edges','created_at',None),(2,'content_blocks','created_by',None),
+ (1,'nodes','priority',None),(1,'projects','settings','INTEGER'),
+])
+def test_partial_orm_schema_actual_migration_fails_closed(tmp_path,version,table,column,replacement):
+    asyncio.run(_partial_orm_schema_fails_before_version_advance(tmp_path,version,table,column,replacement))

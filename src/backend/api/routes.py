@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, update
+from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1331,8 +1332,12 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         all_node_ids = list(nodes_by_id.keys())
         blocks_by_node: dict[str, list] = {}
         if all_node_ids:
-            blocks_result = await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index))
-            for b in blocks_result.scalars().all(): blocks_by_node.setdefault(str(b.node_id), []).append(b)
+            try:
+                blocks_result = await db.execute(select(ContentBlock).where(ContentBlock.node_id.in_(all_node_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index))
+                for b in blocks_result.scalars().all(): blocks_by_node.setdefault(str(b.node_id), []).append(b)
+            except (json.JSONDecodeError,StatementError) as error:
+                if isinstance(error,StatementError) and not isinstance(error.orig,(json.JSONDecodeError,TypeError,ValueError)):raise
+                raise HTTPException(409,"Project data is not compatible with Markdown export") from error
     if not project.root_node_id:
         raise HTTPException(404, "No root node")
     child_map: dict[str, list[str]] = {}
