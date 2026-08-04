@@ -146,13 +146,14 @@ jobs:
               throw "Final unsigned package real main failed startup. exited=$($process.HasExited) stdout=$stdout stderr=$stderr"
             }
             Start-Sleep -Seconds 5
-            if ((Get-FileHash $legacyDb -Algorithm SHA256).Hash -ne $beforeHash -or (Get-Item $legacyDb).Length -ne $beforeSize -or (Get-Item $legacyDb).LastWriteTimeUtc -ne $beforeTime) { throw 'Read-only legacy DB changed during final package UI smoke' }
-            $stderr = if (Test-Path $err) { Get-Content $err -Raw } else { '' }
-            if ($stderr -match 'Internal Server Error|no such column|OperationalError') { throw "Final package could not render legacy DB data: $stderr" }
           }
           finally {
             taskkill /PID $process.Id /T /F 2>$null | Out-Null
+            Wait-Process -Id $process.Id -Timeout 20 -ErrorAction SilentlyContinue
           }
+          if ((Get-FileHash $legacyDb -Algorithm SHA256).Hash -ne $beforeHash -or (Get-Item $legacyDb).Length -ne $beforeSize -or (Get-Item $legacyDb).LastWriteTimeUtc -ne $beforeTime) { throw 'Read-only legacy DB changed during final package UI smoke' }
+          $stderr = if (Test-Path $err) { Get-Content $err -Raw } else { '' }
+          if ($stderr -match 'Internal Server Error|no such column|OperationalError') { throw "Final package could not render legacy DB data: $stderr" }
       - name: Verify final production resources and normal sidecar smoke
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
