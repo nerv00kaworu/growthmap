@@ -1,6 +1,8 @@
 import hashlib,json,os,sqlite3,subprocess,sys,time
 from pathlib import Path
 
+import pytest
+
 def test_expired_startup_preserves_database_bytes_mtime_and_schema(tmp_path):
  db=tmp_path/'readonly.db';c=sqlite3.connect(db);c.executescript('''CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at DATETIME,updated_at DATETIME);
  CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT,branch_id TEXT,title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,workflow_status TEXT,file_paths JSON,created_at DATETIME,updated_at DATETIME);
@@ -33,20 +35,47 @@ with TestClient(app) as c:
  r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
  after=(hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns,sqlite3.connect(db).execute("select group_concat(name,',') from sqlite_master where type='table'").fetchone()[0]);assert after==before
 
-def test_query_only_export_rejects_malformed_content_without_detail_or_write(tmp_path):
- db=tmp_path/'malformed.db';c=sqlite3.connect(db);c.executescript('''CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT,title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER);INSERT INTO projects VALUES('p','safe','','','root','active','{}','','');INSERT INTO nodes VALUES('root','p','Root','','concept','active','seed');INSERT INTO content_blocks VALUES('b','root','note','not-json',0);''');c.close()
- before=(hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns)
- code='''from fastapi.testclient import TestClient\nfrom main import app\nwith TestClient(app) as c:\n r=c.get('/api/projects/p/export',headers={'Authorization':'Bearer t'});assert r.status_code==409 and r.json()=={'detail':'Project data is not compatible with Markdown export'}\n assert c.get('/api/projects/p/export').status_code==401\n'''
- env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{db}'}
- r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
- assert (hashlib.sha256(db.read_bytes()).hexdigest(),db.stat().st_mtime_ns)==before
+def _query_only_export_db(path, content):
+ c=sqlite3.connect(path);c.executescript('''CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT,description TEXT,goal TEXT,root_node_id TEXT,status TEXT,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT,title TEXT,summary TEXT,node_type TEXT,status TEXT,maturity TEXT);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT,from_node_id TEXT,to_node_id TEXT,relation_type TEXT);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT,block_type TEXT,content JSON,order_index INTEGER);INSERT INTO projects VALUES('p','safe','','','root','active','{}','','');INSERT INTO projects VALUES('other','isolated','','','other-root','active','{}','','');INSERT INTO nodes VALUES('root','p','Root','','concept','active','seed');INSERT INTO nodes VALUES('other-root','other','Other','','concept','active','seed');INSERT INTO content_blocks VALUES('other-bad','other-root','note','not-json',0);''')
+ c.execute("INSERT INTO content_blocks VALUES('b','root','note',?,0)",(content,));c.commit();c.close()
 
-def test_query_only_export_does_not_convert_direct_type_error(monkeypatch):
- import pytest
+
+def _run_query_only_export(path, expected_status):
+ before=(hashlib.sha256(path.read_bytes()).hexdigest(),path.stat().st_mtime_ns)
+ code='''from fastapi.testclient import TestClient\nfrom main import app\nwith TestClient(app) as c:\n assert c.get('/api/projects/p/export').status_code==401\n r=c.get('/api/projects/p/export',headers={'Authorization':'Bearer t'});assert r.status_code==int(__import__('os').environ['EXPECTED']),r.text\n if r.status_code==409:assert r.json()=={'detail':'Project data is not compatible with Markdown export'}\n else:assert '# safe' in r.text and 'Root' in r.text\n'''
+ env={**os.environ,'EXPECTED':str(expected_status),'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','DATABASE_URL':f'sqlite+aiosqlite:///{path}'}
+ r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True);assert r.returncode==0,r.stdout+r.stderr
+ assert (hashlib.sha256(path.read_bytes()).hexdigest(),path.stat().st_mtime_ns)==before
+
+
+@pytest.mark.parametrize('name,content',[('null',None),('scalar','42'),('list','[]'),('bytes',sqlite3.Binary(b'{"title":"bytes"}')),('malformed','not-json')])
+def test_query_only_export_rejects_incompatible_content_without_detail_or_write(tmp_path,name,content):
+ db=tmp_path/f'{name}.db';_query_only_export_db(db,content);_run_query_only_export(db,409)
+
+
+def test_query_only_export_accepts_json_object_and_isolates_projects(tmp_path):
+ db=tmp_path/'valid.db';_query_only_export_db(db,'{"title":"valid"}');_run_query_only_export(db,200)
+
+
+def test_query_only_export_accepts_decoded_dict_directly(monkeypatch):
+ import asyncio
  from api import routes
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
+ async def rows(_db,_project_id):
+  return {'id':'p','name':'safe','description':'','goal':'','root_node_id':'root'},[{'id':'root','title':'Root','summary':'','maturity':'seed'}],[],[{'id':'b','node_id':'root','block_type':'note','content':{'title':'valid'},'order_index':0}]
+ monkeypatch.setattr(routes,'_query_only_export_rows',rows)
+ response=asyncio.run(routes.export_project('p',object()))
+ assert 'valid' in response
+
+def test_query_only_export_route_propagates_direct_decoder_type_error(monkeypatch):
+ import asyncio,pytest
+ from api import routes
+ monkeypatch.setenv('GROWTHMAP_DB_QUERY_ONLY','1')
+ async def rows(_db,_project_id):
+  return {'id':'p','name':'safe','description':'','goal':'','root_node_id':'root'},[{'id':'root','title':'Root','summary':'','maturity':'seed'}],[],[{'id':'b','node_id':'root','block_type':'note','content':'{}','order_index':0}]
  def fail(_value):raise TypeError('unrelated decoder failure')
- monkeypatch.setattr(routes,'_decode_export_content',fail)
- with pytest.raises(TypeError,match='unrelated decoder failure'):routes._decode_export_content('{}')
+ monkeypatch.setattr(routes,'_query_only_export_rows',rows);monkeypatch.setattr(routes,'_decode_export_content',fail)
+ with pytest.raises(TypeError,match='unrelated decoder failure'):asyncio.run(routes.export_project('p',object()))
 
 def test_query_only_export_does_not_classify_unrelated_statement_errors():
  from sqlalchemy.exc import StatementError
@@ -71,3 +100,10 @@ def test_query_only_export_route_propagates_unrelated_statement_errors(monkeypat
   monkeypatch.setattr(routes,'_query_only_export_rows',fail)
   with pytest.raises(StatementError) as caught:asyncio.run(routes.export_project('p',object()))
   assert caught.value.orig is original
+
+def test_export_content_decoder_rejects_null_and_non_object_shapes_only_as_domain_errors():
+ import pytest
+ from api.routes import ExportContentCompatibilityError,_decode_export_content
+ assert _decode_export_content('{}')=={} and _decode_export_content({'body':'ok'})=={'body':'ok'}
+ for value in (None,[],1,'[]','null','1'):
+  with pytest.raises(ExportContentCompatibilityError):_decode_export_content(value)

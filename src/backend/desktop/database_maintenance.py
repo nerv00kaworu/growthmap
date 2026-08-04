@@ -127,7 +127,7 @@ def validate(path):
 def schema_status(path):
  """Inspect only the migration-owned schema surface without opening SQLite writable."""
  source=Path(path)
- if not source.exists(): return {"exists":False,"migrationNeeded":True,"reasons":["database_missing"]}
+ if not source.exists(): return {"exists":False,"compatible":False,"migrationNeeded":True,"reasons":["database_missing"]}
  connection,meta=_open_validated(source)
  try:
   reasons=[]
@@ -148,7 +148,7 @@ def schema_status(path):
    if row is None:reasons.append(f"object:{name}")
    elif normalize_sql(row[0])!=normalize_sql(sql):reasons.append(f"incompatible_object:{name}")
   if meta["userVersion"]!=CURRENT_USER_VERSION:reasons.append(f"user_version:{meta['userVersion']}")
-  return {"exists":True,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
+  return {"exists":True,"compatible":not reasons,"migrationNeeded":bool(reasons),"reasons":reasons,"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
  finally: connection.close()
 
 def _durability(file,parent):

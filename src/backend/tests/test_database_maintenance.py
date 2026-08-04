@@ -6,6 +6,10 @@ from desktop import database_maintenance as dm
 def fixture(path):
  c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),from_node_id TEXT NOT NULL REFERENCES nodes(id),to_node_id TEXT NOT NULL REFERENCES nodes(id),relation_type TEXT NOT NULL);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);""");c.execute("insert into projects values('p','x','','',NULL,'active','{}','','')");c.commit();c.close()
 
+def test_schema_status_missing_file_has_coherent_compatibility_contract(tmp_path):
+ status=dm.schema_status(tmp_path/'missing.db')
+ assert status=={'exists':False,'compatible':False,'migrationNeeded':True,'reasons':['database_missing']}
+
 def test_durability_metadata_matches_platform_contract(tmp_path):
  p=tmp_path/'flush.bin';p.write_bytes(b'durability-evidence')
  result=dm._durability(p,p.parent)
@@ -107,10 +111,17 @@ def test_v2_missing_orm_mapped_column_is_never_current(tmp_path,table,column,ddl
  status=dm.schema_status(p);assert status['migrationNeeded'] is True and f'missing_orm_column:{table}.{column}' in status['reasons']
 
 
-def test_exact_v2_is_current_and_newer_version_fails_closed(tmp_path):
+def test_schema_status_shape_for_compatible_migration_needed_and_newer(tmp_path):
  import subprocess,sys
  p=tmp_path/'fixture-current.db';script=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py';subprocess.run([sys.executable,str(script),str(p)],check=True,capture_output=True)
- assert dm.schema_status(p)['migrationNeeded'] is False
+ status=dm.schema_status(p)
+ assert status['exists'] is True and status['compatible'] is True
+ assert status['migrationNeeded'] is False and status['reasons']==[]
+ assert {'sha256','size','userVersion'} <= status.keys()
+ c=sqlite3.connect(p);c.execute('pragma user_version=1');c.close()
+ status=dm.schema_status(p)
+ assert status['exists'] is True and status['compatible'] is False
+ assert status['migrationNeeded'] is True and 'user_version:1' in status['reasons']
  c=sqlite3.connect(p);c.execute('pragma user_version=3');c.close()
  with pytest.raises(ValueError,match='newer'):dm.schema_status(p)
 

@@ -1305,8 +1305,19 @@ def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
     lines.append("")
     return lines
 
+class ExportContentCompatibilityError(ValueError):
+    """Stored content cannot be represented by the Markdown exporter."""
+
+
 def _decode_export_content(value):
-    return json.loads(value) if isinstance(value, str) else (value or {})
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ExportContentCompatibilityError("invalid stored JSON") from error
+    if not isinstance(value, dict):
+        raise ExportContentCompatibilityError("stored content must be a JSON object")
+    return value
 
 
 async def _query_only_export_rows(db: AsyncSession, project_id: str):
@@ -1336,7 +1347,8 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
         for row in block_rows:
             item=dict(row)
             try: item["content"]=_decode_export_content(item["content"])
-            except json.JSONDecodeError: raise HTTPException(409,"Project data is not compatible with Markdown export")
+            except ExportContentCompatibilityError as error:
+                raise HTTPException(409,"Project data is not compatible with Markdown export") from error
             blocks_by_node.setdefault(str(item["node_id"]),[]).append(SimpleNamespace(**item))
     else:
         project = await db.get(Project, project_id)

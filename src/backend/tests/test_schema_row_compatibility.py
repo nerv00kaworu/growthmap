@@ -3,10 +3,12 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from db.migrations import migrate_sqlite
+from db.schema_contract import TRIGGERS
 from desktop import database_maintenance as dm
+from models.models import Project, Node, Edge, ContentBlock
 from models.schemas import ProjectOut, NodeOut, EdgeOut, ContentBlockOut
 
 FIXTURE = Path(__file__).parents[3] / "desktop/scripts/create-e2e-fixture.py"
@@ -44,37 +46,46 @@ def first_id(connection, table):
 def test_all_legitimate_historical_nulls_are_preserved_and_response_serializable(tmp_path):
     path = fixture(tmp_path, 2)
     connection = sqlite3.connect(path); connection.row_factory = sqlite3.Row
+    row_ids = {}
     for table, columns in LEGITIMATE_NULLS.items():
-        row_id = first_id(connection, table)
-        connection.execute(f'UPDATE "{table}" SET ' + ",".join(f'"{c}"=NULL' for c in columns) + " WHERE id=?", (row_id,))
+        row_ids[table] = first_id(connection, table)
+        if table == "edges":
+            # Canonical normalization triggers affect future writes only. Remove
+            # and restore one around this synthetic historical-row insertion.
+            connection.execute("DROP TRIGGER trg_edges_normalize_null_update")
+        connection.execute(f'UPDATE "{table}" SET ' + ",".join(f'"{c}"=NULL' for c in columns) + " WHERE id=?", (row_ids[table],))
+        if table == "edges":
+            connection.execute(TRIGGERS["trg_edges_normalize_null_update"])
     connection.commit()
-    rows = {table: dict(connection.execute(f'SELECT * FROM "{table}" LIMIT 1').fetchone()) for table in LEGITIMATE_NULLS}
+    raw_rows = {table: dict(connection.execute(f'SELECT * FROM "{table}" WHERE id=?', (row_ids[table],)).fetchone()) for table in LEGITIMATE_NULLS}
     connection.close()
-    for table, columns in (("projects", ("settings",)), ("nodes", ("tags", "file_paths"))):
-        for column in columns:
-            if isinstance(rows[table][column], str):
-                import json
-                rows[table][column] = json.loads(rows[table][column])
+    for table, columns in LEGITIMATE_NULLS.items():
+        assert all(raw_rows[table][column] is None for column in columns), (table, raw_rows[table])
     status = dm.schema_status(path)
-    assert not status["migrationNeeded"], status
-    outputs = (
-        ProjectOut.model_validate(rows["projects"]), NodeOut.model_validate(rows["nodes"]),
-        EdgeOut.model_validate(rows["edges"]), ContentBlockOut.model_validate(rows["content_blocks"]),
-    )
+    assert status["compatible"] and not status["migrationNeeded"] and not status["reasons"], status
+
+    async def serialize_through_orm():
+        engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            models = (
+                await session.get(Project, row_ids["projects"]),
+                await session.get(Node, row_ids["nodes"]),
+                await session.get(Edge, row_ids["edges"]),
+                await session.get(ContentBlock, row_ids["content_blocks"]),
+            )
+            outputs = tuple(schema.model_validate(model) for schema, model in zip(
+                (ProjectOut, NodeOut, EdgeOut, ContentBlockOut), models
+            ))
+        await engine.dispose()
+        return outputs
+
+    outputs = asyncio.run(serialize_through_orm())
     for output in outputs:
         assert output.model_dump(mode="json")
     for table, columns in LEGITIMATE_NULLS.items():
         dumped = outputs[list(LEGITIMATE_NULLS).index(table)].model_dump()
-        if table == "edges":
-            # Canonical triggers normalize writes, but nullable declarations and
-            # Optional responses remain compatible with rows predating them.
-            assert dumped["weight"] == 1.0 and dumped["note"] == ""
-        elif table == "nodes":
-            # Fixture maintenance triggers restore summary/file_paths; all other
-            # historical nullable values stay semantically NULL.
-            assert all(dumped[column] is None for column in columns if column not in ("file_paths", "summary"))
-        else:
-            assert all(dumped[column] is None for column in columns)
+        assert all(dumped[column] is None for column in columns)
 
 
 @pytest.mark.parametrize("version", [1, 2])
@@ -87,7 +98,8 @@ def test_required_timestamp_null_fails_before_acceptance_or_version_advance(tmp_
     connection.commit(); connection.close()
     before = path.read_bytes()
     status = dm.schema_status(path)
-    assert status["migrationNeeded"] and f"null_data:{table}.{columns[-1]}" in status["reasons"]
+    assert not status["compatible"] and status["migrationNeeded"]
+    assert f"null_data:{table}.{columns[-1]}" in status["reasons"]
     async def run():
         engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
         with pytest.raises(RuntimeError, match=f"incompatible NULL data {table}.{columns[-1]}"):
@@ -106,7 +118,7 @@ def test_required_timestamp_null_fails_before_acceptance_or_version_advance(tmp_
 def test_required_timestamp_declarations_may_be_nullable_when_rows_are_valid(tmp_path):
     path = fixture(tmp_path, 2)
     status = dm.schema_status(path)
-    assert not status["migrationNeeded"], status
+    assert status["compatible"] and not status["migrationNeeded"], status
     connection = sqlite3.connect(path)
     for table, columns in TIMESTAMPS.items():
         info = {row[1]: row for row in connection.execute(f'pragma table_info("{table}")')}
