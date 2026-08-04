@@ -24,6 +24,53 @@ TRIGGERS = {
 }
 OBJECT_SQL = {"ux_edges_one_mainline_per_parent": INDEX_SQL, **TRIGGERS}
 
+# Every column selected by the four ORM entities used by ordinary authoring
+# reads and writable Markdown export. Types are normalized to SQLite affinity;
+# legacy VARCHAR/TEXT and DATETIME/TEXT declarations are intentionally accepted.
+ORM_READ_COLUMNS = {
+    "projects": {
+        "id":"TEXT", "name":"TEXT", "description":"TEXT", "goal":"TEXT",
+        "root_node_id":"TEXT", "status":"TEXT", "settings":"JSON",
+        "created_at":("TEXT","NUMERIC"), "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
+    },
+    "nodes": {
+        "id":"TEXT", "project_id":"TEXT", "title":"TEXT", "summary":"TEXT",
+        "node_type":"TEXT", "status":"TEXT", "maturity":"TEXT", "priority":"INTEGER",
+        "confidence":"REAL", "description":"TEXT", "rules_text":"TEXT",
+        "constraints_text":"TEXT", "examples_text":"TEXT", "questions_text":"TEXT",
+        "decision_notes":"TEXT", "tags":"JSON", "workflow_status":"TEXT",
+        "file_paths":"JSON", "branch_id":"TEXT", "created_by":"TEXT",
+        "last_edited_by":"TEXT", "position_x":"REAL", "position_y":"REAL",
+        "created_at":("TEXT","NUMERIC"), "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
+    },
+    "edges": {
+        "id":"TEXT", "project_id":"TEXT", "from_node_id":"TEXT", "to_node_id":"TEXT",
+        "relation_type":"TEXT", "weight":"REAL", "note":"TEXT", "is_mainline":("INTEGER","NUMERIC"),
+        "created_at":("TEXT","NUMERIC"), "revision":"INTEGER",
+    },
+    "content_blocks": {
+        "id":"TEXT", "node_id":"TEXT", "block_type":"TEXT", "content":"JSON",
+        "order_index":"INTEGER", "created_by":"TEXT", "created_at":("TEXT","NUMERIC"),
+        "updated_at":("TEXT","NUMERIC"), "revision":"INTEGER",
+    },
+}
+
+
+def sqlite_affinity(declared_type):
+    value=str(declared_type or "").upper()
+    if "INT" in value:return "INTEGER"
+    if any(token in value for token in ("CHAR","CLOB","TEXT")):return "TEXT"
+    if "BLOB" in value or not value:return "BLOB"
+    if any(token in value for token in ("REAL","FLOA","DOUB")):return "REAL"
+    if value=="JSON":return "JSON"
+    return "NUMERIC"
+
+
+def orm_column_problem(row, expected):
+    if row is None:return "missing"
+    allowed=expected if isinstance(expected,tuple) else (expected,)
+    return None if sqlite_affinity(row[2]) in allowed else "incompatible"
+
 
 def normalize_sql(sql):
     value = re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", sql or "", flags=re.I)

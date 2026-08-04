@@ -1,7 +1,7 @@
 """Offline SQLite maintenance used by the packaged desktop sidecar."""
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, OBJECT_SQL, column_matches, normalize_sql
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, column_matches, normalize_sql, orm_column_problem
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
@@ -131,9 +131,11 @@ def schema_status(path):
  connection,meta=_open_validated(source)
  try:
   reasons=[]
-  for table,required in (("projects",{"description","goal","root_node_id"}),("nodes",{"summary"})):
-   actual={row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
-   for column in sorted(required-actual):reasons.append(f"read_column:{table}.{column}")
+  for table,contract in ORM_READ_COLUMNS.items():
+   rows={row[1]:row for row in connection.execute(f'PRAGMA table_info("{table}")')}
+   for column,expected in contract.items():
+    problem=orm_column_problem(rows.get(column),expected)
+    if problem:reasons.append(f"{problem}_orm_column:{table}.{column}")
   for spec in COLUMNS:
    row=next((item for item in connection.execute(f'PRAGMA table_info("{spec[0]}")') if item[1]==spec[1]),None)
    if row is None:reasons.append(f"column:{spec[0]}.{spec[1]}")
