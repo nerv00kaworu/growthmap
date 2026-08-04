@@ -10,11 +10,12 @@ def test_authoring_desktop_routes_are_404(tmp_path):
 def test_concurrent_create_and_restore_never_exceed_two(tmp_path):
  script=r'''
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from main import app
 h={'Authorization':'Bearer test-session-token'}
 with TestClient(app) as c:
- c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':datetime.now(timezone.utc).isoformat(),'installation_id':'test-installation'})
  def create(n):return c.post('/api/projects',headers=h,json={'name':n}).status_code
  with ThreadPoolExecutor(max_workers=8) as x: codes=list(x.map(create,[str(i) for i in range(8)]))
  rows=c.get('/api/projects',headers=h).json();assert sum(p['status']=='active' for p in rows)<=2,codes

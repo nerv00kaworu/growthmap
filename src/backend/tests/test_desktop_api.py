@@ -2,11 +2,12 @@ import os, subprocess, sys, textwrap
 
 def test_token_and_free_seats_archive_restore_export(tmp_path):
     script = r'''
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from main import app
 h={'Authorization':'Bearer test-session-token'}
 with TestClient(app) as client:
- assert client.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:43+00:00','installation_id':'test-installation'}).status_code==200
+ assert client.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':datetime.now(timezone.utc).isoformat(),'installation_id':'test-installation'}).status_code==200
  assert client.get('/api/health/deep').status_code==401
  assert client.get('/api/health/deep',headers=h).status_code==200
  p=[client.post('/api/projects',headers=h,json={'name':n}).json() for n in ('one','two')]

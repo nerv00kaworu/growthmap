@@ -2,12 +2,13 @@ import os, subprocess, sys
 
 def test_desktop_secret_routes_require_existing_nonmock_provider(tmp_path):
     script=r'''
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from main import app
 from desktop.secrets import get
 h={'Authorization':'Bearer '+'test-session-token'}
 with TestClient(app) as c:
- c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':'2026-07-28T01:30:08+00:00','installation_id':'test-installation'})
+ c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':datetime.now(timezone.utc).isoformat(),'installation_id':'test-installation'})
  missing='deleted-provider-id'
  assert c.put(f'/api/desktop/secrets/{missing}',headers=h,json={'api_key':'***'}).status_code==404
  assert get(missing) is None
