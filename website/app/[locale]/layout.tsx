@@ -6,9 +6,9 @@ import {LocaleNav} from '../../components/LocaleNav';
 export function generateStaticParams(){return locales.map(locale=>({locale}))}
 
 const footerCopy={
-  'zh-TW':{tagline:'人類與任意 Agent 共用的專案生長工作區。',local:'桌面專案資料永遠留在你的本機。',status:'狀態',skip:'跳到主要內容',nav:'主要導覽'},
-  'zh-CN':{tagline:'人类与任意 Agent 共用的项目生长工作区。',local:'桌面项目数据始终留在你的本机。',status:'状态',skip:'跳到主要内容',nav:'主要导航'},
-  en:{tagline:'A shared project-growth workspace for people and arbitrary agents.',local:'Desktop project data stays on your machine.',status:'Status',skip:'Skip to main content',nav:'Primary navigation'}
+  'zh-TW':{tagline:'人類與任意 Agent 共用的專案生長工作區。',local:'桌面專案資料永遠留在你的本機。',status:'狀態',skip:'跳到主要內容',nav:'主要導覽',menu:'選單'},
+  'zh-CN':{tagline:'人类与任意 Agent 共用的项目生长工作区。',local:'桌面项目数据始终留在你的本机。',status:'状态',skip:'跳到主要内容',nav:'主要导航',menu:'菜单'},
+  en:{tagline:'A shared project-growth workspace for people and arbitrary agents.',local:'Desktop project data stays on your machine.',status:'Status',skip:'Skip to main content',nav:'Primary navigation',menu:'Menu'}
 } as const;
 
 export default async function LocaleLayout({children,params}:{children:React.ReactNode;params:Promise<{locale:string}>}){
@@ -22,6 +22,7 @@ export default async function LocaleLayout({children,params}:{children:React.Rea
       <Link className="brand" href={`/${locale}`} aria-label={`GrowthMap · ${n.home}`}><i/>GrowthMap</Link>
       <nav className="primary-nav" aria-label={copy.nav}>
         <div className="nav-links">{links.map(([name,p])=><Link key={p} href={`/${locale}${p}`}>{name}</Link>)}</div>
+        <details className="mobile-nav"><summary>{copy.menu}</summary><div className="mobile-nav-links">{links.map(([name,p])=><Link key={p} href={`/${locale}${p}`}>{name}</Link>)}</div></details>
         <LocaleNav/>
       </nav>
     </header>
