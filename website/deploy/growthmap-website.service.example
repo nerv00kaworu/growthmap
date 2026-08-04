@@ -1,0 +1,17 @@
+# Template only — do not install without an approved deployment review.
+[Unit]
+Description=GrowthMap official website
+After=network.target
+[Service]
+Type=simple
+User=growthmap
+WorkingDirectory=/srv/growthmap-website
+EnvironmentFile=/etc/growthmap-website.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+[Install]
+WantedBy=multi-user.target

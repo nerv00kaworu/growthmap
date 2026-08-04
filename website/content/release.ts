@@ -1,0 +1,2 @@
+export type Release = { version:string; commit:string; filename:string; bytes:number; sha256:string; ciRun:number; publisher:'Unknown Publisher'; signed:false; platform:'Windows x64'; publicRelease:false };
+export const verifiedCandidate: Release = {version:'0.1.0-desktop.2',commit:'17f72ae97789edda475d58922c6a2173115397cf',filename:'GrowthMap-Setup-0.1.0-desktop.2-x64.exe',bytes:127968303,sha256:'4c5a0c9041c9ad4b51c9f1f9cecc1c9e2d3583e55adf763511ac07b98551c609',ciRun:30870171610,publisher:'Unknown Publisher',signed:false,platform:'Windows x64',publicRelease:false};
