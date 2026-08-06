@@ -1,6 +1,10 @@
 'use strict';
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
 function launchArgs({userData,debugPort,logPath}){return [`--user-data-dir=${userData}`,`--remote-debugging-port=${debugPort}`,'--enable-logging',`--log-file=${logPath}`];}
+function pythonRunner({spawnSync,env=process.env}){
+ const interpreter=env.GROWTHMAP_TEST_PYTHON||env.PYTHON||'python';
+ const run=(args,options)=>spawnSync(interpreter,args,options);run.interpreter=interpreter;return run;
+}
 function processTree(rootPid){
  const q=`$root=${Number(rootPid)};$all=Get-CimInstance Win32_Process;$seen=@($root);do{$before=$seen.Count;$seen+=@($all|Where-Object{$seen -contains $_.ParentProcessId}|ForEach-Object ProcessId);$seen=@($seen|Sort-Object -Unique)}while($seen.Count -gt $before);$all|Where-Object{$seen -contains $_.ProcessId}|Select-Object ProcessId,ParentProcessId,Name,CommandLine|ConvertTo-Json -Compress`;
  const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});
@@ -36,4 +40,4 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
  return {metadata,config};
 }
-module.exports={launchArgs,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
+module.exports={launchArgs,pythonRunner,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};

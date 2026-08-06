@@ -1,9 +1,10 @@
 'use strict';
 const fs=require('node:fs'),net=require('node:net'),os=require('node:os'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process'),{chromium}=require('playwright-core');
-const {launchArgs,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage}=require('./renderer-e2e-support');
+const {launchArgs,pythonRunner,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage}=require('./renderer-e2e-support');
 if(process.platform!=='win32')throw new Error('Packaged renderer E2E must run on Windows');
 if(process.env.CI!=='true')throw new Error('Renderer E2E is CI-only');
 const root=path.resolve(__dirname,'..');
+const runPython=pythonRunner({spawnSync});
 const executable=process.env.GROWTHMAP_PACKAGED_EXE||path.join(root,'dist','win-unpacked','GrowthMap.exe');
 const screenshot=process.env.GROWTHMAP_E2E_SCREENSHOT||path.join(root,'artifacts','growthmap-renderer.png');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -41,7 +42,7 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
  const userData=fs.mkdtempSync(path.join(os.tmpdir(),'growthmap-e2e-profile-'));
  const fixtureDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'growthmap-e2e-input-')),fixture=path.join(fixtureDirectory,'fixture.sqlite');
  const helper=path.join(root,'scripts','create-e2e-fixture.py');
- let made=spawnSync(process.env.GROWTHMAP_TEST_PYTHON||process.env.PYTHON||'python',[helper,fixture],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
+ let made=runPython([helper,fixture],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
  let run=await launch(userData,fixture);
  try{
   await stageWait(run,'fresh-trial',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';let entitlement;try{const response=await fetch('/api/desktop/entitlement');entitlement=response.ok?await response.json():{http_status:response.status};}catch(error){return {error:`entitlement request failed: ${error?.name||'Error'}`};}if(status.startsWith('Trial ·')&&entitlement.state==='trial'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;if(status.includes('Read-only')||entitlement.state==='extraction')return {error:`unexpected entitlement: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`};return false;},30000);
@@ -64,7 +65,7 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   await stageWait(run,'backup',()=>{const t=document.body.innerText;if(t.includes('備份完成'))return true;return t.includes('資料庫操作失敗')?{error:'database operation failed'}:false;},90000);
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
-  made=spawnSync('python',['-c',`import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("update projects set name='Mutated Fixture'");c.commit();c.close()`,path.join(userData,'growthmap.db')],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
+  made=runPython(['-c',`import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("update projects set name='Mutated Fixture'");c.commit();c.close()`,path.join(userData,'growthmap.db')],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
   run=await launch(userData,fixture);
   await stageWait(run,'restart-trial',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';const response=await fetch('/api/desktop/entitlement');if(!response.ok)return {error:`entitlement HTTP ${response.status}`};const entitlement=await response.json();if(status.startsWith('Trial ·')&&entitlement.state==='trial'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;return status.includes('Read-only')||entitlement.state==='extraction'?{error:`trial identity not preserved: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`}:false;},30000);
   await stageWait(run,'mutated-restart',()=>document.body.innerText.includes('Mutated Fixture'),90000);

@@ -13,7 +13,7 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
 test('packaged E2E keeps import input outside the fresh profile and verifies trial writability',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),entrypoint=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/growthmap-e2e-profile-/);assert.match(source,/growthmap-e2e-input-/);assert.doesNotMatch(source,/path\.join\(userData,'fixture\.sqlite'\)/);
- assert.match(source,/process\.env\.GROWTHMAP_TEST_PYTHON\|\|process\.env\.PYTHON\|\|'python'/);assert.doesNotMatch(source,/spawnSync\('python',\[helper,fixture\]/);
+ assert.match(source,/let made=runPython\(\[helper,fixture\]/);assert.match(source,/made=runPython\(\['-c'/);assert.doesNotMatch(source,/spawnSync\(['"]python['"]/);
  assert.match(source,/fresh-trial/);assert.match(source,/restart-trial/);assert.match(source,/mutations_allowed===true/);assert.match(source,/trial-marker\.bin/);assert.match(source,/installation-identity\.bin/);assert.match(source,/trial-state\.json/);
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
 });
@@ -25,6 +25,14 @@ test('packaged E2E pins canonical fixture reads and Markdown through same-origin
  for(const token of ['fixture-edge','from_node_id','to_node_id','child_of','fixture body','import-canonical-api','restart-canonical-api','restore-canonical-api'])assert.ok(source.includes(token),token);
  const assertionBody=source.slice(source.indexOf('async function assertCanonicalFixture'),source.indexOf('(async()=>'));
  assert.doesNotMatch(assertionBody,/sqlite3|fixture\.sqlite|growthmap\.db/);
+});
+
+test('Python runner resolves once and uses the same supplied interpreter for every subprocess',()=>{
+ const {pythonRunner}=require('../scripts/renderer-e2e-support'),calls=[];
+ const run=pythonRunner({env:{GROWTHMAP_TEST_PYTHON:'C:\\qa\\python.exe',PYTHON:'C:\\other\\python.exe'},spawnSync:(...args)=>{calls.push(args);return{status:0}}});
+ assert.equal(run.interpreter,'C:\\qa\\python.exe');run(['fixture.py','fixture.sqlite'],{encoding:'utf8'});run(['-c','mutate','growthmap.db'],{encoding:'utf8'});
+ assert.deepEqual(calls.map(call=>call[0]),['C:\\qa\\python.exe','C:\\qa\\python.exe']);
+ assert.deepEqual(calls.map(call=>call[1][0]),['fixture.py','-c']);
 });
 
 test('CDP version probe records HTTP response and connection errors',async()=>{
