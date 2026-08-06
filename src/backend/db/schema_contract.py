@@ -23,12 +23,12 @@ TRIGGERS = {
 }
 OBJECT_SQL = {"ux_edges_one_mainline_per_parent": INDEX_SQL, **TRIGGERS}
 
-# affinity, NOT NULL, normalized declared default. Primary-key NOT NULL varies
-# between equivalent SQLite declarations, so id columns intentionally allow both.
+# affinity, NOT NULL, normalized declared default.
 def _s(affinity, not_null=False, default=None): return (affinity, not_null, default)
-# Classification: nullable historical value fields are normalized by response
-# validators; timestamps have no truthful synthetic default, so nullable table
-# declarations are supported only when every stored row is non-NULL.
+# Branches retain a narrowly supported legacy declaration contract, with required
+# historical values checked row-by-row. All other response-required identifiers
+# and timestamps must be declared NOT NULL so future writes cannot create rows
+# that fail response validation.
 ROW_REQUIRED_NON_NULL = {
  "projects":("created_at","updated_at"), "nodes":("created_at","updated_at"),
  "edges":("created_at",), "content_blocks":("created_at","updated_at"),
@@ -37,13 +37,13 @@ ROW_REQUIRED_NON_NULL = {
 
 ORM_READ_COLUMNS = {
  "projects": {
-  "id":_s("TEXT",(False,True)),"name":_s("TEXT",True),"description":_s("TEXT"),"goal":_s("TEXT"),"root_node_id":_s("TEXT"),"status":_s("TEXT",True),"settings":_s("JSON"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+  "id":_s("TEXT",True),"name":_s("TEXT",True),"description":_s("TEXT"),"goal":_s("TEXT"),"root_node_id":_s("TEXT"),"status":_s("TEXT",True),"settings":_s("JSON"),"created_at":_s(("TEXT","NUMERIC"),True),"updated_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "nodes": {
-  "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",True),"title":_s("TEXT",True),"summary":_s("TEXT"),"node_type":_s("TEXT",True),"status":_s("TEXT",True),"maturity":_s("TEXT",True),"priority":_s("INTEGER"),"confidence":_s("REAL"),"description":_s("TEXT"),"rules_text":_s("TEXT"),"constraints_text":_s("TEXT"),"examples_text":_s("TEXT"),"questions_text":_s("TEXT"),"decision_notes":_s("TEXT"),"tags":_s("JSON"),"workflow_status":_s("TEXT",True,"draft"),"file_paths":_s("JSON",False,"[]"),"branch_id":_s("TEXT"),"created_by":_s("TEXT"),"last_edited_by":_s("TEXT"),"position_x":_s("REAL"),"position_y":_s("REAL"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+  "id":_s("TEXT",True),"project_id":_s("TEXT",True),"title":_s("TEXT",True),"summary":_s("TEXT"),"node_type":_s("TEXT",True),"status":_s("TEXT",True),"maturity":_s("TEXT",True),"priority":_s("INTEGER"),"confidence":_s("REAL"),"description":_s("TEXT"),"rules_text":_s("TEXT"),"constraints_text":_s("TEXT"),"examples_text":_s("TEXT"),"questions_text":_s("TEXT"),"decision_notes":_s("TEXT"),"tags":_s("JSON"),"workflow_status":_s("TEXT",True,"draft"),"file_paths":_s("JSON",False,"[]"),"branch_id":_s("TEXT"),"created_by":_s("TEXT"),"last_edited_by":_s("TEXT"),"position_x":_s("REAL"),"position_y":_s("REAL"),"created_at":_s(("TEXT","NUMERIC"),True),"updated_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "edges": {
-  "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",True),"from_node_id":_s("TEXT",True),"to_node_id":_s("TEXT",True),"relation_type":_s("TEXT",True),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),True,(None,"0")),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+  "id":_s("TEXT",True),"project_id":_s("TEXT",True),"from_node_id":_s("TEXT",True),"to_node_id":_s("TEXT",True),"relation_type":_s("TEXT",True),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),True,(None,"0")),"created_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "content_blocks": {
-  "id":_s("TEXT",(False,True)),"node_id":_s("TEXT",True),"block_type":_s("TEXT",True),"content":_s("JSON",True),"order_index":_s("INTEGER",True),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"updated_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
+  "id":_s("TEXT",True),"node_id":_s("TEXT",True),"block_type":_s("TEXT",True),"content":_s("JSON",True),"order_index":_s("INTEGER",True),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC"),True),"updated_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "branches": {
   "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"name":_s("TEXT",(False,True)),"description":_s("TEXT"),"source_node_id":_s("TEXT"),"status":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
 }

@@ -41,7 +41,7 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
  const userData=fs.mkdtempSync(path.join(os.tmpdir(),'growthmap-e2e-profile-'));
  const fixtureDirectory=fs.mkdtempSync(path.join(os.tmpdir(),'growthmap-e2e-input-')),fixture=path.join(fixtureDirectory,'fixture.sqlite');
  const helper=path.join(root,'scripts','create-e2e-fixture.py');
- let made=spawnSync('python',[helper,fixture],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
+ let made=spawnSync(process.env.GROWTHMAP_TEST_PYTHON||process.env.PYTHON||'python',[helper,fixture],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
  let run=await launch(userData,fixture);
  try{
   await stageWait(run,'fresh-trial',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';let entitlement;try{const response=await fetch('/api/desktop/entitlement');entitlement=response.ok?await response.json():{http_status:response.status};}catch(error){return {error:`entitlement request failed: ${error?.name||'Error'}`};}if(status.startsWith('Trial ·')&&entitlement.state==='trial'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;if(status.includes('Read-only')||entitlement.state==='extraction')return {error:`unexpected entitlement: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`};return false;},30000);

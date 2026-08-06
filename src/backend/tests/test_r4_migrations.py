@@ -6,11 +6,11 @@ from db.migrations import migrate_sqlite, CURRENT_USER_VERSION
 from db.schema_contract import ORM_READ_COLUMNS
 
 OLD = """
-CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE projects(id TEXT PRIMARY KEY NOT NULL,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,name TEXT NOT NULL,description TEXT,source_node_id TEXT,status TEXT,created_at DATETIME);
-CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,branch_id VARCHAR(36),workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME,updated_at DATETIME);
-CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,is_mainline BOOLEAN NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',created_at DATETIME);
-CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME,updated_at DATETIME);
+CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,branch_id VARCHAR(36),workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL);
+CREATE TABLE edges(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,is_mainline BOOLEAN NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',created_at DATETIME NOT NULL);
+CREATE TABLE content_blocks(id TEXT PRIMARY KEY NOT NULL,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128) DEFAULT '');
 INSERT INTO projects(id,name,status,created_at,updated_at,revision) VALUES ('p','kept','active','2020-01-01','2020-01-01',7);
 """

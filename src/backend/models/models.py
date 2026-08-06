@@ -25,8 +25,8 @@ class Project(Base):
     root_node_id = Column(String(36), nullable=True)
     status = Column(String(20), nullable=False, default="active")
     settings = Column(JSON, default={})
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     nodes = relationship("Node", back_populates="project", cascade="all, delete-orphan")
@@ -62,8 +62,8 @@ class Node(Base):
     last_edited_by = Column(Text, default="human")
     position_x = Column(Float, default=0)
     position_y = Column(Float, default=0)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     project = relationship("Project", back_populates="nodes")
@@ -89,7 +89,7 @@ class Edge(Base):
     weight = Column(Float, default=1.0, server_default="1.0")
     note = Column(Text, default="", server_default="")
     is_mainline = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime(timezone=True), default=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     project = relationship("Project", back_populates="edges")
@@ -110,8 +110,8 @@ class ContentBlock(Base):
     content = Column(JSON, nullable=False, default={})
     order_index = Column(Integer, nullable=False, default=0)
     created_by = Column(Text, default="human")
-    created_at = Column(DateTime(timezone=True), default=utcnow)
-    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     revision = Column(Integer, nullable=False, default=1, server_default="1")
 
     node = relationship("Node", back_populates="content_blocks")

@@ -12,12 +12,6 @@ from models.models import Project, Node, Edge, ContentBlock
 from models.schemas import ProjectOut, NodeOut, EdgeOut, ContentBlockOut
 
 FIXTURE = Path(__file__).parents[3] / "desktop/scripts/create-e2e-fixture.py"
-TIMESTAMPS = {
-    "projects": ("created_at", "updated_at"),
-    "nodes": ("created_at", "updated_at"),
-    "edges": ("created_at",),
-    "content_blocks": ("created_at", "updated_at"),
-}
 LEGITIMATE_NULLS = {
     "projects": ("description", "goal", "settings"),
     "nodes": (
@@ -89,39 +83,53 @@ def test_all_legitimate_historical_nulls_are_preserved_and_response_serializable
         assert all(dumped[column] is None for column in columns)
 
 
-@pytest.mark.parametrize("version", [1, 2])
-@pytest.mark.parametrize("table,columns", TIMESTAMPS.items())
-def test_required_timestamp_null_fails_before_acceptance_or_version_advance(tmp_path, version, table, columns):
-    path = fixture(tmp_path, version)
+CORE_DECLARATION_REQUIRED = {
+    "projects": ("id", "created_at", "updated_at"),
+    "nodes": ("id", "project_id", "created_at", "updated_at"),
+    "edges": ("id", "project_id", "from_node_id", "to_node_id", "created_at"),
+    "content_blocks": ("id", "node_id", "created_at", "updated_at"),
+}
+
+
+@pytest.mark.parametrize(
+    "table,column",
+    [(table, column) for table, columns in CORE_DECLARATION_REQUIRED.items() for column in columns],
+)
+def test_nullable_required_declaration_fails_preflight_and_migration(tmp_path, table, column):
+    path = fixture(tmp_path, 2)
     connection = sqlite3.connect(path)
-    row_id = first_id(connection, table)
-    connection.execute(f'UPDATE "{table}" SET "{columns[-1]}"=NULL WHERE id=?', (row_id,))
+    row = next(row for row in connection.execute(f'pragma table_info("{table}")') if row[1] == column)
+    declared = f'{column} {row[2]}' + (" PRIMARY KEY" if row[5] else "")
+    canonical = declared + " NOT NULL"
+    schema_sql = connection.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name=?", (table,)).fetchone()[0]
+    assert canonical in schema_sql, (table, column, schema_sql)
+    connection.execute("PRAGMA writable_schema=ON")
+    connection.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name=?", (schema_sql.replace(canonical, declared, 1), table))
+    connection.execute("PRAGMA writable_schema=OFF")
+    connection.execute("PRAGMA schema_version=100")
     connection.commit(); connection.close()
-    before = path.read_bytes()
+
     status = dm.schema_status(path)
-    assert not status["compatible"] and status["migrationNeeded"]
-    assert f"null_data:{table}.{columns[-1]}" in status["reasons"]
+    assert f"incompatible_orm_column:{table}.{column}" in status["reasons"], status
+
     async def run():
         engine = create_async_engine(f"sqlite+aiosqlite:///{path}")
-        with pytest.raises(RuntimeError, match=f"incompatible NULL data {table}.{columns[-1]}"):
+        with pytest.raises(RuntimeError, match=f"incompatible ORM read column {table}.{column}"):
             async with engine.begin() as connection:
                 await migrate_sqlite(connection)
-        async with engine.connect() as connection:
-            assert (await connection.exec_driver_sql("pragma user_version")).scalar() == version
         await engine.dispose()
     asyncio.run(run())
-    # Rejected current-version databases are byte-identical; a v1 transaction
-    # can transiently attempt additive DDL, but must preserve rows and version.
-    if version == 2:
-        assert path.read_bytes() == before
 
 
-def test_required_timestamp_declarations_may_be_nullable_when_rows_are_valid(tmp_path):
+def test_canonical_declarations_are_not_null_but_value_fields_remain_nullable(tmp_path):
     path = fixture(tmp_path, 2)
     status = dm.schema_status(path)
     assert status["compatible"] and not status["migrationNeeded"], status
     connection = sqlite3.connect(path)
-    for table, columns in TIMESTAMPS.items():
+    for table, columns in CORE_DECLARATION_REQUIRED.items():
+        info = {row[1]: row for row in connection.execute(f'pragma table_info("{table}")')}
+        assert all(info[column][3] for column in columns)
+    for table, columns in LEGITIMATE_NULLS.items():
         info = {row[1]: row for row in connection.execute(f'pragma table_info("{table}")')}
         assert all(not info[column][3] for column in columns)
     connection.close()
