@@ -50,7 +50,10 @@ def test_late_replacement_before_quota_query_is_rejected_by_final_boundary(tmp_p
  def replace_with_overquota(target):
   nonlocal outcome
   replacement=target.with_suffix('.replacement');replacement.write_bytes(target.read_bytes())
-  with sqlite3.connect(replacement) as connection:connection.execute("insert into projects values('p2','second','','',NULL,'active','{}','','')")
+  connection=sqlite3.connect(replacement)
+  try:
+   connection.execute("insert into projects values('p2','second','','',NULL,'active','{}','','')");connection.commit()
+  finally:connection.close()
   try:os.replace(replacement,target)
   except PermissionError:outcome='denied';raise
   outcome='replaced'
@@ -60,7 +63,7 @@ def test_late_replacement_before_quota_query_is_rejected_by_final_boundary(tmp_p
   except RuntimeError as error:assert outcome=='replaced' and ('identity mismatch' in str(error) or 'digest mismatch' in str(error))
   else:pytest.fail('replacement injection returned writable startup proof')
  finally:
-  asyncio.run(engine.dispose());path.write_bytes(original);path.with_suffix('.replacement').unlink(missing_ok=True)
+  asyncio.run(engine.dispose());path.write_bytes(original);path.with_suffix('.replacement').unlink(missing_ok=True);assert not path.with_suffix('.replacement').exists()
  assert proof is None and path.read_bytes()==original and active_projects(path)==1
 
 
