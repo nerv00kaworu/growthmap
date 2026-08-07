@@ -48,7 +48,12 @@ async def verify_writable_startup(engine,entitlement,_test_after_hash=None,_test
     return await _verify(engine,entitlement,expected,int(os.environ["GROWTHMAP_EXPECTED_DB_SIZE"]),meaningful,(int(os.environ["GROWTHMAP_EXPECTED_DB_DEVICE"]),int(os.environ["GROWTHMAP_EXPECTED_DB_INODE"])),quota,_test_after_hash,_test_after_connect)
 
 
-async def verify_fresh_created(engine,entitlement,_test_after_capture=None):
-    path=Path(engine.url.database);stat_value=path.lstat();meaningful=bool(stat_value.st_dev or stat_value.st_ino)
+async def verify_fresh_created(engine,entitlement,created_identity,_test_before_baseline=None,_test_after_capture=None):
+    path=Path(engine.url.database)
+    if _test_before_baseline:_test_before_baseline(path)
+    stat_value=path.lstat();meaningful=created_identity["meaningful"]
+    # POSIX binds creation to the exact inode. On Windows, where dev/inode may
+    # be unavailable, subsequent regular/link/digest/size checks are the stable equivalent.
+    if meaningful and (stat_value.st_dev,stat_value.st_ino)!=(created_identity["device"],created_identity["inode"]):raise RuntimeError("Fresh desktop database creation identity mismatch")
     with path.open("rb") as handle:data=handle.read()
     return await _verify(engine,entitlement,hashlib.sha256(data).hexdigest(),len(data),meaningful,(stat_value.st_dev,stat_value.st_ino),entitlement.max_active_projects,_test_after_capture)

@@ -69,20 +69,23 @@ async def lifespan(app: FastAPI):
     if migration_required and not migration_authorized():
         raise RuntimeError("Desktop migration requires a verified pre-migration backup marker")
     if fresh_absent and database_path.exists():raise RuntimeError("Fresh desktop database appeared before creation")
+    created_identity=None
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if engine.url.get_backend_name() == "sqlite":
             from db.migrations import migrate_sqlite
             await migrate_sqlite(conn)
+        if (fresh_absent or (migration_required and database_absent)) and database_path.exists():
+            created=database_path.lstat();created_identity={"device":created.st_dev,"inode":created.st_ino,"meaningful":bool(created.st_dev or created.st_ino)}
     if desktop_mode() and entitlement.mutations_allowed:
         if fresh_absent:
             from desktop.startup_database import verify_fresh_created
-            app.state.writable_database_proof=await verify_fresh_created(engine,entitlement)
+            app.state.writable_database_proof=await verify_fresh_created(engine,entitlement,created_identity)
         elif app.state.writable_database_proof is None:
             from desktop.startup_database import verify_fresh_created,verify_writable_startup
             # A migration may create the previously absent DB under a separately
             # authenticated migration marker; prove that newly created object now.
-            app.state.writable_database_proof=await (verify_fresh_created(engine,entitlement) if migration_required and database_absent else verify_writable_startup(engine,entitlement))
+            app.state.writable_database_proof=await (verify_fresh_created(engine,entitlement,created_identity) if migration_required and database_absent else verify_writable_startup(engine,entitlement))
     yield
 
 
