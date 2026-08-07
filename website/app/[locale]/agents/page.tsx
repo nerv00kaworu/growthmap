@@ -1,2 +1,1 @@
-import {permanentRedirect} from 'next/navigation';
-export default async function AgentsAlias({params}:{params:Promise<{locale:string}>}){permanentRedirect(`/${(await params).locale}/showcase`)}
+import {localizedMetadata} from '../../../content/metadata';import {Detailed} from '../../../components/ProductContent';import {parseLocale} from '../../../content/i18n';import {notFound} from 'next/navigation';export const generateMetadata=({params}:{params:Promise<{locale:string}>})=>localizedMetadata(params,'agents');export default async function P({params}:{params:Promise<{locale:string}>}){const locale=parseLocale((await params).locale);if(!locale)notFound();return <Detailed locale={locale} page="agents"/>}
