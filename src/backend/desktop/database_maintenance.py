@@ -125,6 +125,15 @@ def _open_validated(source):
 def validate(path):
  connection,meta=_open_validated(path);connection.close();return meta
 
+def stable_validate(path):
+ """Validate one unchanged regular-file identity and bind metadata to its exact bytes."""
+ source=Path(path);before=_regular_file(source);meta=validate(source);after=_regular_file(source)
+ identity=lambda stat:(stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns,stat.st_nlink)
+ if identity(before)!=identity(after) or meta["size"]!=after.st_size or meta["sha256"]!=hashlib.sha256(source.read_bytes()).hexdigest():raise ValueError("database changed during stable validation")
+ final=_regular_file(source)
+ if identity(after)!=identity(final):raise ValueError("database changed during stable validation")
+ return meta
+
 def schema_status(path):
  """Inspect only the migration-owned schema surface without opening SQLite writable."""
  source=Path(path)
@@ -194,12 +203,13 @@ def validated_snapshot(source,destination):
 
 def main(argv):
  if os.getenv("GROWTHMAP_DESKTOP_MODE")!="1": raise SystemExit("desktop mode required")
- if len(argv)!=3 or argv[1] not in ("--validate-db","--validated-snapshot-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
+ if len(argv)!=3 or argv[1] not in ("--validate-db","--stable-validate-db","--validated-snapshot-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
  if argv[1]=="--entitlement-status":
   # No database is opened. This is the same cryptographic verifier used by the API.
   from desktop.startup_verdict import effective_entitlement
   result=effective_entitlement().public()
  elif argv[1]=="--validate-db": result=validate(argv[2])
+ elif argv[1]=="--stable-validate-db": result=stable_validate(argv[2])
  elif argv[1]=="--schema-status": result=schema_status(argv[2])
  else: result=validated_snapshot(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])
  print(json.dumps(result,separators=(",",":")))
