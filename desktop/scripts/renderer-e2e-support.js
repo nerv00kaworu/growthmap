@@ -1,9 +1,10 @@
 'use strict';
 const fs=require('node:fs'),http=require('node:http'),path=require('node:path'),{spawnSync}=require('node:child_process');
+const {resolvePython,runPython}=require('./python-interpreter');
 function launchArgs({userData,debugPort,logPath}){return [`--user-data-dir=${userData}`,`--remote-debugging-port=${debugPort}`,'--enable-logging',`--log-file=${logPath}`];}
-function pythonRunner({spawnSync,env=process.env}){
- const interpreter=env.GROWTHMAP_TEST_PYTHON||env.PYTHON||'python';
- const run=(args,options)=>spawnSync(interpreter,args,options);run.interpreter=interpreter;return run;
+function pythonRunner({spawnSync,env=process.env,platform=process.platform,backendRoot=path.resolve(__dirname,'../../src/backend'),fsImpl=fs}){
+ const interpreter=resolvePython({spawnSync,env,platform,backendRoot,fsImpl});
+ const run=(args,options)=>runPython(spawnSync,interpreter,args,options);run.interpreter=interpreter.executable;run.prefixArgs=interpreter.prefixArgs;return run;
 }
 function processTree(rootPid){
  const q=`$root=${Number(rootPid)};$all=Get-CimInstance Win32_Process;$seen=@($root);do{$before=$seen.Count;$seen+=@($all|Where-Object{$seen -contains $_.ParentProcessId}|ForEach-Object ProcessId);$seen=@($seen|Sort-Object -Unique)}while($seen.Count -gt $before);$all|Where-Object{$seen -contains $_.ProcessId}|Select-Object ProcessId,ParentProcessId,Name,CommandLine|ConvertTo-Json -Compress`;

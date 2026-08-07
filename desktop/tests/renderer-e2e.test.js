@@ -30,9 +30,26 @@ test('packaged E2E pins canonical fixture reads and Markdown through same-origin
 test('Python runner resolves once and uses the same supplied interpreter for every subprocess',()=>{
  const {pythonRunner}=require('../scripts/renderer-e2e-support'),calls=[];
  const run=pythonRunner({env:{GROWTHMAP_TEST_PYTHON:'C:\\qa\\python.exe',PYTHON:'C:\\other\\python.exe'},spawnSync:(...args)=>{calls.push(args);return{status:0}}});
- assert.equal(run.interpreter,'C:\\qa\\python.exe');run(['fixture.py','fixture.sqlite'],{encoding:'utf8'});run(['-c','mutate','growthmap.db'],{encoding:'utf8'});
+ assert.equal(run.interpreter,'C:\\qa\\python.exe');calls.length=0;run(['fixture.py','fixture.sqlite'],{encoding:'utf8'});run(['-c','mutate','growthmap.db'],{encoding:'utf8'});
  assert.deepEqual(calls.map(call=>call[0]),['C:\\qa\\python.exe','C:\\qa\\python.exe']);
  assert.deepEqual(calls.map(call=>call[1][0]),['fixture.py','-c']);
+});
+
+test('Windows GitHub runner resolves setup-python root and uses launcher prefix semantics',()=>{
+ const {resolvePython,runPython}=require('../scripts/python-interpreter'),calls=[],root='C:\\hostedtoolcache\\windows\\Python\\3.12.4\\x64',exe=`${root}\\python.exe`;
+ const spawnSync=(...args)=>{calls.push(args);return{status:args[0]===exe?0:1,stderr:''}};
+ const resolved=resolvePython({platform:'win32',env:{CI:'true',Python3_ROOT_DIR:root},backendRoot:'D:\\a\\GrowthMap\\GrowthMap\\src\\backend',fsImpl:{existsSync:value=>value===exe},spawnSync});
+ assert.deepEqual(resolved,{executable:exe,prefixArgs:[],source:'Python3_ROOT_DIR'});
+ runPython(spawnSync,resolved,['fixture.py'],{});assert.deepEqual(calls.at(-1).slice(0,2),[exe,['fixture.py']]);
+ const launcherCalls=[],launcher=resolvePython({platform:'win32',env:{},fsImpl:{existsSync:()=>false},spawnSync:(command,args)=>{launcherCalls.push([command,args]);return{status:command==='py'?0:1,stderr:''}}});
+ assert.deepEqual(launcher.prefixArgs,['-3']);assert.deepEqual(launcherCalls.at(-1),['py',['-3','-c','import sqlite3,sys; assert sys.version_info >= (3, 10)']]);
+});
+
+test('backend override must probe successfully and null spawn diagnostics expose the spawn error',()=>{
+ const {resolveBackendPython}=require('../scripts/python-interpreter'),fallback={executable:'python',prefixArgs:[],source:'PATH'};
+ assert.throws(()=>resolveBackendPython(fallback,{env:{GROWTHMAP_TEST_BACKEND_PYTHON:'C:\\missing\\python.exe'},spawnSync:()=>({status:null,stderr:'',error:Object.assign(new Error('file not found'),{code:'ENOENT'})})}),error=>{
+  assert.match(error.message,/status=null/);assert.match(error.message,/ENOENT: file not found/);assert.match(error.message,/C:\\\\missing\\\\python\.exe/);assert.match(error.message,/stderr=""/);return true;
+ });
 });
 
 test('CDP version probe records HTTP response and connection errors',async()=>{
