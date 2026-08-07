@@ -65,3 +65,6 @@ Non-null `device_binding` is rejected until a privacy-reviewed activation servic
 ## Payments v1 amendment (2026-07-28)
 
 The provider-neutral checkout stub above is superseded for major 1 by `docs/PAYMENTS-v1.md`: x402 exact USDC on Base plus manually verified PayPal Goods & Services. The first 50 globally payment-confirmed allocations are 10 USDC/USD; later allocations are 29. A quote is not inventory. Issuance and ordinal allocation share one transaction, and stale-price authorization never silently settles or upgrades price.
+
+### Startup replacement threat boundary
+Startup database evidence detects supported local path replacement during the validation sequence through its final post-query check. It does not defend against database, process, or code modification after proof/readiness, nor against an administrator who can modify the process itself. POSIX uses device/inode identity. Windows falls back to weaker regular-file, link-count, digest, and size evidence, so a byte-identical replacement may be indistinguishable there.

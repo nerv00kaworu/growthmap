@@ -29,6 +29,20 @@ def test_missing_writable_evidence_fails(tmp_path,monkeypatch):
  asyncio.run(engine.dispose())
 
 
+def test_late_replacement_before_quota_query_is_rejected_by_final_boundary(tmp_path,monkeypatch):
+ path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
+ def replace_with_overquota(target):
+  replacement=target.with_suffix('.replacement');replacement.write_bytes(target.read_bytes());connection=__import__('sqlite3').connect(replacement);connection.execute("insert into projects values('p2','second','','',NULL,'active','{}','','')");connection.commit();connection.close();os.replace(replacement,target)
+ with pytest.raises(RuntimeError,match='identity mismatch|digest mismatch'):asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1),_test_before_quota=replace_with_overquota))
+ asyncio.run(engine.dispose())
+
+
+def test_normal_proof_reports_final_identity_digest_and_active_count(tmp_path,monkeypatch):
+ path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
+ proof=asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1)));assert proof['activeProjects']==1 and proof['sha256'] and proof['identity']
+ asyncio.run(engine.dispose())
+
+
 def test_authoritative_quota_and_unlimited(tmp_path,monkeypatch):
  path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path,'1');engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
  asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1)))
