@@ -23,6 +23,12 @@ def test_path_replacement_before_readiness_fails(tmp_path,monkeypatch,phase):
  asyncio.run(engine.dispose())
 
 
+def test_missing_writable_evidence_fails(tmp_path,monkeypatch):
+ path=tmp_path/'db.sqlite';fixture(path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}');monkeypatch.delenv('GROWTHMAP_EXPECTED_DB_SHA256',raising=False)
+ with pytest.raises(RuntimeError,match='requires database evidence'):asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1)))
+ asyncio.run(engine.dispose())
+
+
 def test_authoritative_quota_and_unlimited(tmp_path,monkeypatch):
  path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path,'1');engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
  asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1)))

@@ -38,7 +38,9 @@ def _cors_allowed_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     entitlement=effective_entitlement()
-    if desktop_mode() and entitlement.mutations_allowed:
+    # Fresh creation has no database object to evidence yet. Every existing
+    # writable desktop database must carry Electron-generated startup evidence.
+    if desktop_mode() and entitlement.mutations_allowed and not ((os.getenv("GROWTHMAP_FRESH_INSTALL")=="1" or os.getenv("GROWTHMAP_MIGRATION_REQUIRED")=="1" or os.getenv("GROWTHMAP_SCHEMA_CURRENT")=="1") and not Path(engine.url.database).exists()):
         from desktop.startup_database import verify_writable_startup
         await verify_writable_startup(engine,entitlement)
     extraction_startup=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not entitlement.mutations_allowed

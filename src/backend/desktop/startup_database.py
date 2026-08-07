@@ -18,7 +18,7 @@ def _path_matches(path, opened, meaningful):
 
 async def verify_writable_startup(engine,entitlement,_test_after_hash=None,_test_after_connect=None):
     expected=os.getenv("GROWTHMAP_EXPECTED_DB_SHA256")
-    if not expected:return
+    if not expected:raise RuntimeError("Desktop writable startup requires database evidence")
     path=Path(engine.url.database);flags=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)
     if os.name!="nt":flags|=getattr(os,"O_NOFOLLOW",0)
     fd=os.open(path,flags)
