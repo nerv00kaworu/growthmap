@@ -1,4 +1,4 @@
-import asyncio,hashlib,os
+import asyncio,hashlib,os,sqlite3
 from types import SimpleNamespace
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -15,12 +15,28 @@ def env(monkeypatch,path,quota='1'):
 def swap(path):
  other=path.with_suffix('.swap');other.write_bytes(path.read_bytes());os.replace(other,path)
 
+
+def active_projects(path):
+ with sqlite3.connect(path) as connection:return connection.execute("SELECT COUNT(*) FROM projects WHERE status='active'").fetchone()[0]
+
+
 @pytest.mark.parametrize('phase',['after_hash','after_connect'])
 def test_path_replacement_before_readiness_fails(tmp_path,monkeypatch,phase):
- path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
- kwargs={f'_test_{phase}':swap}
- with pytest.raises(RuntimeError,match='identity mismatch'):asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1),**kwargs))
- asyncio.run(engine.dispose())
+ path=tmp_path/'db.sqlite';fixture(path);original=path.read_bytes();env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}');proof=None;outcome=None
+ def inject(target):
+  nonlocal outcome
+  try:swap(target)
+  except PermissionError:outcome='denied';raise
+  outcome='replaced'
+ kwargs={f'_test_{phase}':inject}
+ try:
+  try:proof=asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1),**kwargs))
+  except PermissionError:assert outcome=='denied'
+  except RuntimeError as error:assert outcome=='replaced' and 'identity mismatch' in str(error)
+  else:pytest.fail('replacement injection returned writable startup proof')
+ finally:
+  asyncio.run(engine.dispose());path.with_suffix('.swap').unlink(missing_ok=True)
+ assert proof is None and path.read_bytes()==original and active_projects(path)==1
 
 
 def test_missing_writable_evidence_fails(tmp_path,monkeypatch):
@@ -30,11 +46,22 @@ def test_missing_writable_evidence_fails(tmp_path,monkeypatch):
 
 
 def test_late_replacement_before_quota_query_is_rejected_by_final_boundary(tmp_path,monkeypatch):
- path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
+ path=tmp_path/'db.sqlite';fixture(path);original=path.read_bytes();env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}');proof=None;outcome=None
  def replace_with_overquota(target):
-  replacement=target.with_suffix('.replacement');replacement.write_bytes(target.read_bytes());connection=__import__('sqlite3').connect(replacement);connection.execute("insert into projects values('p2','second','','',NULL,'active','{}','','')");connection.commit();connection.close();os.replace(replacement,target)
- with pytest.raises(RuntimeError,match='identity mismatch|digest mismatch'):asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1),_test_before_quota=replace_with_overquota))
- asyncio.run(engine.dispose())
+  nonlocal outcome
+  replacement=target.with_suffix('.replacement');replacement.write_bytes(target.read_bytes())
+  with sqlite3.connect(replacement) as connection:connection.execute("insert into projects values('p2','second','','',NULL,'active','{}','','')")
+  try:os.replace(replacement,target)
+  except PermissionError:outcome='denied';raise
+  outcome='replaced'
+ try:
+  try:proof=asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1),_test_before_quota=replace_with_overquota))
+  except PermissionError:assert outcome=='denied'
+  except RuntimeError as error:assert outcome=='replaced' and ('identity mismatch' in str(error) or 'digest mismatch' in str(error))
+  else:pytest.fail('replacement injection returned writable startup proof')
+ finally:
+  asyncio.run(engine.dispose());path.write_bytes(original);path.with_suffix('.replacement').unlink(missing_ok=True)
+ assert proof is None and path.read_bytes()==original and active_projects(path)==1
 
 
 def test_normal_proof_reports_final_identity_digest_and_active_count(tmp_path,monkeypatch):
