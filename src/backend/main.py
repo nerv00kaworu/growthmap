@@ -37,12 +37,13 @@ def _cors_allowed_origins() -> list[str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    entitlement=effective_entitlement()
+    entitlement=effective_entitlement();app.state.writable_database_proof=None
+    database_path=Path(engine.url.database);fresh_absent=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL")=="1" and entitlement.mutations_allowed and not database_path.exists()
     # Fresh creation has no database object to evidence yet. Every existing
     # writable desktop database must carry Electron-generated startup evidence.
-    if desktop_mode() and entitlement.mutations_allowed and not ((os.getenv("GROWTHMAP_FRESH_INSTALL")=="1" or os.getenv("GROWTHMAP_MIGRATION_REQUIRED")=="1" or os.getenv("GROWTHMAP_SCHEMA_CURRENT")=="1") and not Path(engine.url.database).exists()):
+    if desktop_mode() and entitlement.mutations_allowed and not (fresh_absent or ((os.getenv("GROWTHMAP_MIGRATION_REQUIRED")=="1" or os.getenv("GROWTHMAP_SCHEMA_CURRENT")=="1") and not database_path.exists())):
         from desktop.startup_database import verify_writable_startup
-        await verify_writable_startup(engine,entitlement)
+        app.state.writable_database_proof=await verify_writable_startup(engine,entitlement)
     extraction_startup=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not entitlement.mutations_allowed
     migration_required=desktop_mode() and os.getenv("GROWTHMAP_MIGRATION_REQUIRED") == "1"
     schema_current=desktop_mode() and os.getenv("GROWTHMAP_SCHEMA_CURRENT") == "1"
@@ -67,11 +68,21 @@ async def lifespan(app: FastAPI):
     # marker is one-launch evidence: a failed launch must obtain a fresh marker/MAC.
     if migration_required and not migration_authorized():
         raise RuntimeError("Desktop migration requires a verified pre-migration backup marker")
+    if fresh_absent and database_path.exists():raise RuntimeError("Fresh desktop database appeared before creation")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if engine.url.get_backend_name() == "sqlite":
             from db.migrations import migrate_sqlite
             await migrate_sqlite(conn)
+    if desktop_mode() and entitlement.mutations_allowed:
+        if fresh_absent:
+            from desktop.startup_database import verify_fresh_created
+            app.state.writable_database_proof=await verify_fresh_created(engine,entitlement)
+        elif app.state.writable_database_proof is None:
+            from desktop.startup_database import verify_fresh_created,verify_writable_startup
+            # A migration may create the previously absent DB under a separately
+            # authenticated migration marker; prove that newly created object now.
+            app.state.writable_database_proof=await (verify_fresh_created(engine,entitlement) if migration_required and database_absent else verify_writable_startup(engine,entitlement))
     yield
 
 
@@ -120,6 +131,7 @@ async def api_root():
 @app.get("/api/health/deep")
 async def deep_health():
     """Authoring-only readiness check; never mounts product runtime routes."""
+    if desktop_mode() and os.getenv("GROWTHMAP_DB_QUERY_ONLY")!="1" and app.state.writable_database_proof is None:raise HTTPException(503,"Writable database proof unavailable")
     async with engine.connect() as conn:
         await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
         if engine.url.get_backend_name() == "sqlite":
