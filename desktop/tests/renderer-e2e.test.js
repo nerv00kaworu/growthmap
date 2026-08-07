@@ -15,7 +15,11 @@ test('packaged E2E keeps import input outside the fresh profile and verifies Fre
  assert.match(source,/growthmap-e2e-profile-/);assert.match(source,/growthmap-e2e-input-/);assert.doesNotMatch(source,/path\.join\(userData,'fixture\.sqlite'\)/);
  assert.match(source,/let made=runPython\(\[helper,fixture\]/);assert.match(source,/made=runPython\(\['-c'/);assert.doesNotMatch(source,/spawnSync\(['"]python['"]/);
  assert.match(source,/fresh-free/);assert.match(source,/restart-free/);assert.match(source,/mutations_allowed===true/);assert.match(source,/trial-marker\.bin/);assert.match(source,/installation-identity\.bin/);assert.match(source,/trial-state\.json/);
+ assert.match(source,/launch\(userData,fixture,'fresh'\)/);assert.match(source,/launch\(userData,fixture,'existing-free'\)/);assert.match(source,/GROWTHMAP_E2E_PROFILE_MODE:profileMode/);
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
+ const bind=entrypoint.indexOf("app.setPath('userData',realProfile)"),production=entrypoint.indexOf("require('./main')");assert.ok(bind>=0&&bind<production,'test profile must bind before production main loads');
+ assert.match(entrypoint,/direct real system-temp child/);assert.match(entrypoint,/profileMode==='fresh'/);assert.match(entrypoint,/Existing-Free E2E profile is missing lifecycle artifact/);for(const artifact of ['trial-marker.bin','installation-identity.bin','trial-state.json','growthmap.db','database-workspace.json','update-pending.json','migration-authorization.json','backups'])assert.ok(entrypoint.includes(artifact),artifact);
+ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),/GROWTHMAP_E2E_USER_DATA|growthmap-e2e-profile-/);
 });
 
 test('packaged E2E pins canonical fixture reads and Markdown through same-origin app API',()=>{

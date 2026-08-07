@@ -2,8 +2,16 @@
 // Test-package-only entrypoint. package.json production files excludes this file.
 if(process.env.CI!=='true'||process.env.GROWTHMAP_DESKTOP_E2E!=='1')throw new Error('E2E test package is CI-only');
 const commercialModule=require.resolve('./commercial-config');require(commercialModule);require.cache[commercialModule].exports={...require.cache[commercialModule].exports,loadCommercialConfig:require('./e2e-commercial-config').loadE2ECommercialConfig};
-const fs=require('node:fs'),path=require('node:path'),{app,dialog}=require('electron'),fixture=process.env.GROWTHMAP_E2E_IMPORT_PATH;
-const diagnosticPath=process.env.GROWTHMAP_E2E_DIAGNOSTIC_PATH,userData=process.env.GROWTHMAP_E2E_USER_DATA;
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{app,dialog}=require('electron'),fixture=process.env.GROWTHMAP_E2E_IMPORT_PATH;
+const diagnosticPath=process.env.GROWTHMAP_E2E_DIAGNOSTIC_PATH,userData=process.env.GROWTHMAP_E2E_USER_DATA,profileMode=process.env.GROWTHMAP_E2E_PROFILE_MODE;
+if(!fixture||!userData||!['fresh','existing-free'].includes(profileMode))throw new Error('E2E fixture, profile, or profile mode missing');
+const profileStat=fs.lstatSync(userData),realProfile=fs.realpathSync(userData),realTemp=fs.realpathSync(os.tmpdir());
+if(!profileStat.isDirectory()||profileStat.isSymbolicLink()||path.dirname(realProfile).toLowerCase()!==realTemp.toLowerCase()||!path.basename(realProfile).startsWith('growthmap-e2e-profile-'))throw new Error('E2E profile must be a direct real system-temp child');
+const exists=name=>fs.existsSync(path.join(realProfile,name)),freshArtifacts=['trial-marker.bin','installation-identity.bin','trial-state.json','growthmap.db','database-workspace.json','update-pending.json','migration-authorization.json','backups'];
+if(profileMode==='fresh'){for(const name of freshArtifacts)if(exists(name))throw new Error(`Fresh E2E profile contains app-owned artifact: ${name}`);}
+else{for(const name of ['trial-marker.bin','installation-identity.bin','trial-state.json','growthmap.db','backups'])if(!exists(name))throw new Error(`Existing-Free E2E profile is missing lifecycle artifact: ${name}`);for(const name of ['database-workspace.json','update-pending.json','migration-authorization.json'])if(exists(name))throw new Error(`Existing-Free E2E profile contains unexpected lock/workspace artifact: ${name}`);}
+app.setPath('userData',realProfile);
+if(app.getPath('userData')!==realProfile)throw new Error('E2E profile binding failed');
 function phase(name){
  const line=`${new Date().toISOString()} pid=${process.pid} ${name}\n`;
  try{if(diagnosticPath)fs.appendFileSync(path.resolve(diagnosticPath),line,{encoding:'utf8',mode:0o600});}catch{}
@@ -16,8 +24,7 @@ const debugSwitch=process.argv.find(value=>value.startsWith('--remote-debugging-
 if(!debugSwitch)throw new Error('E2E debug CLI switch missing');
 phase('command-line-switch-installed');
 app.once('ready',()=>phase('app-ready'));
-if(!fixture||!userData)throw new Error('E2E fixture or profile missing');
-const relative=path.relative(path.resolve(userData),path.resolve(fixture));
+const relative=path.relative(realProfile,path.resolve(fixture));
 if(relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..')||path.isAbsolute(relative))throw new Error('E2E import fixture must be outside userData');
 const original=dialog.showOpenDialog.bind(dialog);
 dialog.showOpenDialog=async(window,options)=>options?.filters?.some(x=>x.extensions?.includes('db'))?{canceled:false,filePaths:[fixture]}:original(window,options);
