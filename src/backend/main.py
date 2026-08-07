@@ -38,15 +38,9 @@ def _cors_allowed_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     entitlement=effective_entitlement()
-    expected_sha=os.getenv("GROWTHMAP_EXPECTED_DB_SHA256")
-    if desktop_mode() and expected_sha:
-        import hashlib
-        database=Path(engine.url.database);stat=database.lstat()
-        meaningful=os.getenv("GROWTHMAP_EXPECTED_DB_IDENTITY_MEANINGFUL")=="1"
-        if database.is_symlink() or not database.is_file() or stat.st_nlink!=1:raise RuntimeError("Desktop startup database identity mismatch")
-        if meaningful and (stat.st_dev!=int(os.environ["GROWTHMAP_EXPECTED_DB_DEVICE"]) or stat.st_ino!=int(os.environ["GROWTHMAP_EXPECTED_DB_INODE"])):raise RuntimeError("Desktop startup database identity mismatch")
-        data=database.read_bytes()
-        if len(data)!=int(os.environ["GROWTHMAP_EXPECTED_DB_SIZE"]) or hashlib.sha256(data).hexdigest()!=expected_sha:raise RuntimeError("Desktop startup database digest mismatch")
+    if desktop_mode() and entitlement.mutations_allowed:
+        from desktop.startup_database import verify_writable_startup
+        await verify_writable_startup(engine,entitlement)
     extraction_startup=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not entitlement.mutations_allowed
     migration_required=desktop_mode() and os.getenv("GROWTHMAP_MIGRATION_REQUIRED") == "1"
     schema_current=desktop_mode() and os.getenv("GROWTHMAP_SCHEMA_CURRENT") == "1"
@@ -55,11 +49,6 @@ async def lifespan(app: FastAPI):
     database_absent=engine.url.get_backend_name()=="sqlite" and not Path(engine.url.database).exists()
     if desktop_mode() and entitlement.mutations_allowed and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not database_absent and not (migration_required or schema_current):
         raise RuntimeError("Desktop writable startup requires verified schema preflight")
-    if desktop_mode() and entitlement.mutations_allowed and entitlement.max_active_projects is not None and not database_absent:
-        async with engine.connect() as conn:
-            active=(await conn.execute(__import__("sqlalchemy").text("SELECT COUNT(*) FROM projects WHERE status='active'"))).scalar()
-            if active > entitlement.max_active_projects:
-                raise RuntimeError("Desktop writable startup exceeds active project entitlement")
     if extraction_startup:
         async with engine.connect() as conn:
             await conn.execute(__import__("sqlalchemy").text("PRAGMA query_only=ON"))

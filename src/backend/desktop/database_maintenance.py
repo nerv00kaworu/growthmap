@@ -206,7 +206,7 @@ def _identity(stat):
  # there digest/size/link/regular metadata remains the supported equivalent.
  return {"device":stat.st_dev,"inode":stat.st_ino,"meaningful":bool(stat.st_dev or stat.st_ino)}
 
-def install_database(staging,live):
+def install_database(staging,live,_test_before_install=None):
  """Capture, validate and atomically install one exact staged database object."""
  source=Path(staging);target=Path(live);parent=_safe_parent(target)
  old=Path(os.environ["GROWTHMAP_MAINTENANCE_OLD"]);captured=Path(os.environ["GROWTHMAP_MAINTENANCE_CAPTURE"])
@@ -220,8 +220,7 @@ def install_database(staging,live):
  after=_regular_file(source)
  if _identity(source_stat)["meaningful"] and (source_stat.st_dev,source_stat.st_ino)!=(after.st_dev,after.st_ino):raise ValueError("staging identity changed during capture")
  captured_stat=_regular_file(captured);captured_identity=_identity(captured_stat)
- hook=os.environ.get("GROWTHMAP_MAINTENANCE_TEST_HOOK")
- if hook:__import__("subprocess").run([sys.executable,hook,"before-install",str(captured)],check=True)
+ if _test_before_install is not None:_test_before_install(captured)
  before_install=_regular_file(captured)
  if captured_identity["meaningful"] and (before_install.st_dev,before_install.st_ino)!=(captured_stat.st_dev,captured_stat.st_ino):raise ValueError("captured identity changed before install")
  if before_install.st_size!=captured_stat.st_size:raise ValueError("captured size changed before install")
