@@ -18,11 +18,19 @@ with TestClient(app) as c:
  rows=c.get('/api/projects',headers=h).json();active_row=next(p for p in rows if p['status']=='active');archived_id=next(p['id'] for p in rows if p['status']=='archived')
  # Reaching quota never blocks reads or exports, and deleting the sole active project
  # frees the concurrent-active seat for restoring an archived project.
+ assert c.get('/api/projects',headers=h).status_code==200
+ assert c.get('/api/projects/'+active_row['id'],headers=h).status_code==200
  assert c.get('/api/projects/'+active_row['id']+'/export',headers=h).status_code==200
+ assert c.get('/api/projects/'+active_row['id']+'/export-json',headers=h).status_code==200
  assert c.patch('/api/projects/'+archived_id,headers=h,json={'status':'active','expected_project_revision':next(p['revision'] for p in c.get('/api/projects',headers=h).json() if p['id']==archived_id)}).status_code==409
- assert c.request('DELETE','/api/projects/'+active_row['id'],headers=h,json={'expected_project_revision':active_row['revision']}).status_code==204
- restored=c.patch('/api/projects/'+archived_id,headers=h,json={'status':'active','expected_project_revision':next(p['revision'] for p in c.get('/api/projects',headers=h).json() if p['id']==archived_id)})
- assert restored.status_code==200
+ archived_active=c.patch('/api/projects/'+active_row['id'],headers=h,json={'status':'archived','expected_project_revision':active_row['revision']});assert archived_active.status_code==200
+ restored=c.patch('/api/projects/'+archived_id,headers=h,json={'status':'active','expected_project_revision':next(p['revision'] for p in c.get('/api/projects',headers=h).json() if p['id']==archived_id)});assert restored.status_code==200
+ # Quota also does not block delete; deleting frees the seat for the archived original.
+ assert c.request('DELETE','/api/projects/'+archived_id,headers=h,json={'expected_project_revision':restored.json()['revision']}).status_code==204
+ active_row=next(p for p in c.get('/api/projects',headers=h).json() if p['id']==active_row['id'])
+ restored=c.patch('/api/projects/'+active_row['id'],headers=h,json={'status':'active','expected_project_revision':active_row['revision']});assert restored.status_code==200
+ assert c.request('DELETE','/api/projects/'+active_row['id'],headers=h,json={'expected_project_revision':restored.json()['revision']}).status_code==204
+ assert c.post('/api/projects/import-json',headers=h,json=active).status_code==201
  assert c.post('/api/projects/import-json',headers=h,json=active).status_code==402
 # Fresh DB concurrency: mixed allocators can produce at most one success.
 '''

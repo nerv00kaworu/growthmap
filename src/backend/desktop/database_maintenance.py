@@ -178,8 +178,11 @@ def validated_snapshot(source,destination):
  writer=sqlite3.connect(str(dst))
  try:
   reader.backup(writer);writer.commit();writer.close();reader.close()
+  source_after=_regular_file(src)
+  source_sha_after=hashlib.sha256(src.read_bytes()).hexdigest()
+  if source_after.st_size!=source_meta["size"] or source_sha_after!=source_meta["sha256"]:raise ValueError("snapshot source changed during capture")
   durability=_durability(dst,parent)
-  final=validate(dst);final["durability"]=durability;return final
+  final=validate(dst);final["durability"]=durability;final["sourceSha256"]=source_meta["sha256"];final["sourceSize"]=source_meta["size"];return final
  except Exception:
   try: writer.close()
   except Exception: pass
