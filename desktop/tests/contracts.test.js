@@ -24,6 +24,7 @@ test('entitlement changes invalidate renderer state without weakening the IPC or
 });
 
 test('entitlement preflight binds fresh existing-Free paid and extraction startup modes',()=>{assert.match(main,/entitlementStatus\(userData,trialMode\)/);assert.match(main,/trialMode==='existing'\?'free':trialMode==='fresh'\?'fresh':'extraction'/);assert.match(main,/GROWTHMAP_FRESH_INSTALL:probeMode==='fresh'\?'1':'0'/);assert.match(main,/entitlementStatus\(userData,trial\.mode\)/);});
+test('direct packaged sidecar smoke supplies a real v2 fresh verdict rather than bypassing startup authentication',()=>{const script=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/scripts/verify-windows-package.ps1'),'utf8');for(const marker of ["require('./desktop/startup-verdict')","generateKeyPairSync('ed25519')","createStartupVerdict({mode:'fresh'","startupVerdictEnv({verdict,token})","GROWTHMAP_FRESH_INSTALL = '1'","SetEnvironmentVariable($entry.Name"])assert.ok(script.includes(marker),`packaged sidecar smoke missing ${marker}`);assert.doesNotMatch(script,/GROWTHMAP_STARTUP_VERDICT_MAC\s*=\s*['\"]/);});
 
 test('license import and extraction-to-Free transitions revalidate authoritative entitlement',()=>{
  const page=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/app/page.tsx'),'utf8');

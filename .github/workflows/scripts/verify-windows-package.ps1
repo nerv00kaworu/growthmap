@@ -30,6 +30,18 @@ if ($env:GROWTHMAP_COMMERCIAL_RELEASE -ne '1') {
 
 $port = Get-Random -Minimum 20000 -Maximum 50000
 $token = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+$verdictJson = node -e @'
+const crypto=require('node:crypto');
+const {createStartupVerdict,startupVerdictEnv}=require('./desktop/startup-verdict');
+const {publicKey,privateKey}=crypto.generateKeyPairSync('ed25519');
+const devicePublicKey=publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('base64');
+const privateKeyPem=privateKey.export({format:'pem',type:'pkcs8'});
+const token=process.argv[1];
+const verdict=createStartupVerdict({mode:'fresh',token,devicePublicKey,privateKeyPem});
+process.stdout.write(JSON.stringify(startupVerdictEnv({verdict,token})));
+'@ $token
+if ($LASTEXITCODE -ne 0 -or -not $verdictJson) { throw 'Could not create authenticated packaged sidecar smoke verdict' }
+$verdictEnv = $verdictJson | ConvertFrom-Json
 $tmp = Join-Path $env:RUNNER_TEMP 'growthmap-sidecar-smoke'
 New-Item $tmp -ItemType Directory -Force | Out-Null
 $dbPath = (Join-Path $tmp 'smoke.db').Replace('\', '/')
@@ -38,7 +50,10 @@ $stderr = Join-Path $tmp 'sidecar.stderr.log'
 Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
 
 $env:GROWTHMAP_DESKTOP_MODE = '1'
-$env:GROWTHMAP_SESSION_TOKEN = $token
+$env:GROWTHMAP_FRESH_INSTALL = '1'
+foreach ($entry in $verdictEnv.PSObject.Properties) {
+  [Environment]::SetEnvironmentVariable($entry.Name, [string]$entry.Value, 'Process')
+}
 $env:GROWTHMAP_PORT = "$port"
 $env:DATABASE_URL = "sqlite+aiosqlite:///$dbPath"
 $env:GROWTHMAP_LICENSE_FILE = Join-Path $tmp 'license.json'
