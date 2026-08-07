@@ -45,6 +45,12 @@ def test_missing_writable_evidence_fails(tmp_path,monkeypatch):
  asyncio.run(engine.dispose())
 
 
+def test_writable_startup_fails_closed_without_meaningful_identity(tmp_path,monkeypatch):
+ path=tmp_path/'db.sqlite';fixture(path);env(monkeypatch,path);monkeypatch.setenv('GROWTHMAP_EXPECTED_DB_IDENTITY_MEANINGFUL','0');engine=create_async_engine(f'sqlite+aiosqlite:///{path}')
+ with pytest.raises(RuntimeError,match='requires meaningful database identity'):asyncio.run(verify_writable_startup(engine,SimpleNamespace(max_active_projects=1)))
+ asyncio.run(engine.dispose())
+
+
 def test_late_replacement_before_quota_query_is_rejected_by_final_boundary(tmp_path,monkeypatch):
  path=tmp_path/'db.sqlite';fixture(path);original=path.read_bytes();env(monkeypatch,path);engine=create_async_engine(f'sqlite+aiosqlite:///{path}');proof=None;outcome=None
  def replace_with_overquota(target):

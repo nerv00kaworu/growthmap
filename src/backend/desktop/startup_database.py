@@ -40,15 +40,15 @@ async def _verify(engine,entitlement,expected,expected_size,meaningful,expected_
                 if _test_before_quota:_test_before_quota(path)
                 active=(await connection.execute(text("SELECT COUNT(*) FROM projects WHERE status='active'"))).scalar()
                 if expected_quota is not None and active>expected_quota:raise RuntimeError("Desktop writable startup exceeds active project entitlement")
-                # Final supported validation boundary: bind the pathname and
-                # held object again after content/quota inspection.
+                final_active=(await connection.execute(text("SELECT COUNT(*) FROM projects WHERE status='active'"))).scalar()
+                if final_active!=active:raise RuntimeError("Desktop startup database count changed during validation")
+                # Final supported validation boundary: after every query, bind
+                # pathname, held descriptor, bytes and the SQLite connection.
                 if not _path_matches(path,opened,meaningful):raise RuntimeError("Desktop startup database identity mismatch")
                 final_stat=path.lstat();current=os.fstat(fd)
                 if current.st_size!=expected_size or final_stat.st_size!=expected_size or _digest(handle)!=expected:raise RuntimeError("Desktop startup database digest mismatch")
                 with path.open("rb") as current_path:
                     if _digest(current_path)!=expected:raise RuntimeError("Desktop startup database digest mismatch")
-                final_active=(await connection.execute(text("SELECT COUNT(*) FROM projects WHERE status='active'"))).scalar()
-                if final_active!=active:raise RuntimeError("Desktop startup database count changed during validation")
     finally:
         os.close(fd)
     return {"sha256":expected,"size":expected_size,"identity":{"device":opened.st_dev,"inode":opened.st_ino,"meaningful":meaningful},"maxActiveProjects":expected_quota,"activeProjects":active}
@@ -58,6 +58,7 @@ async def verify_writable_startup(engine,entitlement,_test_after_hash=None,_test
     expected=os.getenv("GROWTHMAP_EXPECTED_DB_SHA256")
     if not expected:raise RuntimeError("Desktop writable startup requires database evidence")
     meaningful=os.getenv("GROWTHMAP_EXPECTED_DB_IDENTITY_MEANINGFUL")=="1"
+    if not meaningful:raise RuntimeError("Desktop writable startup requires meaningful database identity")
     quota_text=os.environ["GROWTHMAP_EXPECTED_DB_MAX_ACTIVE_PROJECTS"];quota=None if quota_text=="unlimited" else int(quota_text)
     return await _verify(engine,entitlement,expected,int(os.environ["GROWTHMAP_EXPECTED_DB_SIZE"]),meaningful,(int(os.environ["GROWTHMAP_EXPECTED_DB_DEVICE"]),int(os.environ["GROWTHMAP_EXPECTED_DB_INODE"])),quota,_test_after_hash,_test_after_connect,_test_before_quota)
 
