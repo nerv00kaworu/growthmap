@@ -119,7 +119,7 @@ def _open_validated(source):
  connection=sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro&immutable=1",uri=True)
  try: meta=_validate_connection(connection,source)
  except Exception: connection.close();raise
- meta.update(size=stat.st_size,sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+ meta.update(size=stat.st_size,sha256=hashlib.sha256(source.read_bytes()).hexdigest(),device=stat.st_dev,inode=stat.st_ino)
  return connection,meta
 
 def validate(path):
@@ -201,9 +201,40 @@ def validated_snapshot(source,destination):
   except Exception as cleanup: raise RuntimeError("snapshot cleanup failed; recovery required") from cleanup
   raise
 
+def install_database(staging,live):
+ """Capture, validate and atomically install one exact staged database object."""
+ source=Path(staging);target=Path(live);parent=_safe_parent(target)
+ old=Path(os.environ["GROWTHMAP_MAINTENANCE_OLD"]);captured=Path(os.environ["GROWTHMAP_MAINTENANCE_CAPTURE"])
+ expected_sha=os.environ.get("GROWTHMAP_EXPECTED_SHA256");expected_size=int(os.environ["GROWTHMAP_EXPECTED_SIZE"])
+ expected_device=int(os.environ["GROWTHMAP_EXPECTED_DEVICE"]);expected_inode=int(os.environ["GROWTHMAP_EXPECTED_INODE"])
+ maximum=int(os.environ["GROWTHMAP_MAX_ACTIVE_PROJECTS"]) if os.environ.get("GROWTHMAP_MAX_ACTIVE_PROJECTS") else None
+ if old.exists() or captured.exists():raise ValueError("replacement destination already exists")
+ source_stat=_regular_file(source)
+ if (source_stat.st_dev,source_stat.st_ino)!=(expected_device,expected_inode):raise ValueError("staging identity changed before install")
+ meta=validated_snapshot(source,captured)
+ after=_regular_file(source)
+ if (source_stat.st_dev,source_stat.st_ino)!=(after.st_dev,after.st_ino):raise ValueError("staging identity changed during capture")
+ staged=stable_validate(captured)
+ if staged["sha256"]!=meta["sha256"] or staged["size"]!=meta["size"]:raise ValueError("captured database changed")
+ if expected_sha and (meta["sourceSha256"]!=expected_sha or meta["sourceSize"]!=expected_size):raise ValueError("database source changed after validation")
+ if maximum is not None and staged["counts"]["activeProjects"]>maximum:raise ValueError("database exceeds active project limit")
+ os.replace(target,old)
+ try:
+  os.replace(captured,target);installed=stable_validate(target)
+  if installed["sha256"]!=staged["sha256"] or installed["size"]!=staged["size"]:raise ValueError("installed database changed")
+  if maximum is not None and installed["counts"]["activeProjects"]>maximum:raise ValueError("installed database exceeds active project limit")
+  _durability(target,parent)
+  return {"installed":installed,"old":str(old)}
+ except Exception:
+  try:
+   if target.exists():os.replace(target,Path(str(captured)+".failed"))
+   os.replace(old,target);_durability(target,parent)
+  except Exception as rollback:raise RuntimeError("database rollback failed; recovery required") from rollback
+  raise
+
 def main(argv):
  if os.getenv("GROWTHMAP_DESKTOP_MODE")!="1": raise SystemExit("desktop mode required")
- if len(argv)!=3 or argv[1] not in ("--validate-db","--stable-validate-db","--validated-snapshot-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
+ if len(argv)!=3 or argv[1] not in ("--validate-db","--stable-validate-db","--validated-snapshot-db","--install-db","--entitlement-status","--schema-status"): raise SystemExit("maintenance usage error")
  if argv[1]=="--entitlement-status":
   # No database is opened. This is the same cryptographic verifier used by the API.
   from desktop.startup_verdict import effective_entitlement
@@ -211,5 +242,6 @@ def main(argv):
  elif argv[1]=="--validate-db": result=validate(argv[2])
  elif argv[1]=="--stable-validate-db": result=stable_validate(argv[2])
  elif argv[1]=="--schema-status": result=schema_status(argv[2])
+ elif argv[1]=="--install-db": result=install_database(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])
  else: result=validated_snapshot(argv[2],os.environ["GROWTHMAP_MAINTENANCE_DESTINATION"])
  print(json.dumps(result,separators=(",",":")))

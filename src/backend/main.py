@@ -46,6 +46,11 @@ async def lifespan(app: FastAPI):
     database_absent=engine.url.get_backend_name()=="sqlite" and not Path(engine.url.database).exists()
     if desktop_mode() and entitlement.mutations_allowed and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not database_absent and not (migration_required or schema_current):
         raise RuntimeError("Desktop writable startup requires verified schema preflight")
+    if desktop_mode() and entitlement.mutations_allowed and entitlement.max_active_projects is not None and not database_absent:
+        async with engine.connect() as conn:
+            active=(await conn.execute(__import__("sqlalchemy").text("SELECT COUNT(*) FROM projects WHERE status='active'"))).scalar()
+            if active > entitlement.max_active_projects:
+                raise RuntimeError("Desktop writable startup exceeds active project entitlement")
     if extraction_startup:
         async with engine.connect() as conn:
             await conn.execute(__import__("sqlalchemy").text("PRAGMA query_only=ON"))
