@@ -2,7 +2,9 @@
 const crypto=require('node:crypto');
 const PREFIX='growthmap-startup-v2';
 const PROOF_DOMAIN=Buffer.from('growthmap-device-startup-v1\0');
-const MODES=new Set(['paid','trial','fresh','extraction']);
+// `trial` remains accepted as a signed transport value for compatibility with
+// older desktop launchers, but the backend interprets it as permanent Free.
+const MODES=new Set(['paid','free','trial','fresh','extraction']);
 function fields({mode,devicePublicKey,nonce,session}){
  if(!MODES.has(mode))throw new Error('Invalid startup verdict mode');
  if(!/^[A-Za-z0-9_-]{32,128}$/.test(nonce))throw new Error('Invalid startup verdict nonce');

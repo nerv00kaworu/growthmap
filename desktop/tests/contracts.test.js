@@ -23,9 +23,9 @@ test('entitlement changes invalidate renderer state without weakening the IPC or
  assert.match(page,/entitlement === null \? "Checking entitlement…"/);assert.match(page,/mutations_allowed !== true/);
 });
 
-test('entitlement preflight binds fresh existing-trial paid and extraction startup modes',()=>{assert.match(main,/entitlementStatus\(userData,trialMode\)/);assert.match(main,/trialMode==='existing'\?'trial':trialMode==='fresh'\?'fresh':'extraction'/);assert.match(main,/GROWTHMAP_FRESH_INSTALL:probeMode==='fresh'\?'1':'0'/);assert.match(main,/entitlementStatus\(userData,trial\.mode\)/);});
+test('entitlement preflight binds fresh existing-Free paid and extraction startup modes',()=>{assert.match(main,/entitlementStatus\(userData,trialMode\)/);assert.match(main,/trialMode==='existing'\?'free':trialMode==='fresh'\?'fresh':'extraction'/);assert.match(main,/GROWTHMAP_FRESH_INSTALL:probeMode==='fresh'\?'1':'0'/);assert.match(main,/entitlementStatus\(userData,trial\.mode\)/);});
 
-test('license import and extraction-to-trial transitions revalidate authoritative entitlement',()=>{
+test('license import and extraction-to-Free transitions revalidate authoritative entitlement',()=>{
  const page=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/app/page.tsx'),'utf8');
  const hook=fs.readFileSync(path.resolve(__dirname,'../../src/frontend/src/lib/entitlement.ts'),'utf8');
  assert.match(page,/await desktop\.license\.import\(\)/);assert.match(page,/await refreshEntitlement\(\)/);
@@ -105,4 +105,4 @@ test('Windows dependency provenance is passed by immutable step outputs, never G
   assert.doesNotMatch(verifier, /\$env:GITHUB_ENV/)
   assert.doesNotMatch(provenance, /\$env:GITHUB_ENV/)
 })
-test('expired paid identity reaches freshness high-water while trial and no-license do not',()=>{const main=fs.readFileSync(path.resolve(__dirname,'../main.js'),'utf8');assert.match(main,/else if\(entitlement\.license_id\).*freshness\.checkpoint\(entitlement\.license_id\)/s);assert.doesNotMatch(main,/else\s*\{\s*freshness\.checkpoint/);});
+test('expired paid identity reaches freshness high-water while Free and no-license do not',()=>{const main=fs.readFileSync(path.resolve(__dirname,'../main.js'),'utf8');assert.match(main,/else if\(entitlement\.license_id\).*freshness\.checkpoint\(entitlement\.license_id\)/s);assert.doesNotMatch(main,/else\s*\{\s*freshness\.checkpoint/);});

@@ -334,7 +334,7 @@ export default function HomePage() {
         )}
 
         <span data-testid="entitlement-status" className="shrink-0 text-[10px] text-gray-400">
-          {entitlement === null ? "Checking entitlement…" : entitlement.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement.state === "trial" ? `Trial · ${entitlement.trial_days_remaining} day(s) · ${projects.filter(p => p.status === "active").length}/2` : "Read-only extraction · exports available"}
+          {entitlement === null ? "Checking entitlement…" : entitlement.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement.state === "free" ? `Free · ${projects.filter(p => p.status === "active").length}/1 active project` : "Read-only extraction · exports available"}
         </span>
         <button
           data-testid="new-project-button"

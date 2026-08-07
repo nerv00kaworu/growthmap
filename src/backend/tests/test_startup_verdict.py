@@ -25,6 +25,13 @@ def test_paid_requires_paid_policy_after_valid_proof(monkeypatch):
  monkeypatch.setattr(verdict,'peek_current_entitlement',lambda:Entitlement(state='paid',edition='personal',valid=True,mutations_allowed=True,reason='valid'))
  apply(monkeypatch,signed_env('paid'));assert verdict.effective_entitlement().state=='paid'
  apply(monkeypatch,signed_env('extraction'));assert verdict.effective_entitlement().state=='extraction'
+
+def test_legacy_trial_transport_maps_to_permanent_free(monkeypatch):
+ import desktop.startup_verdict as verdict
+ from desktop.entitlements import Entitlement
+ monkeypatch.setattr(verdict,'peek_current_entitlement',lambda:Entitlement(state='free',edition='free',max_active_projects=1,valid=True,mutations_allowed=True,reason='free_active'))
+ apply(monkeypatch,signed_env('trial'))
+ value=verdict.effective_entitlement();assert value.state=='free' and value.max_active_projects==1
 def test_ci_diagnostic_never_leaks_secrets(monkeypatch,capsys):
  monkeypatch.setenv('CI','true');monkeypatch.setenv('GROWTHMAP_SESSION_TOKEN','never-print-this-token');monkeypatch.setenv('GROWTHMAP_STARTUP_VERDICT_MAC','0'*64)
  from desktop.startup_verdict import _invalid_reason

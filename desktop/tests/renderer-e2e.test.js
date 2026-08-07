@@ -10,11 +10,11 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
-test('packaged E2E keeps import input outside the fresh profile and verifies trial writability',()=>{
+test('packaged E2E keeps import input outside the fresh profile and verifies Free writability',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),entrypoint=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/growthmap-e2e-profile-/);assert.match(source,/growthmap-e2e-input-/);assert.doesNotMatch(source,/path\.join\(userData,'fixture\.sqlite'\)/);
  assert.match(source,/let made=runPython\(\[helper,fixture\]/);assert.match(source,/made=runPython\(\['-c'/);assert.doesNotMatch(source,/spawnSync\(['"]python['"]/);
- assert.match(source,/fresh-trial/);assert.match(source,/restart-trial/);assert.match(source,/mutations_allowed===true/);assert.match(source,/trial-marker\.bin/);assert.match(source,/installation-identity\.bin/);assert.match(source,/trial-state\.json/);
+ assert.match(source,/fresh-free/);assert.match(source,/restart-free/);assert.match(source,/mutations_allowed===true/);assert.match(source,/trial-marker\.bin/);assert.match(source,/installation-identity\.bin/);assert.match(source,/trial-state\.json/);
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
 });
 

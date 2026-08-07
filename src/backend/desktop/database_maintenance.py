@@ -108,6 +108,7 @@ def _validate_connection(connection,source):
  for table,limit in MAX_COUNTS.items():
   counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
   if counts[table]>limit: raise ValueError("database row limits exceeded")
+ counts["activeProjects"]=int(connection.execute("SELECT COUNT(*) FROM projects WHERE status='active'").fetchone()[0])
  # Bound potentially hostile values without materializing them.
  for table,column in (("projects","name"),("nodes","title"),("content_blocks","content")):
   if connection.execute(f'SELECT 1 FROM "{table}" WHERE length("{column}")>16777216 LIMIT 1').fetchone(): raise ValueError("database value limits exceeded")

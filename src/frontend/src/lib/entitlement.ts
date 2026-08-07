@@ -9,8 +9,7 @@ export interface Entitlement {
   reason: string;
   major_version: number | null;
   max_active_projects: number | null;
-  trial_days_remaining: number;
-  trial_expires_at: string | null;
+  free_started_at?: string | null;
 }
 
 const unavailable: Entitlement = {
@@ -21,8 +20,7 @@ const unavailable: Entitlement = {
   reason: "unavailable",
   major_version: null,
   max_active_projects: 0,
-  trial_days_remaining: 0,
-  trial_expires_at: null,
+  free_started_at: null,
 };
 
 export function useEntitlement() {

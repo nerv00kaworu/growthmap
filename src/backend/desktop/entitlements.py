@@ -1,4 +1,4 @@
-"""Desktop trial and signed entitlement policy.
+"""Desktop permanent-Free and signed entitlement policy.
 
 No private signing material belongs in the product. Invalid/corrupt state always degrades to
 extraction mode; it never affects access to existing data.
@@ -13,8 +13,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-TRIAL_DAYS = 7
-TRIAL_ACTIVE_PROJECT_LIMIT = 2
+FREE_ACTIVE_PROJECT_LIMIT = 1
 CURRENT_MAJOR_VERSION = 1  # compiled product line; packaging preflight checks desktop metadata agreement
 LICENSE_PATH = Path(os.getenv("GROWTHMAP_LICENSE_FILE", Path.home()/".growthmap"/"license.json"))
 TRIAL_PATH = Path(os.getenv("GROWTHMAP_TRIAL_STATE_FILE", LICENSE_PATH.with_name("trial-state.json")))
@@ -51,10 +50,8 @@ class Entitlement:
     max_active_projects: int | None = 0
     valid: bool = False
     mutations_allowed: bool = False
-    reason: str = "no_trial_state"
-    trial_started_at: str | None = None
-    trial_expires_at: str | None = None
-    trial_days_remaining: int = 0
+    reason: str = "no_free_state"
+    free_started_at: str | None = None
 
     def public(self) -> dict[str, Any]: return asdict(self)
 
@@ -206,32 +203,40 @@ def initialize_trial(path: Path=TRIAL_PATH, *, now: datetime | None=None, starte
     try: _atomic_json(path,{"schema_version":1,"installation_id":installation_id,"started_at":instant,"last_seen_at":instant})
     except FileExistsError: pass
 
-def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
+def free_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
+    """Interpret legacy trial-state evidence as permanent Free; never expose an expiry.
+
+    The persisted shape deliberately remains stable so an old installation retains its
+    tamper/rollback witness.  ``started_at`` is historic provenance, not a deadline.
+    """
     now=(now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
         doc=strict_json_loads(path.read_text("utf-8"))
-        if set(doc)!={"schema_version","installation_id","started_at","last_seen_at"} or doc["schema_version"] != 1 or not re.fullmatch(r"[A-Za-z0-9-]{8,80}",doc["installation_id"]): return Entitlement(reason="corrupt_trial_state")
+        if set(doc)!={"schema_version","installation_id","started_at","last_seen_at"} or doc["schema_version"] != 1 or not re.fullmatch(r"[A-Za-z0-9-]{8,80}",doc["installation_id"]): return Entitlement(reason="corrupt_free_state")
         started,last=_iso(doc["started_at"]),_iso(doc["last_seen_at"])
-        if started > now + ROLLBACK_TOLERANCE or now + ROLLBACK_TOLERANCE < last: return Entitlement(reason="clock_rollback",trial_started_at=started.isoformat(),trial_expires_at=(started+timedelta(days=TRIAL_DAYS)).isoformat())
-        expires=started+timedelta(days=TRIAL_DAYS)
-        if now >= expires: return Entitlement(reason="trial_expired",trial_started_at=started.isoformat(),trial_expires_at=expires.isoformat())
+        if started > now + ROLLBACK_TOLERANCE or now + ROLLBACK_TOLERANCE < last: return Entitlement(reason="clock_rollback",free_started_at=started.isoformat())
         if checkpoint and now > last: _atomic_json(path,{"schema_version":1,"installation_id":doc["installation_id"],"started_at":started.isoformat(),"last_seen_at":now.isoformat()})
-        remaining=max(1,(expires.date()-now.date()).days)
-        return Entitlement(state="trial",edition="trial",max_active_projects=TRIAL_ACTIVE_PROJECT_LIMIT,valid=True,mutations_allowed=True,reason="trial_active",trial_started_at=started.isoformat(),trial_expires_at=expires.isoformat(),trial_days_remaining=remaining)
-    except (OSError,ValueError,TypeError,KeyError,json.JSONDecodeError): return Entitlement(reason="corrupt_trial_state")
+        return Entitlement(state="free",edition="free",max_active_projects=FREE_ACTIVE_PROJECT_LIMIT,valid=True,mutations_allowed=True,reason="free_active",free_started_at=started.isoformat())
+    except FileNotFoundError:return Entitlement(reason="no_free_state")
+    except (OSError,ValueError,TypeError,KeyError,json.JSONDecodeError): return Entitlement(reason="corrupt_free_state")
+
+# Compatibility for source integrations that still import this helper. Its result is
+# permanent Free, never a time-limited trial.
+def trial_entitlement(path: Path=TRIAL_PATH, *, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
+    return free_entitlement(path,now=now,checkpoint=checkpoint)
 
 def peek_current_entitlement(*, now: datetime | None=None) -> Entitlement:
     """Cryptographic entitlement lookup with zero file writes."""
     if LICENSE_PATH.exists():
         try: doc=strict_json_loads(LICENSE_PATH.read_text("utf-8")); return apply_revocation(verify_document(doc,public_key_path=_public_key_path(),now=now,device_public_key=os.getenv("GROWTHMAP_DEVICE_PUBLIC_KEY")),public_key_path=_public_key_path(),issued_at=doc.get("issued_at"))
         except (OSError,ValueError): return Entitlement(reason="corrupt_license")
-    return trial_entitlement(now=now,checkpoint=False)
+    return free_entitlement(now=now,checkpoint=False)
 
 def checkpoint_current_entitlement(*, now: datetime | None=None) -> Entitlement:
     value=peek_current_entitlement(now=now)
-    if value.state != "trial" or not value.valid or not value.mutations_allowed:
+    if value.state != "free" or not value.valid or not value.mutations_allowed:
         return value
-    return trial_entitlement(now=now,checkpoint=True)
+    return free_entitlement(now=now,checkpoint=True)
 
 def current_entitlement(*, now: datetime | None=None, checkpoint: bool=False) -> Entitlement:
     return checkpoint_current_entitlement(now=now) if checkpoint else peek_current_entitlement(now=now)

@@ -33,8 +33,8 @@ def entitlement(): return effective_entitlement().public()
 @router.post("/entitlement/checkpoint")
 def entitlement_checkpoint():
     before=effective_entitlement()
-    if before.state != "trial" or not before.valid or not before.mutations_allowed:
-        raise HTTPException(403,"Lifecycle checkpoint requires an active writable trial")
+    if before.state != "free" or not before.valid or not before.mutations_allowed:
+        raise HTTPException(403,"Lifecycle checkpoint requires an active writable Free entitlement")
     return checkpoint_current_entitlement().public()
 @router.post("/trial/start")
 def start_trial(body: TrialStartIn, x_growthmap_fresh_install: str | None=Header(None)):

@@ -11,20 +11,20 @@ def signed(private, **changes):
 
 def test_entitlement_peek_is_side_effect_free(tmp_path):
  start=datetime(2026,1,1,tzinfo=timezone.utc);p=tmp_path/'trial.json';initialize_trial(p,now=start);before=p.read_bytes()
- assert trial_entitlement(p,now=start+timedelta(hours=1)).state=='trial'
+ assert trial_entitlement(p,now=start+timedelta(hours=1)).state=='free'
  assert p.read_bytes()==before
  trial_entitlement(p,now=start+timedelta(hours=1),checkpoint=True);assert p.read_bytes()!=before
 
-def test_trial_boundaries_rollback_and_corruption(tmp_path):
+def test_old_trial_state_migrates_to_permanent_free_and_retains_rollback_corruption_guards(tmp_path):
     start=datetime(2026,1,1,tzinfo=timezone.utc);p=tmp_path/'trial.json';initialize_trial(p,now=start)
-    assert trial_entitlement(p,now=start).state=='trial'
-    assert trial_entitlement(p,now=start+timedelta(days=6,hours=23)).mutations_allowed
-    assert trial_entitlement(p,now=start+timedelta(days=7)).reason=='trial_expired'
+    assert trial_entitlement(p,now=start).state=='free'
+    assert trial_entitlement(p,now=start+timedelta(days=3650)).mutations_allowed
+    assert trial_entitlement(p,now=start+timedelta(days=3650)).state=='free'
     assert trial_entitlement(p,now=start-timedelta(minutes=6)).reason=='clock_rollback'
-    p.write_text('{bad');assert trial_entitlement(p,now=start).reason=='corrupt_trial_state'
+    p.write_text('{bad');assert trial_entitlement(p,now=start).reason=='corrupt_free_state'
     initialize_trial(p,now=start+timedelta(days=100));assert p.read_text()=='{bad'
 
-def test_trial_requires_explicit_successful_start(tmp_path):
+def test_free_requires_explicit_successful_start(tmp_path):
     code=r'''from fastapi.testclient import TestClient
 from main import app
 from pathlib import Path
@@ -82,7 +82,7 @@ with TestClient(app) as c: assert c.post('/api/projects',json={'name':'web'}).st
     env2={**os.environ,'APP_ENV':'test','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'web.db'}"};env2.pop('GROWTHMAP_DESKTOP_MODE',None);env2.pop('GROWTHMAP_SESSION_TOKEN',None)
     result=subprocess.run([sys.executable,'-c',author],env=env2,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
 
-def test_entitlement_get_is_byte_and_mtime_stable_and_checkpoint_is_trial_only(tmp_path):
+def test_entitlement_get_is_byte_and_mtime_stable_and_checkpoint_is_free_only(tmp_path):
     trial=tmp_path/'trial.json';now=datetime.now(timezone.utc);initialize_trial(trial,now=now);code=r'''import os
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -95,8 +95,8 @@ with TestClient(app) as c:
  assert c.post('/api/desktop/entitlement/checkpoint',headers=h).status_code==200
  assert p.read_bytes()!=before[0]
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'trial','GROWTHMAP_STARTUP_VERDICT_NONCE':'N'*43,'GROWTHMAP_TRIAL_STATE_FILE':str(trial),'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'get.db'}",'GROWTHMAP_SCHEMA_CURRENT':'1'}
-    import hashlib,hmac;env['GROWTHMAP_STARTUP_VERDICT_MAC']=hmac.new(b't',f"growthmap-startup-v1:trial:{'N'*43}".encode(),hashlib.sha256).hexdigest()
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'free','GROWTHMAP_STARTUP_VERDICT_NONCE':'N'*43,'GROWTHMAP_TRIAL_STATE_FILE':str(trial),'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'get.db'}",'GROWTHMAP_SCHEMA_CURRENT':'1'}
+    import hashlib,hmac;env['GROWTHMAP_STARTUP_VERDICT_MAC']=hmac.new(b't',f"growthmap-startup-v1:free:{'N'*43}".encode(),hashlib.sha256).hexdigest()
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
 
 def test_legacy_v1_bootstrap_and_strict_revocation_timestamp_types(tmp_path):

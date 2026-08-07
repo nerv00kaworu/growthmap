@@ -17,7 +17,7 @@ def base_env(tmp_path):
 
 def run(tmp_path, extra):
     env = {**base_env(tmp_path), **extra}
-    token, nonce, mode = env["GROWTHMAP_SESSION_TOKEN"], "V" * 43, "trial"
+    token, nonce, mode = env["GROWTHMAP_SESSION_TOKEN"], "V" * 43, "free"
     env.update(GROWTHMAP_STARTUP_VERDICT_MODE=mode, GROWTHMAP_STARTUP_VERDICT_NONCE=nonce, GROWTHMAP_STARTUP_VERDICT_MAC=hmac.new(token.encode(), f"growthmap-startup-v1:{mode}:{nonce}".encode(), hashlib.sha256).hexdigest())
     code = "from fastapi.testclient import TestClient\nfrom main import app\nwith TestClient(app): pass\n"
     return subprocess.run([sys.executable, "-c", code], cwd=BACKEND, env=env, text=True, capture_output=True)
