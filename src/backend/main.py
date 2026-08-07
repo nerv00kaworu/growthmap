@@ -38,6 +38,15 @@ def _cors_allowed_origins() -> list[str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     entitlement=effective_entitlement()
+    expected_sha=os.getenv("GROWTHMAP_EXPECTED_DB_SHA256")
+    if desktop_mode() and expected_sha:
+        import hashlib
+        database=Path(engine.url.database);stat=database.lstat()
+        meaningful=os.getenv("GROWTHMAP_EXPECTED_DB_IDENTITY_MEANINGFUL")=="1"
+        if database.is_symlink() or not database.is_file() or stat.st_nlink!=1:raise RuntimeError("Desktop startup database identity mismatch")
+        if meaningful and (stat.st_dev!=int(os.environ["GROWTHMAP_EXPECTED_DB_DEVICE"]) or stat.st_ino!=int(os.environ["GROWTHMAP_EXPECTED_DB_INODE"])):raise RuntimeError("Desktop startup database identity mismatch")
+        data=database.read_bytes()
+        if len(data)!=int(os.environ["GROWTHMAP_EXPECTED_DB_SIZE"]) or hashlib.sha256(data).hexdigest()!=expected_sha:raise RuntimeError("Desktop startup database digest mismatch")
     extraction_startup=desktop_mode() and os.getenv("GROWTHMAP_FRESH_INSTALL") != "1" and not entitlement.mutations_allowed
     migration_required=desktop_mode() and os.getenv("GROWTHMAP_MIGRATION_REQUIRED") == "1"
     schema_current=desktop_mode() and os.getenv("GROWTHMAP_SCHEMA_CURRENT") == "1"

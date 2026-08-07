@@ -201,6 +201,11 @@ def validated_snapshot(source,destination):
   except Exception as cleanup: raise RuntimeError("snapshot cleanup failed; recovery required") from cleanup
   raise
 
+def _identity(stat):
+ # POSIX identity is stable and nonzero. Windows filesystems may report zero;
+ # there digest/size/link/regular metadata remains the supported equivalent.
+ return {"device":stat.st_dev,"inode":stat.st_ino,"meaningful":bool(stat.st_dev or stat.st_ino)}
+
 def install_database(staging,live):
  """Capture, validate and atomically install one exact staged database object."""
  source=Path(staging);target=Path(live);parent=_safe_parent(target)
@@ -210,20 +215,28 @@ def install_database(staging,live):
  maximum=int(os.environ["GROWTHMAP_MAX_ACTIVE_PROJECTS"]) if os.environ.get("GROWTHMAP_MAX_ACTIVE_PROJECTS") else None
  if old.exists() or captured.exists():raise ValueError("replacement destination already exists")
  source_stat=_regular_file(source)
- if (source_stat.st_dev,source_stat.st_ino)!=(expected_device,expected_inode):raise ValueError("staging identity changed before install")
+ if _identity(source_stat)["meaningful"] and (source_stat.st_dev,source_stat.st_ino)!=(expected_device,expected_inode):raise ValueError("staging identity changed before install")
  meta=validated_snapshot(source,captured)
  after=_regular_file(source)
- if (source_stat.st_dev,source_stat.st_ino)!=(after.st_dev,after.st_ino):raise ValueError("staging identity changed during capture")
+ if _identity(source_stat)["meaningful"] and (source_stat.st_dev,source_stat.st_ino)!=(after.st_dev,after.st_ino):raise ValueError("staging identity changed during capture")
+ captured_stat=_regular_file(captured);captured_identity=_identity(captured_stat)
+ hook=os.environ.get("GROWTHMAP_MAINTENANCE_TEST_HOOK")
+ if hook:__import__("subprocess").run([sys.executable,hook,"before-install",str(captured)],check=True)
+ before_install=_regular_file(captured)
+ if captured_identity["meaningful"] and (before_install.st_dev,before_install.st_ino)!=(captured_stat.st_dev,captured_stat.st_ino):raise ValueError("captured identity changed before install")
+ if before_install.st_size!=captured_stat.st_size:raise ValueError("captured size changed before install")
  staged=stable_validate(captured)
  if staged["sha256"]!=meta["sha256"] or staged["size"]!=meta["size"]:raise ValueError("captured database changed")
  if expected_sha and (meta["sourceSha256"]!=expected_sha or meta["sourceSize"]!=expected_size):raise ValueError("database source changed after validation")
  if maximum is not None and staged["counts"]["activeProjects"]>maximum:raise ValueError("database exceeds active project limit")
  os.replace(target,old)
  try:
-  os.replace(captured,target);installed=stable_validate(target)
+  os.replace(captured,target);target_stat=_regular_file(target);installed=stable_validate(target)
+  if captured_identity["meaningful"] and (target_stat.st_dev,target_stat.st_ino)!=(captured_stat.st_dev,captured_stat.st_ino):raise ValueError("installed database identity changed")
   if installed["sha256"]!=staged["sha256"] or installed["size"]!=staged["size"]:raise ValueError("installed database changed")
   if maximum is not None and installed["counts"]["activeProjects"]>maximum:raise ValueError("installed database exceeds active project limit")
   _durability(target,parent)
+  installed["identity"]=_identity(target_stat)
   return {"installed":installed,"old":str(old)}
  except Exception:
   try:
