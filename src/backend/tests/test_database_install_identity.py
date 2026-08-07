@@ -30,5 +30,15 @@ def test_ordinary_install_preserves_identity_when_meaningful(tmp_path,monkeypatc
     live=tmp_path/'live.db';staged=tmp_path/'staged.db';old=tmp_path/'old.db';capture=tmp_path/'capture.db'
     fixture(live);fixture(staged);_env(monkeypatch,staged,live,old,capture)
     result=dm.install_database(staged,live);identity=result['installed']['identity'];stat=live.lstat()
-    if identity['meaningful']: assert (stat.st_dev,stat.st_ino)==(identity['device'],identity['inode'])
+    assert isinstance(identity['device'],str) and isinstance(identity['inode'],str)
+    if identity['meaningful']: assert (stat.st_dev,stat.st_ino)==(int(identity['device']),int(identity['inode']))
     assert result['installed']['counts']['activeProjects']==1 and old.exists()
+
+
+def test_identity_json_contract_preserves_values_beyond_javascript_safe_integer():
+    class Stat:
+        st_dev=9007199254740993
+        st_ino=18446744073709551615
+    identity=dm._identity(Stat())
+    assert identity=={'device':'9007199254740993','inode':'18446744073709551615','meaningful':True}
+    assert __import__('json').loads(__import__('json').dumps(identity))==identity

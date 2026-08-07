@@ -119,7 +119,10 @@ def _open_validated(source):
  connection=sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro&immutable=1",uri=True)
  try: meta=_validate_connection(connection,source)
  except Exception: connection.close();raise
- meta.update(size=stat.st_size,sha256=hashlib.sha256(source.read_bytes()).hexdigest(),device=stat.st_dev,inode=stat.st_ino)
+ # Filesystem identities cross a JSON/JavaScript boundary in Electron. Keep
+ # them as canonical decimal strings so Windows 64-bit file IDs are not
+ # rounded by JavaScript Number before being returned as install evidence.
+ meta.update(size=stat.st_size,sha256=hashlib.sha256(source.read_bytes()).hexdigest(),device=str(stat.st_dev),inode=str(stat.st_ino))
  return connection,meta
 
 def validate(path):
@@ -204,7 +207,7 @@ def validated_snapshot(source,destination):
 def _identity(stat):
  # POSIX identity is stable and nonzero. Windows filesystems may report zero;
  # there digest/size/link/regular metadata remains the supported equivalent.
- return {"device":stat.st_dev,"inode":stat.st_ino,"meaningful":bool(stat.st_dev or stat.st_ino)}
+ return {"device":str(stat.st_dev),"inode":str(stat.st_ino),"meaningful":bool(stat.st_dev or stat.st_ino)}
 
 def install_database(staging,live,_test_before_install=None):
  """Capture, validate and atomically install one exact staged database object."""
