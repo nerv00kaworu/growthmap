@@ -8,7 +8,7 @@ export const securityProof:Record<Locale,ProofSection>={
 'zh-TW':{
   eyebrow:'LOCAL-FIRST SECURITY',
   title:'專案資料留在本機，Agent 權限保持在清楚邊界內。',
-  lead:'GrowthMap 是以 Windows 本機工作區為核心的桌面工具。專案地圖與 SQLite 資料庫預設留在你的電腦上；公開網站不會接收你的專案資料。只有你明確設定並使用外部 AI 服務時，相關請求才會送往該服務。',
+  lead:'GrowthMap 是以 Windows 本機工作區為核心的桌面工具。專案地圖與 SQLite 資料庫預設留在你的電腦上；公開網站不會接收你的專案資料。只有你明確設定或主動操作的外部服務，才可能收到相關請求。',
   sections:[
     {title:'技術架構與本機資料',items:[
       {title:'在地技術棧',body:'桌面介面以 Next.js、React Flow 與 Zustand 建構，後端使用 FastAPI、SQLAlchemy 與 SQLite。前後端透過本機 sidecar 協作，不需要把專案圖譜放到 GrowthMap 的雲端。'},
@@ -27,7 +27,7 @@ export const securityProof:Record<Locale,ProofSection>={
     ]},
     {title:'備份、復原與產品邊界',items:[
       {title:'管理備份',body:'備份存放在目前工作區的 backups/，包含 SQLite 快照、SHA-256、大小與 manifest。匯入、還原及 migration 等高風險流程會先驗證或建立備份證據。'},
-      {title:'驗證失敗就停止寫入',body:'當 migration 或復原證據不一致時，GrowthMap 會 fail closed，進入唯讀或復原流程，而不是在狀態不明時繼續修改資料。'},
+      {title:'驗證失敗就停止寫入',body:'當 migration 或復原證據不一致時，GrowthMap 會 fail closed：停止寫入，並依情況進入唯讀／復原流程或拒絕啟動，而不是在狀態不明時繼續修改資料。'},
       {title:'目前的產品範圍',body:'目前核心是單一 Windows 本機工作區中的人類與相容 Agent 協作。多人即時同步、雲端共享工作區、P2P 與 Git-based 地圖同步不在目前版本範圍內。'}
     ]}
   ]
@@ -35,7 +35,7 @@ export const securityProof:Record<Locale,ProofSection>={
 'zh-CN':{
   eyebrow:'LOCAL-FIRST SECURITY',
   title:'项目数据留在本地，Agent 权限保持在清晰边界内。',
-  lead:'GrowthMap 是以 Windows 本地工作区为核心的桌面工具。项目地图与 SQLite 数据库默认留在你的电脑上；官方网站不会接收你的项目数据。只有你明确设置并使用外部 AI 服务时，相关请求才会发送给该服务。',
+  lead:'GrowthMap 是以 Windows 本地工作区为核心的桌面工具。项目地图与 SQLite 数据库默认留在你的电脑上；官方网站不会接收你的项目数据。只有你明确设置或主动操作的外部服务，才可能收到相关请求。',
   sections:[
     {title:'技术架构与本地数据',items:[
       {title:'本地技术栈',body:'桌面界面以 Next.js、React Flow 与 Zustand 构建，后端使用 FastAPI、SQLAlchemy 与 SQLite。前后端通过本地 sidecar 协作，不需要把项目图谱放到 GrowthMap 云端。'},
@@ -54,7 +54,7 @@ export const securityProof:Record<Locale,ProofSection>={
     ]},
     {title:'备份、恢复与产品边界',items:[
       {title:'管理备份',body:'备份存放在当前工作区的 backups/，包含 SQLite 快照、SHA-256、大小与 manifest。导入、还原及 migration 等高风险流程会先验证或建立备份证据。'},
-      {title:'验证失败就停止写入',body:'当 migration 或恢复证据不一致时，GrowthMap 会 fail closed，进入只读或恢复流程，而不是在状态不明时继续修改数据。'},
+      {title:'验证失败就停止写入',body:'当 migration 或恢复证据不一致时，GrowthMap 会 fail closed：停止写入，并视情况进入只读／恢复流程或拒绝启动，而不是在状态不明时继续修改数据。'},
       {title:'当前产品范围',body:'当前核心是单一 Windows 本地工作区中的人类与兼容 Agent 协作。多人实时同步、云端共享工作区、P2P 与 Git-based 地图同步不在当前版本范围内。'}
     ]}
   ]
@@ -62,7 +62,7 @@ export const securityProof:Record<Locale,ProofSection>={
 en:{
   eyebrow:'LOCAL-FIRST SECURITY',
   title:'Project data stays local. Agent authority stays within explicit boundaries.',
-  lead:'GrowthMap is a desktop tool centered on a local Windows workspace. Your project map and SQLite database remain on your computer by default, and the public website does not receive project data. Requests leave the machine only when you explicitly configure and use an external AI service.',
+  lead:'GrowthMap is a desktop tool centered on a local Windows workspace. Your project map and SQLite database remain on your computer by default, and the public website does not receive project data. External services receive requests only when you explicitly configure or initiate the relevant action.',
   sections:[
     {title:'Architecture and local data',items:[
       {title:'Local application stack',body:'The desktop interface uses Next.js, React Flow, and Zustand. The backend uses FastAPI, SQLAlchemy, and SQLite. They communicate through a local sidecar, so the project graph does not need to live in a GrowthMap cloud service.'},
@@ -81,7 +81,7 @@ en:{
     ]},
     {title:'Backup, recovery, and product scope',items:[
       {title:'Managed backups',body:'Backups live under backups/ in the active workspace and include a SQLite snapshot, SHA-256, size, and manifest. Higher-risk flows such as import, restore, and migration verify or create backup evidence first.'},
-      {title:'Failed verification stops writes',body:'When migration or recovery evidence does not match, GrowthMap fails closed into a read-only or recovery path instead of continuing to modify data in an uncertain state.'},
+      {title:'Failed verification stops writes',body:'When migration or recovery evidence does not match, GrowthMap fails closed: it stops writes and, depending on the condition, enters a read-only or recovery path or refuses startup instead of modifying data in an uncertain state.'},
       {title:'Current product scope',body:'The current core is collaboration between people and compatible Agents in one local Windows workspace. Real-time multi-user sync, cloud-shared workspaces, P2P, and Git-based map synchronization are outside the current version.'}
     ]}
   ]
