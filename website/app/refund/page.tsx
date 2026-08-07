@@ -1,1 +1,1 @@
-import {permanentRedirect} from 'next/navigation';export default function Legacy(){permanentRedirect('/zh-TW/support')}
+import {permanentRedirect} from 'next/navigation';export default function Legacy(){permanentRedirect('/zh-TW/refund')}
