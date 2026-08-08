@@ -12,8 +12,10 @@ import { AgentPortPanel } from "@/components/AgentPortPanel";
 import { api } from "@/lib/api";
 import { useEntitlement } from "@/lib/entitlement";
 import { useAgentPortDesktopControl } from "@/lib/agent-port-control";
+import { LocaleSelector, useI18n } from "@/i18n/provider";
 
 export default function HomePage() {
+  const { t } = useI18n();
   const agentPortDesktopControl = useAgentPortDesktopControl();
   const loadProjects = useStore((s) => s.loadProjects);
   const projects = useStore((s) => s.projects);
@@ -129,7 +131,7 @@ export default function HomePage() {
     if (!currentProject) return;
     try {
       const res = await fetch(`/api/projects/${currentProject.id}/export`);
-      if (!res.ok) throw new Error("匯出失敗");
+      if (!res.ok) throw new Error(t("error.export"));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -146,7 +148,7 @@ export default function HomePage() {
     if (!currentProject) return;
     try {
       const res = await fetch(`/api/projects/${currentProject.id}/export-json`);
-      if (!res.ok) throw new Error("JSON 匯出失敗");
+      if (!res.ok) throw new Error(t("error.exportJson"));
       const data = await res.json();
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -165,35 +167,35 @@ export default function HomePage() {
     try {
       await api.updateProject(currentProject.id, { status });
       await loadProjects();
-      setToast(status === "active" ? "✅ 專案已恢復" : "✅ 專案已封存；資料仍可讀與匯出");
+      setToast(t(status === "active" ? "toast.projectRestored" : "toast.projectArchived"));
     } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
   const importLicense = async () => {
     const desktop = (window as typeof window & { growthmapDesktop?: { license: { import(): Promise<unknown> } } }).growthmapDesktop;
-    if (!desktop) { setToast("License 匯入僅在桌面版提供"); return; }
+    if (!desktop) { setToast(t("toast.licenseDesktopOnly")); return; }
     try {
       const imported = await desktop.license.import();
       if (imported === null) return;
       await refreshEntitlement();
-      setToast("✅ License 已驗證並匯入");
+      setToast(t("toast.licenseImported"));
     } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
   const openPurchase = async () => {
-    if (!window.growthmapDesktop) { setToast("購買頁面僅在桌面版提供"); return; }
+    if (!window.growthmapDesktop) { setToast(t("toast.purchaseDesktopOnly")); return; }
     try { await window.growthmapDesktop.purchase.open(); }
     catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
   };
 
   const activateLicense = async () => {
-    if (!window.growthmapDesktop) { setToast("授權啟用僅在桌面版提供"); return; }
+    if (!window.growthmapDesktop) { setToast(t("toast.activationDesktopOnly")); return; }
     setActivating(true);
     try {
       await window.growthmapDesktop.license.activate(activationKey);
       setActivationKey("");
       await refreshEntitlement();
-      setToast("✅ 授權已啟用，此裝置可離線驗證");
+      setToast(t("toast.activated"));
     } catch (e: unknown) { useStore.setState({ error: (e as Error).message }); }
     finally { setActivating(false); }
   };
@@ -206,7 +208,7 @@ export default function HomePage() {
 
   const handleArchiveBranch = async () => {
     if (!currentBranch) return;
-    if (!confirm(`確定封存方案線「${currentBranch.name}」？\n\n封存後不會刪除資料，可在方案線管理中查看歷史紀錄。`)) return;
+    if (!confirm(t("branch.archiveConfirm", { name: currentBranch.name }))) return;
     await archiveBranch(currentBranch.id);
   };
 
@@ -240,9 +242,9 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      if (!res.ok) throw new Error("匯入失敗");
+      if (!res.ok) throw new Error(t("error.import"));
       await loadProjects();
-      setToast("✅ 匯入成功！");
+      setToast(t("toast.imported"));
     } catch (e: unknown) {
       useStore.setState({ error: (e as Error).message });
     }
@@ -262,7 +264,7 @@ export default function HomePage() {
 
       if (!isInput) {
         if ((e.key === "Delete" || e.key === "Backspace") && selectedNodeId) {
-          if (confirm("確定刪除此節點？")) {
+          if (confirm(t("confirm.deleteNode"))) {
             deleteNode(selectedNodeId);
           }
         }
@@ -280,7 +282,7 @@ export default function HomePage() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [selectedNodeId, selectNode, deleteNode, expandNode, deepenNode, undo]);
+  }, [selectedNodeId, selectNode, deleteNode, expandNode, deepenNode, undo, t]);
 
   const topBtnClass = "rounded-md border border-gray-600/50 bg-gray-800/40 px-3 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0";
 
@@ -291,19 +293,20 @@ export default function HomePage() {
         <div className="shrink-0 flex items-center h-full">
           <h1 data-testid="growthmap-title" className="text-sm font-semibold text-[var(--text-primary)] tracking-wide">🌳 GrowthMap</h1>
         </div>
+        <LocaleSelector />
         <div className="h-6 w-px bg-[var(--border)] shrink-0" />
 
         {/* Project selector */}
         <select
           value={currentProject?.id || ""}
-          aria-label="選擇專案"
+          aria-label={t("project.selectLabel")}
           onChange={(e) => {
             const p = projects.find((p) => p.id === e.target.value);
             if (p) selectProject(p);
           }}
           className="surface-subtle rounded-md px-2.5 py-1.5 text-xs text-[var(--text-primary)] shrink-0 border border-gray-700/60 hover:border-gray-500/70 max-w-36"
         >
-          <option value="">選擇專案...</option>
+          <option value="">{t("project.selectPlaceholder")}</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>{p.status === "archived" ? "🗄 " : ""}{p.name}</option>
           ))}
@@ -314,7 +317,7 @@ export default function HomePage() {
           <>
             <select
               value={currentBranch?.id || "main"}
-              aria-label="選擇分支"
+              aria-label={t("branch.selectLabel")}
               onChange={(e) => {
                 if (e.target.value === "main") {
                   selectBranch(null);
@@ -325,16 +328,16 @@ export default function HomePage() {
               }}
               className="surface-subtle rounded-md px-2.5 py-1.5 text-xs shrink-0 text-purple-300 border border-purple-700/40 hover:border-purple-500/60 max-w-40"
             >
-              <option value="main">🌿 主線（main）</option>
+              <option value="main">{t("branch.main")}</option>
               {branches.map((b) => (
-                <option key={b.id} value={b.id}>🔀 方案線：{b.name}</option>
+                <option key={b.id} value={b.id}>{t("branch.option", { name: b.name })}</option>
               ))}
             </select>
           </>
         )}
 
         <span data-testid="entitlement-status" className="shrink-0 text-[10px] text-gray-400">
-          {entitlement === null ? "Checking entitlement…" : entitlement.state === "paid" ? `Paid · perpetual v${entitlement.major_version} · unlimited` : entitlement.state === "free" ? `Free · ${projects.filter(p => p.status === "active").length}/1 active project` : "Read-only extraction · exports available"}
+          {entitlement === null ? t("entitlement.checking") : entitlement.state === "paid" ? t("entitlement.paid", { version: entitlement.major_version ?? "?" }) : entitlement.state === "free" ? t("entitlement.free", { count: projects.filter(p => p.status === "active").length }) : t("entitlement.readOnly")}
         </span>
         <button
           data-testid="new-project-button"
@@ -343,7 +346,7 @@ export default function HomePage() {
           disabled={readOnly}
           className="rounded-md border border-blue-500/30 bg-[var(--accent-soft)] px-3 py-1.5 text-xs text-blue-300 hover:border-blue-400/50 hover:text-blue-200 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          + 新專案
+          {t("project.new")}
         </button>
 
         {currentProject && (
@@ -352,9 +355,9 @@ export default function HomePage() {
               type="button"
               onClick={() => setShowMoreMenu((v) => !v)}
               className={topBtnClass}
-              title="更多操作"
+              title={t("more.tooltip")}
             >
-              ⋯ 更多
+              {t("more.title")}
             </button>
           </div>
         )}
@@ -370,12 +373,12 @@ export default function HomePage() {
               }
               if (e.key === "Escape") setSearchQuery("");
             }}
-            placeholder="🔍 搜尋節點..."
+            placeholder={t("search.placeholder")}
             className="surface-subtle rounded px-3 py-1.5 text-xs text-[var(--text-primary)] w-36 focus:w-48 transition-all duration-200 focus:border-blue-500/50 focus:outline-none"
           />
           {searchQuery && highlightedNodeIds.length > 0 && (
             <div className="absolute top-full left-0 mt-1 w-64 bg-[#111] border border-gray-700 rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
-              <div className="text-[10px] text-gray-500 px-3 py-1">{highlightedNodeIds.length} 個結果</div>
+              <div className="text-[10px] text-gray-500 px-3 py-1">{t("search.results", { count: highlightedNodeIds.length })}</div>
               {highlightedNodeIds.slice(0, 10).map((id) => (
                 <button
                   key={id}
@@ -390,12 +393,12 @@ export default function HomePage() {
           )}
         </div>
 
-        {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="database-workspace-button" type="button" onClick={() => setShowDatabaseWorkspace(true)} className="rounded-md border border-blue-700/50 bg-blue-950/30 px-2.5 py-1.5 text-xs text-blue-200 hover:text-blue-100 shrink-0" title="資料庫工作區">🗄️ DB</button>}
-        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title="LLM Provider 設定">⚙️ LLM</button>
+        {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="database-workspace-button" type="button" onClick={() => setShowDatabaseWorkspace(true)} className="rounded-md border border-blue-700/50 bg-blue-950/30 px-2.5 py-1.5 text-xs text-blue-200 hover:text-blue-100 shrink-0" title={t("database.tooltip")}>🗄️ DB</button>}
+        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title={t("llm.tooltip")}>⚙️ LLM</button>
         <button
           type="button"
           onClick={() => setShowShortcuts(true)}
-          title="鍵盤快捷鍵"
+          title={t("shortcuts.tooltip")}
           className={`${topBtnClass} px-2.5 hidden md:inline-block`}
         >
           ⌨️
@@ -408,20 +411,20 @@ export default function HomePage() {
           <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-gray-100">⋯ 更多操作</h2>
+                <h2 className="text-sm font-semibold text-gray-100">{t("more.title")}</h2>
                 <p className="mt-1 text-xs text-gray-500">
-                  {currentBranch ? `目前方案線：${currentBranch.name}` : "匯入匯出、復原與方案線管理"}
+                  {currentBranch ? t("more.currentBranch", { name: currentBranch.name }) : t("more.summary")}
                 </p>
               </div>
               <button type="button" onClick={() => setShowMoreMenu(false)} className="text-gray-500 hover:text-gray-300 text-lg">×</button>
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">📋 匯出規格</button>
-              <button type="button" onClick={() => { handleExport(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📄 匯出 Markdown</button>
-              <button type="button" onClick={() => { handleExportJSON(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">📤 匯出 JSON</button>
+              <button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">{t("export.spec")}</button>
+              <button type="button" onClick={() => { handleExport(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("export.markdown")}</button>
+              <button type="button" onClick={() => { handleExportJSON(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("export.json")}</button>
               <label className={`rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 ${readOnly ? "opacity-40 pointer-events-none" : "hover:bg-gray-800 cursor-pointer"}`}>
-                📥 匯入 JSON
+                {t("import.json")}
                 <input
                   ref={importRef}
                   type="file"
@@ -436,29 +439,29 @@ export default function HomePage() {
                 disabled={undoStack.length === 0}
                 className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                ↩ 復原 {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
+                {t("undo")} {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
               </button>
-              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">⚙️ LLM 設定</button>
-              <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">🔑 匯入 License</button>
-              {entitlement?.state !== "paid" && <section data-testid="activation-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>啟用 GrowthMap</strong><p className="text-[10px] text-amber-200/70">付款在網頁完成。取得授權碼後貼在這裡，首次啟用完成即可由此裝置離線驗證。</p><input data-testid="activation-key-input" type="text" value={activationKey} onChange={e=>setActivationKey(e.target.value)} placeholder="GM1.…" autoComplete="off" spellCheck={false} maxLength={128} className="w-full rounded border border-amber-700/60 bg-gray-950/60 px-2 py-1.5 font-mono text-xs"/><div className="flex gap-2"><button data-testid="activate-license-button" type="button" disabled={!activationKey.trim()||activating} onClick={activateLicense} className="rounded border border-amber-600 px-2 py-1 disabled:opacity-40">{activating?"啟用中…":"輸入授權碼解鎖"}</button><button type="button" onClick={openPurchase} className="rounded border border-gray-600 px-2 py-1">前往購買網頁</button></div><p className="text-[10px] text-gray-400">桌面程式不包含錢包、付款 SDK、Base RPC、收款地址或價格設定。</p></section>}
-              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">⬆️ 檢查更新</button>}
-              <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{currentProject.status === "active" ? "🗄️ 封存專案" : "♻️ 恢復專案"}</button>
-              <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">🤖 Agent 工作階段</button>
-              {agentPortDesktopControl && <button data-testid="agent-port-menu-entry" type="button" onClick={() => { setShowAgentPort(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30 disabled:opacity-40">🔌 Agent Port</button>}
-              <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">⌨️ 快捷鍵</button>
-              <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">🗂️ 方案線歷史</button>
+              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">{t("llm.settings")}</button>
+              <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">{t("license.import")}</button>
+              {entitlement?.state !== "paid" && <section data-testid="activation-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>{t("activation.title")}</strong><p className="text-[10px] text-amber-200/70">{t("activation.help")}</p><input data-testid="activation-key-input" type="text" value={activationKey} onChange={e=>setActivationKey(e.target.value)} placeholder={t("activation.placeholder")} autoComplete="off" spellCheck={false} maxLength={128} className="w-full rounded border border-amber-700/60 bg-gray-950/60 px-2 py-1.5 font-mono text-xs"/><div className="flex gap-2"><button data-testid="activate-license-button" type="button" disabled={!activationKey.trim()||activating} onClick={activateLicense} className="rounded border border-amber-600 px-2 py-1 disabled:opacity-40">{activating ? t("activation.activating") : t("activation.unlock")}</button><button type="button" onClick={openPurchase} className="rounded border border-gray-600 px-2 py-1">{t("activation.purchase")}</button></div><p className="text-[10px] text-gray-400">{t("activation.boundary")}</p></section>}
+              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">{t("updates.check")}</button>}
+              <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{t(currentProject.status === "active" ? "project.archive" : "project.restore")}</button>
+              <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">{t("agent.sessions")}</button>
+              {agentPortDesktopControl && <button data-testid="agent-port-menu-entry" type="button" onClick={() => { setShowAgentPort(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30 disabled:opacity-40">{t("agent.port")}</button>}
+              <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("shortcuts.menu")}</button>
+              <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">{t("branch.history")}</button>
             </div>
 
             <div className="rounded-lg border border-red-900/30 bg-red-950/10 p-3 space-y-2">
-              <div className="text-[10px] uppercase tracking-[0.18em] text-red-400/70">危險操作</div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-red-400/70">{t("danger.title")}</div>
               <button
                 type="button"
                 onClick={() => { handleArchiveBranch(); setShowMoreMenu(false); }}
                 disabled={!currentBranch}
                 className="w-full rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2.5 text-left text-xs text-red-300 hover:bg-red-900/30 disabled:opacity-40 disabled:cursor-not-allowed"
-                title={currentBranch ? `封存方案線：${currentBranch.name}` : "目前是主線，請先切到方案線後才能封存"}
+                title={currentBranch ? t("branch.archiveNamed", { name: currentBranch.name }) : t("branch.archiveUnavailable")}
               >
-                🗃️ {currentBranch ? `封存方案線：${currentBranch.name}` : "主線不可封存"}
+                🗃️ {currentBranch ? t("branch.archiveNamed", { name: currentBranch.name }) : t("branch.mainCannotArchive")}
               </button>
             </div>
           </div>
@@ -470,13 +473,13 @@ export default function HomePage() {
           <div className="w-full max-w-lg rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-sm font-semibold text-gray-100">🗂️ 方案線歷史</h2>
-                <p className="mt-1 text-xs text-gray-500">包含建立、合併與封存紀錄；封存資料仍可追溯。</p>
+                <h2 className="text-sm font-semibold text-gray-100">{t("branch.history")}</h2>
+                <p className="mt-1 text-xs text-gray-500">{t("branch.historyHelp")}</p>
               </div>
               <button type="button" onClick={() => setShowBranchHistory(false)} className="text-lg text-gray-500 hover:text-gray-300">×</button>
             </div>
             <div className="mt-4 max-h-72 space-y-2 overflow-y-auto">
-              {branchHistoryLoading ? <div className="py-6 text-center text-sm text-gray-500">讀取方案線歷史中…</div> : branchHistory.length === 0 ? <div className="py-6 text-center text-sm text-gray-500">此專案尚無方案線歷史。</div> : branchHistory.map((entry) => (
+              {branchHistoryLoading ? <div className="py-6 text-center text-sm text-gray-500">{t("branch.historyLoading")}</div> : branchHistory.length === 0 ? <div className="py-6 text-center text-sm text-gray-500">{t("branch.historyEmpty")}</div> : branchHistory.map((entry) => (
                 <div key={entry.id} className="rounded-lg border border-gray-800 bg-gray-950/40 px-3 py-2">
                   <div className="text-sm text-gray-200">{entry.action_type.replaceAll("_", " ")}</div>
                   <div className="mt-0.5 text-[11px] text-gray-500">{new Date(entry.created_at).toLocaleString()}</div>
@@ -491,29 +494,29 @@ export default function HomePage() {
       {showNewProject && (
         <div className="surface-panel border-x-0 border-t-0 rounded-none p-4 flex gap-3 items-end">
           <div className="flex-1">
-            <div className="eyebrow-label">專案名稱</div>
+            <div className="eyebrow-label">{t("project.name")}</div>
             <input
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
               className="mt-1 w-full rounded px-3 py-2 text-sm text-[var(--text-primary)] surface-subtle"
-              placeholder="例：Fate Origin Agent"
+              placeholder={t("project.nameExample")}
             />
           </div>
           <div className="flex-1">
-            <div className="eyebrow-label">描述（選填）</div>
+            <div className="eyebrow-label">{t("project.description")}</div>
             <input
               value={newDesc}
               onChange={(e) => setNewDesc(e.target.value)}
               className="mt-1 w-full rounded px-3 py-2 text-sm text-[var(--text-primary)] surface-subtle"
-              placeholder="一句話描述"
+              placeholder={t("project.descriptionPlaceholder")}
             />
           </div>
           <button type="button" onClick={handleCreate} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg">
-            建立
+            {t("common.create")}
           </button>
           <button type="button" onClick={() => setShowNewProject(false)} className="px-3 py-2 text-[var(--text-faint)] hover:text-[var(--text-primary)] text-sm">
-            取消
+            {t("common.cancel")}
           </button>
         </div>
       )}
@@ -524,8 +527,8 @@ export default function HomePage() {
           {loading ? (
             <div className="flex items-center justify-center h-full text-gray-500">
               <div className="text-center animate-pulse space-y-1">
-                <div className="text-sm text-gray-400">正在切換{currentBranch ? "分支" : "專案"}…</div>
-                <div className="text-xs text-gray-600">同步樹狀資料中</div>
+                <div className="text-sm text-gray-400">{t(currentBranch ? "loading.switchingBranch" : "loading.switchingProject")}</div>
+                <div className="text-xs text-gray-600">{t("loading.syncing")}</div>
               </div>
             </div>
           ) : (
@@ -558,16 +561,16 @@ export default function HomePage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-gray-200">⌨️ 鍵盤快捷鍵</h2>
+              <h2 className="text-sm font-semibold text-gray-200">{t("shortcuts.title")}</h2>
               <button onClick={() => setShowShortcuts(false)} className="text-gray-500 hover:text-gray-300 text-sm">✕</button>
             </div>
             <div className="space-y-2 text-xs">
               {[
-                ["Esc", "取消選取 / 關閉面板"],
-                ["Delete / Backspace", "刪除選取節點"],
-                ["E", "展開選取節點（AI）"],
-                ["D", "深化選取節點（AI）"],
-                ["Ctrl+Z", "復原"],
+                ["Esc", t("shortcuts.escape")],
+                ["Delete / Backspace", t("shortcuts.delete")],
+                ["E", t("shortcuts.expand")],
+                ["D", t("shortcuts.deepen")],
+                ["Ctrl+Z", t("shortcuts.undo")],
               ].map(([key, desc]) => (
                 <div key={key} className="flex justify-between items-center">
                   <kbd className="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-gray-300 font-mono">{key}</kbd>
