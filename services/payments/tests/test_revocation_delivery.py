@@ -55,12 +55,12 @@ def test_revocation_retry_backoff_then_delivery(tmp_path):
 
 def test_full_payment_activation_revoke_blocks_all_new_activation_paths(tmp_path):
  service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority)
- first_key,first_public=keypair();first_ch=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=first_public);authority.activate_challenge(challenge_id=first_ch["challenge_id"],proof=signed(first_key,ent["license_id"],first_public,first_ch["nonce"]))
+ first_key,first_public=keypair();first_ch=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=first_public);authority.activate_challenge(expected_flow_kind="payment",challenge_id=first_ch["challenge_id"],proof=signed(first_key,ent["license_id"],first_public,first_ch["nonce"]))
  outstanding_key,outstanding_public=keypair();outstanding=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=outstanding_public)
  service.admin_transition(order["order_id"],"refund");service.deliver_revocation(order["order_id"],authority)
  second_key,second_public=keypair()
  with pytest.raises(ValueError,match="license_unavailable"):authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=second_public)
- with pytest.raises(ValueError,match="license_revoked"):authority.activate_challenge(challenge_id=outstanding["challenge_id"],proof=signed(outstanding_key,ent["license_id"],outstanding_public,outstanding["nonce"]))
+ with pytest.raises(ValueError,match="license_revoked"):authority.activate_challenge(expected_flow_kind="payment",challenge_id=outstanding["challenge_id"],proof=signed(outstanding_key,ent["license_id"],outstanding_public,outstanding["nonce"]))
  nonce="direct_nonce_123456789"
  with pytest.raises(ValueError,match="license_revoked"):authority.activate(license_id=ent["license_id"],device_public_key=second_public,nonce=nonce,proof=signed(second_key,ent["license_id"],second_public,nonce))
  with authority._connect() as db:assert db.execute("select revoked_at from licenses where license_id=?",(ent["license_id"],)).fetchone()[0]
@@ -68,12 +68,12 @@ def test_full_payment_activation_revoke_blocks_all_new_activation_paths(tmp_path
 
 def test_expired_challenge_and_explicit_one_two_three_seat_matrix(tmp_path):
  service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority);key,public=keypair();expired=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=public,ttl_seconds=-1)
- with pytest.raises(ValueError,match="challenge_expired"):authority.activate_challenge(challenge_id=expired["challenge_id"],proof=signed(key,ent["license_id"],public,expired["nonce"]))
+ with pytest.raises(ValueError,match="challenge_expired"):authority.activate_challenge(expected_flow_kind="payment",challenge_id=expired["challenge_id"],proof=signed(key,ent["license_id"],public,expired["nonce"]))
  for seat in (1,2,3):
   key,public=keypair();challenge=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=public);proof=signed(key,ent["license_id"],public,challenge["nonce"])
-  if seat<3:assert authority.activate_challenge(challenge_id=challenge["challenge_id"],proof=proof)["device_allowance"]==2
+  if seat<3:assert authority.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof)["device_allowance"]==2
   else:
-   with pytest.raises(ValueError,match="seat_limit_reached"):authority.activate_challenge(challenge_id=challenge["challenge_id"],proof=proof)
+   with pytest.raises(ValueError,match="seat_limit_reached"):authority.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof)
 
 
 @pytest.mark.parametrize("field",["outcome","evidence_hash","source","finality_at","finality_basis","payer","proof_hash","nonce_hash","order_id"])
@@ -105,7 +105,7 @@ def test_revoke_writer_wins_challenge_has_zero_activation_side_effect(tmp_path,m
  monkeypatch.setattr(revoker,"_audit",pause);out={}
  with ThreadPoolExecutor(2) as pool:
   revoke_future=pool.submit(revoker.revoke_external_entitlement,**_revocation_args(service,ent));assert locked.wait(5)
-  activate_future=pool.submit(activator.activate_challenge,challenge_id=challenge["challenge_id"],proof=proof);release.set();out["revoke"]=revoke_future.result()
+  activate_future=pool.submit(activator.activate_challenge,expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof);release.set();out["revoke"]=revoke_future.result()
   with pytest.raises(ValueError,match="license_revoked"):activate_future.result()
  with activator._connect() as db:
   assert db.execute("select count(*) from activations where deactivated_at is null").fetchone()[0]==0
@@ -122,22 +122,22 @@ def test_activation_writer_wins_then_revoke_deactivates_and_denies_retrieval(tmp
   cert=original(*args,**kwargs);locked.set();assert release.wait(5);return cert
  monkeypatch.setattr(activator,"_activate_in_transaction",pause)
  with ThreadPoolExecutor(2) as pool:
-  activate_future=pool.submit(activator.activate_challenge,challenge_id=challenge["challenge_id"],proof=proof);assert locked.wait(5)
+  activate_future=pool.submit(activator.activate_challenge,expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof);assert locked.wait(5)
   revoke_future=pool.submit(revoker.revoke_external_entitlement,**_revocation_args(service,ent));release.set();cert=activate_future.result();revoke_future.result()
  assert cert["revoked_at"] is None  # immutable signed historical bytes
  with activator._connect() as db:
   assert db.execute("select count(*) from activations where deactivated_at is null").fetchone()[0]==0
   assert db.execute("select status from activation_requests").fetchone()[0]=="consumed"
- with pytest.raises(ValueError,match="license_revoked"):activator.activate_challenge(challenge_id=challenge["challenge_id"],proof=proof)
+ with pytest.raises(ValueError,match="license_revoked"):activator.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof)
  with pytest.raises(ValueError,match="license_revoked"):activator.activate(license_id=ent["license_id"],device_public_key=public,nonce=challenge["nonce"],proof=proof)
 
 
 def test_challenge_wrong_proof_rolls_back_and_exact_response_loss(tmp_path):
  service,authority,_=setup(tmp_path);order=paid(service);ent=service.deliver_entitlement(order["order_id"],authority);key,public=keypair();challenge=authority.issue_activation_challenge(license_id=ent["license_id"],device_public_key=public)
- with pytest.raises(ValueError,match="device_proof_invalid"):authority.activate_challenge(challenge_id=challenge["challenge_id"],proof=base64.b64encode(b"x"*64).decode())
+ with pytest.raises(ValueError,match="device_proof_invalid"):authority.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=base64.b64encode(b"x"*64).decode())
  with authority._connect() as db:
   row=db.execute("select consumed_at,certificate_json from activation_challenges").fetchone();assert tuple(row)==(None,None);assert db.execute("select count(*) from activation_requests").fetchone()[0]==0
- proof=signed(key,ent["license_id"],public,challenge["nonce"]);first=authority.activate_challenge(challenge_id=challenge["challenge_id"],proof=proof);second=authority.activate_challenge(challenge_id=challenge["challenge_id"],proof=proof);assert first==second
+ proof=signed(key,ent["license_id"],public,challenge["nonce"]);first=authority.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof);second=authority.activate_challenge(expected_flow_kind="payment",challenge_id=challenge["challenge_id"],proof=proof);assert first==second
 
 
 def test_authority_revocation_strict_shape_and_contradiction(tmp_path):

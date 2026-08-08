@@ -96,11 +96,25 @@ class LicenseAuthority:
               BEGIN SELECT RAISE(ABORT,'external revocation is immutable'); END;
             CREATE TRIGGER IF NOT EXISTS external_revocation_no_delete BEFORE DELETE ON external_revocations
               BEGIN SELECT RAISE(ABORT,'external revocation is immutable'); END;
+            CREATE TABLE IF NOT EXISTS gift_entitlements(
+              gift_id TEXT PRIMARY KEY, license_id TEXT NOT NULL UNIQUE REFERENCES licenses(license_id),
+              secret_digest TEXT NOT NULL, secret_generation INTEGER NOT NULL CHECK(secret_generation>0),
+              status TEXT NOT NULL CHECK(status IN ('active','revoked')), created_at TEXT NOT NULL,
+              rotated_at TEXT, revoked_at TEXT, edition TEXT NOT NULL, major_version INTEGER NOT NULL,
+              seat_limit INTEGER NOT NULL CHECK(seat_limit BETWEEN 1 AND 2), expires_at TEXT,
+              check_in_days INTEGER NOT NULL CHECK(check_in_days BETWEEN 1 AND 365));
+            CREATE TABLE IF NOT EXISTS gift_events(
+              sequence INTEGER PRIMARY KEY AUTOINCREMENT, gift_id TEXT NOT NULL REFERENCES gift_entitlements(gift_id),
+              at TEXT NOT NULL, event TEXT NOT NULL, secret_generation INTEGER NOT NULL, detail TEXT NOT NULL);
+            CREATE TRIGGER IF NOT EXISTS gift_event_no_update BEFORE UPDATE ON gift_events BEGIN SELECT RAISE(ABORT,'gift event is immutable'); END;
+            CREATE TRIGGER IF NOT EXISTS gift_event_no_delete BEFORE DELETE ON gift_events BEGIN SELECT RAISE(ABORT,'gift event is immutable'); END;
             CREATE TABLE IF NOT EXISTS activation_challenges(
               challenge_id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(license_id),
               device_id TEXT NOT NULL, device_public_key TEXT NOT NULL, nonce TEXT NOT NULL UNIQUE,
               issued_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT,
-              request_digest TEXT, certificate_json TEXT);
+              request_digest TEXT, certificate_json TEXT,
+              flow_kind TEXT CHECK(flow_kind IN ('gift','payment')),
+              entitlement_generation INTEGER);
             CREATE TABLE IF NOT EXISTS activations(
               activation_id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(license_id),
               device_id TEXT NOT NULL, device_public_key TEXT NOT NULL, activated_at TEXT NOT NULL,
@@ -116,6 +130,11 @@ class LicenseAuthority:
               sequence INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, event TEXT NOT NULL,
               license_id TEXT NOT NULL, device_id TEXT, detail TEXT NOT NULL);
             """)
+            # Challenge protocol identity is an append-only upgrade. Existing rows stay
+            # NULL and therefore fail closed; their provenance cannot be safely guessed.
+            challenge_columns={row[1] for row in db.execute("PRAGMA table_info(activation_challenges)")}
+            if "flow_kind" not in challenge_columns:db.execute("ALTER TABLE activation_challenges ADD COLUMN flow_kind TEXT CHECK(flow_kind IN ('gift','payment'))")
+            if "entitlement_generation" not in challenge_columns:db.execute("ALTER TABLE activation_challenges ADD COLUMN entitlement_generation INTEGER")
             # Authority inbox identity columns are an append-only local schema upgrade.
             for table in ("external_entitlements","external_revocations"):
                 columns={row[1] for row in db.execute(f"PRAGMA table_info({table})")}
@@ -186,6 +205,83 @@ class LicenseAuthority:
             except sqlite3.IntegrityError as error: raise ValueError("license_exists") from error
             self._audit(db,"license_created",license_id,detail=json.dumps({"seat_limit":seat_limit}))
         return {"license_id":license_id,"edition":edition,"major_version":major_version,"device_allowance":seat_limit}
+    @staticmethod
+    def _gift_public(row):
+        return {"gift_id":row["gift_id"],"license_id":row["license_id"],"status":row["status"],"edition":row["edition"],"major_version":row["major_version"],"device_allowance":row["seat_limit"],"expires_at":row["expires_at"],"check_in_days":row["check_in_days"],"created_at":row["created_at"],"rotated_at":row["rotated_at"],"revoked_at":row["revoked_at"]}
+    def create_gift(self, *, edition="personal", major_version=1, seat_limit=2, expires_at=None, check_in_days=30):
+        if edition not in {"personal","pro","studio"} or type(major_version) is not int or major_version != 1 or seat_limit not in {1,2} or type(check_in_days) is not int or not 1<=check_in_days<=365 or expires_at is not None:raise ValueError("invalid_gift_policy")
+        gift_id=str(uuid.uuid4());license_id="gm_"+uuid.uuid4().hex;secret=secrets.token_urlsafe(24)
+        if len(secret)!=32:raise RuntimeError("gift_secret_generation_failed")
+        digest=hashlib.sha256(secret.encode("ascii")).hexdigest();created=utc(self.now())
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute("INSERT INTO licenses VALUES(?,?,?,?,?,?,?,?)",(license_id,edition,major_version,seat_limit,created,expires_at,None,check_in_days))
+                db.execute("INSERT INTO gift_entitlements VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(gift_id,license_id,digest,1,"active",created,None,None,edition,major_version,seat_limit,expires_at,check_in_days))
+                db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,created,"created",1,"{}"));self._audit(db,"gift_created",license_id,detail=json.dumps({"gift_id":gift_id,"secret_generation":1}));db.commit()
+            except Exception:db.rollback();raise
+        result=self.get_gift(gift_id);result["claim_key"]=f"GMG1.{gift_id}.{secret}";return result
+    def list_gifts(self):
+        with self._connect() as db:rows=db.execute("SELECT * FROM gift_entitlements ORDER BY created_at,gift_id").fetchall()
+        return [self._gift_public(row) for row in rows]
+    def get_gift(self,gift_id):
+        try:gift_id=str(uuid.UUID(gift_id))
+        except Exception:raise ValueError("gift_unavailable") from None
+        with self._connect() as db:row=db.execute("SELECT * FROM gift_entitlements WHERE gift_id=?",(gift_id,)).fetchone()
+        if not row:raise ValueError("gift_unavailable")
+        return self._gift_public(row)
+    def recover_gift(self,gift_id):
+        try:gift_id=str(uuid.UUID(gift_id))
+        except Exception:raise ValueError("gift_unavailable") from None
+        secret=secrets.token_urlsafe(24)
+        if len(secret)!=32:raise RuntimeError("gift_secret_generation_failed")
+        digest=hashlib.sha256(secret.encode("ascii")).hexdigest();now=utc(self.now())
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute("SELECT * FROM gift_entitlements WHERE gift_id=?",(gift_id,)).fetchone()
+                if not row or row["status"]!="active":raise ValueError("gift_unavailable")
+                generation=row["secret_generation"]+1
+                db.execute("UPDATE gift_entitlements SET secret_digest=?,secret_generation=?,rotated_at=? WHERE gift_id=?",(digest,generation,now,gift_id))
+                db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]))
+                db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,now,"rotated",generation,"{}"));self._audit(db,"gift_claim_rotated",row["license_id"],detail=json.dumps({"gift_id":gift_id,"secret_generation":generation}));db.commit()
+            except Exception:db.rollback();raise
+        result=self.get_gift(gift_id);result["claim_key"]=f"GMG1.{gift_id}.{secret}";return result
+    def revoke_gift(self,gift_id):
+        try:gift_id=str(uuid.UUID(gift_id))
+        except Exception:raise ValueError("gift_unavailable") from None
+        now=utc(self.now())
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute("SELECT * FROM gift_entitlements WHERE gift_id=?",(gift_id,)).fetchone()
+                if not row:raise ValueError("gift_unavailable")
+                if row["status"]=="active":
+                    db.execute("UPDATE gift_entitlements SET status='revoked',revoked_at=? WHERE gift_id=?",(now,gift_id));db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,now,"revoked",row["secret_generation"],"{}"));self._audit(db,"gift_revoked",row["license_id"],detail=json.dumps({"gift_id":gift_id}));
+                db.commit()
+            except Exception:db.rollback();raise
+        return self.get_gift(gift_id)
+    def issue_gift_claim_challenge(self, *, gift_id, secret, device_public_key, ttl_seconds=300):
+        if type(gift_id) is not str or type(secret) is not str or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",gift_id) or not re.fullmatch(r"[A-Za-z0-9_-]{32}",secret):raise ValueError("gift_unavailable")
+        device_id=device_identifier(device_public_key);now=self.now();nonce=secrets.token_urlsafe(24);challenge_id="gmc_"+uuid.uuid4().hex
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute("SELECT * FROM gift_entitlements WHERE gift_id=?",(gift_id,)).fetchone();candidate=hashlib.sha256(secret.encode("ascii")).hexdigest()
+                stored=row["secret_digest"] if row and isinstance(row["secret_digest"],str) and len(row["secret_digest"])==64 else "0"*64
+                digest_ok=hmac.compare_digest(stored,candidate)
+                if not row or row["status"]!="active" or not digest_ok:raise ValueError("gift_unavailable")
+                db.execute("UPDATE activation_challenges SET consumed_at=? WHERE license_id=? AND device_id=? AND consumed_at IS NULL",(utc(now),row["license_id"],device_id));db.execute("INSERT INTO activation_challenges(challenge_id,license_id,device_id,device_public_key,nonce,issued_at,expires_at,consumed_at,request_digest,certificate_json,flow_kind,entitlement_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(challenge_id,row["license_id"],device_id,device_public_key,nonce,utc(now),utc(now+timedelta(seconds=max(30,min(int(ttl_seconds),300)))),None,None,None,"gift",row["secret_generation"]));db.commit()
+            except Exception:db.rollback();raise
+        return {"challenge_id":challenge_id,"nonce":nonce,"license_id":row["license_id"],"device_public_key":device_public_key}
+    def list_gift_devices(self,gift_id):
+        gift=self.get_gift(gift_id)
+        with self._connect() as db:rows=db.execute("SELECT device_id,device_public_key,activated_at,deactivated_at FROM activations WHERE license_id=? ORDER BY activated_at",(gift["license_id"],)).fetchall()
+        return [dict(row) for row in rows]
+    def deactivate_gift_device(self,gift_id,device_id):
+        gift=self.get_gift(gift_id)
+        return self.deactivate(license_id=gift["license_id"],device_id=device_id,reason="gift_admin")
+
     def handshake(self) -> dict[str,Any]:
         self._assert_signer_state()
         return {"authority_id":self.authority_id,"key_id":self.ceremony["key_id"],"generation":self.ceremony["generation"],"public_key_sha256":self.ceremony["public_key_sha256"],"attestation":self.ceremony["provider_attestation_id"]}
@@ -234,7 +330,7 @@ class LicenseAuthority:
             db.execute("BEGIN IMMEDIATE");lic=db.execute("SELECT revoked_at FROM licenses WHERE license_id=?",(license_id,)).fetchone()
             if not lic or lic["revoked_at"]:db.rollback();raise ValueError("license_unavailable")
             db.execute("UPDATE activation_challenges SET consumed_at=? WHERE license_id=? AND device_id=? AND consumed_at IS NULL",(utc(now),license_id,device_id))
-            db.execute("INSERT INTO activation_challenges VALUES(?,?,?,?,?,?,?,?,?,?)",(challenge_id,license_id,device_id,device_public_key,nonce,utc(now),utc(now+timedelta(seconds=ttl_seconds)),None,None,None));db.commit()
+            db.execute("INSERT INTO activation_challenges(challenge_id,license_id,device_id,device_public_key,nonce,issued_at,expires_at,consumed_at,request_digest,certificate_json,flow_kind,entitlement_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(challenge_id,license_id,device_id,device_public_key,nonce,utc(now),utc(now+timedelta(seconds=ttl_seconds)),None,None,None,"payment",None));db.commit()
         return {"challenge_id":challenge_id,"nonce":nonce,"license_id":license_id,"device_public_key":device_public_key}
     def _activate_in_transaction(self, db, license_id: str, device_public_key: str, nonce: str, proof: str, now: datetime) -> dict[str,Any]:
         """Activate using the caller's writer transaction; never commit or roll back here."""
@@ -267,18 +363,43 @@ class LicenseAuthority:
         else:db.execute("INSERT INTO activations VALUES(?,?,?,?,?,?,?,?)",(activation_id,license_id,device_id,device_public_key,activated,None,cert_json,request_digest))
         self._audit(db,"device_activated",license_id,device_id);return cert
 
-    def activate_challenge(self, *, challenge_id: str, proof: str) -> dict[str,Any]:
+    def activate_challenge(self, *, challenge_id: str, proof: str, expected_flow_kind: str) -> dict[str,Any]:
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 row=db.execute("SELECT * FROM activation_challenges WHERE challenge_id=?",(challenge_id,)).fetchone()
-                if not row:raise ValueError("challenge_unavailable")
+                if not row or expected_flow_kind not in {"gift","payment"} or row["flow_kind"] != expected_flow_kind:raise ValueError("challenge_unavailable")
+                if expected_flow_kind=="gift":
+                    gift=db.execute("SELECT status,secret_generation FROM gift_entitlements WHERE license_id=?",(row["license_id"],)).fetchone()
+                    if not gift or gift["status"]!="active" or row["entitlement_generation"] is None or row["entitlement_generation"]!=gift["secret_generation"]:raise ValueError("challenge_unavailable")
+                elif row["entitlement_generation"] is not None:raise ValueError("challenge_unavailable")
                 lic=db.execute("SELECT revoked_at FROM licenses WHERE license_id=?",(row["license_id"],)).fetchone()
                 if not lic or lic["revoked_at"]:raise ValueError("license_revoked")
                 if row["consumed_at"]:
-                    proof_digest=hashlib.sha256(proof.encode()).hexdigest()
-                    if row["certificate_json"] and hmac.compare_digest(row["request_digest"] or "",proof_digest):
-                        cert=json.loads(row["certificate_json"]);db.commit();return cert
+                    proof_digest=hashlib.sha256(proof.encode()).hexdigest();nonce_digest=hashlib.sha256(row["nonce"].encode()).hexdigest()
+                    active=db.execute("""SELECT r.activation_id,r.certificate_json AS request_certificate_json,
+                                               a.certificate_json AS activation_certificate_json,
+                                               a.device_public_key AS activation_device_public_key
+                                        FROM activation_requests r
+                                        JOIN activations a ON a.activation_id=r.activation_id
+                                          AND a.license_id=r.license_id AND a.device_id=r.device_id
+                                          AND a.activation_nonce_digest=r.request_digest
+                                        WHERE r.license_id=? AND r.device_id=? AND r.nonce_digest=?
+                                          AND r.proof_digest=? AND r.status='active'
+                                          AND a.deactivated_at IS NULL""",
+                                      (row["license_id"],row["device_id"],nonce_digest,proof_digest)).fetchone()
+                    try:cert=json.loads(row["certificate_json"] or "")
+                    except (TypeError,ValueError,json.JSONDecodeError):cert=None
+                    if (active and isinstance(cert,dict)
+                            and hmac.compare_digest(row["request_digest"] or "",proof_digest)
+                            and row["certificate_json"]==active["request_certificate_json"]==active["activation_certificate_json"]
+                            and cert.get("activation_id")==active["activation_id"]
+                            and cert.get("license_id")==row["license_id"]
+                            and cert.get("device_id")==row["device_id"]
+                            and active["activation_device_public_key"]==row["device_public_key"]
+                            and cert.get("device_public_key")==row["device_public_key"]
+                            and cert.get("device_public_key")==active["activation_device_public_key"]):
+                        db.commit();return cert
                     raise ValueError("challenge_consumed")
                 now=self.now()
                 if datetime.fromisoformat(row["expires_at"].replace("Z","+00:00"))<=now:raise ValueError("challenge_expired")

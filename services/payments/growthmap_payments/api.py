@@ -258,7 +258,7 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None,ses
  async def activation_complete_endpoint(request:Request):
   limiter.check("activation",request.client.host if request.client else "unknown")
   if authority is None:return unavailable()
-  try:body=await strict_body(request,ActivationCompleteBody);certificate=authority.activate_challenge(challenge_id=body.challenge_id,proof=body.proof)
+  try:body=await strict_body(request,ActivationCompleteBody);certificate=authority.activate_challenge(challenge_id=body.challenge_id,proof=body.proof,expected_flow_kind="payment")
   except (ValueError,TypeError):return unavailable()
   return {"state":"activated","certificate":certificate}
  app.state.payments=service;app.state.admin_limiter=limiter;return app
