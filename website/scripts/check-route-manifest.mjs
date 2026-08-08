@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+const root=process.cwd();
+const locales=['zh-TW','zh-CN','en'];
+const canonical=['','features','agents','readback','security','download','buy','docs','support','status','privacy','terms','refund'];
+const aliases=['product','ai-neutral','showcase','pricing'];
+const manifest=JSON.parse(fs.readFileSync(path.join(root,'.next/app-path-routes-manifest.json'),'utf8'));
+const routeValues=new Set(Object.values(manifest));
+for(const route of [...canonical,...aliases]) assert.ok(routeValues.has(`/[locale]${route?`/${route}`:''}`),`route absent from app manifest: ${route||'(home)'}`);
+const prerender=JSON.parse(fs.readFileSync(path.join(root,'.next/prerender-manifest.json'),'utf8'));
+const rendered=new Set(Object.keys(prerender.routes));
+for(const locale of locales) for(const route of [...canonical,...aliases]) assert.ok(rendered.has(`/${locale}${route?`/${route}`:''}`),`route×locale absent from prerender manifest: ${locale}/${route}`);
+const routes=JSON.parse(fs.readFileSync(path.join(root,'.next/routes-manifest.json'),'utf8'));
+assert.ok(routes.dynamicRoutes.some(route=>route.page==='/[locale]'), 'localized dynamic route behavior missing');
+console.log(`route manifest gate passed: ${locales.length} locales × ${canonical.length+aliases.length} localized routes`);
