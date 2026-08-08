@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .service import Config,PaymentService
+from .whop import WhopVerifier,bounded_request,bounded_signature_headers,parse_verified_event
 from .public_config import APPROVED_BASE_RECIPIENT
 from .session import AdminSessionVerifier,Argon2idSessionVerifier,MAX_TOKEN_CHARS
 
@@ -99,7 +100,7 @@ async def strict_body(request,model):
   return result
  try:return model.model_validate(json.loads(raw,object_pairs_hook=pairs))
  except (ValueError,ValidationError,json.JSONDecodeError) as error:raise ValueError('invalid body') from error
-def create_app(config:Config,facilitator=None,reconciler=None,authority=None,session_verifier:AdminSessionVerifier|None=None):
+def create_app(config:Config,facilitator=None,reconciler=None,authority=None,session_verifier:AdminSessionVerifier|None=None,whop_verifier:WhopVerifier|None=None):
  caller_supplied_session_verifier=session_verifier is not None
  if config.production:
   # External production trust roots are not authorized in this composition root.
@@ -185,6 +186,19 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None,ses
    limiter.check(*coarse)
    raise HTTPException(403,"admin authentication failed")
   limiter.check(*action)
+ @app.post('/v1/webhooks/whop')
+ async def whop_webhook(request:Request):
+  if whop_verifier is None:return JSONResponse({"state":"temporarily_unavailable"},status_code=503)
+  try:
+   raw=await request.body()
+   headers=bounded_signature_headers(request.scope.get("headers",[]))
+   bounded,headers=bounded_request(raw,headers)
+   authenticated=whop_verifier.verify(bounded,headers)
+   event=parse_verified_event(authenticated)
+   service.receive_whop_event(event,hashlib.sha256(bounded).hexdigest())
+  except Exception:
+   return JSONResponse({"state":"not_accepted"},status_code=400)
+  return JSONResponse({"state":"accepted"},status_code=202)
  @app.post('/v1/orders')
  async def create(body:dict,request:Request):
   limiter.check("orders",request.client.host if request.client else "unknown")
@@ -220,6 +234,11 @@ def create_app(config:Config,facilitator=None,reconciler=None,authority=None,ses
  async def list_orders(request:Request,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
   admin(request,authorization,csrf)
   return JSONResponse(service.admin_list_orders(),headers={"Cache-Control":"no-store"})
+ @app.get('/v1/admin/whop-inbox')
+ async def whop_inbox(request:Request,status:str|None=None,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
+  admin(request,authorization,csrf)
+  try:return JSONResponse(service.list_whop_inbox(status),headers={"Cache-Control":"no-store"})
+  except ValueError:raise HTTPException(400,"invalid Whop inbox status") from None
  @app.get('/v1/admin/authority-reconciliation')
  async def authority_reconciliation(request:Request,status:str|None=None,authorization:str|None=Header(None),csrf:str|None=Header(None,alias='X-CSRF-Token')):
   admin(request,authorization,csrf)

@@ -11,8 +11,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,Ed25519PublicKey
 ENTITLEMENT_ACK_DOMAIN=b"growthmap-entitlement-authority-ack-v1\0";REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
 BASE_NETWORK="eip155:8453";BASE_USDC="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";EARLY_LIMIT=50
-EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=12
-MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7"),8:("008_device_activation_entitlements.sql","2c72ffee4fbd739c84f85c9ae7d8cf267bdffb84bea88779198e50e78e6e71af"),9:("009_authority_revocation_outbox.sql","367b701a724639518e9854fd0159d24bb2ce78309242f58fe64206f9367989fc"),10:("010_terminal_payer_basis_immutability.sql","101c8dc450685c8b26eaabb427e0b1c2f96765c0cbd74ace70f1cd3f66fcbd07"),11:("011_authority_signer_identity_binding.sql","1d585bb206d86e018794a96ff8adbc91b84e02355d4d12daf45e09c94d195d42"),12:("012_facilitator_candidate_settlement.sql","88c4b81c4b5926179546b69a67c7efd5d2d68555511c42a49effb3944e9a159a")}
+EARLY={"x402":10_000_000,"paypal":1000};REGULAR={"x402":29_000_000,"paypal":2900};SCHEMA_VERSION=13
+MIGRATIONS={1:("001_payments_v1.sql","311bc81c68f1fc7f63ec27c309600b8ac852774ee7f535a5783bc2dc625ca28d"),2:("002_settlement_security.sql","2330d6397b12b2d5bd4ecd89dd98bb3a59cf05c2722a4a82d64640b0fc09b54c"),3:("003_evidence_identity.sql","28814bd1eac98f1e31310a823c4e2983928811ce1b3a05f80266703583f04106"),4:("004_terminal_evidence_trust.sql","f2400926eda875753a06c64c2bd045b0806b02fdc4bc23f1f05c177b3883d451"),5:("005_external_terminal_checkpoint.sql","85c2eb7ccaf6d57c916cd2fbbe594c32ad70436fb38605949e25602b345ce045"),6:("006_authenticated_issuance_closure.sql","842904b883fc5e529d25019b8deed41467429df239ec4db92df9dd2fa23e4c9e"),7:("007_signed_revocation_assertions.sql","32e37e78522e54330753b1843dc7b7fdaf98015442320221350629cdd85489c7"),8:("008_device_activation_entitlements.sql","2c72ffee4fbd739c84f85c9ae7d8cf267bdffb84bea88779198e50e78e6e71af"),9:("009_authority_revocation_outbox.sql","367b701a724639518e9854fd0159d24bb2ce78309242f58fe64206f9367989fc"),10:("010_terminal_payer_basis_immutability.sql","101c8dc450685c8b26eaabb427e0b1c2f96765c0cbd74ace70f1cd3f66fcbd07"),11:("011_authority_signer_identity_binding.sql","1d585bb206d86e018794a96ff8adbc91b84e02355d4d12daf45e09c94d195d42"),12:("012_facilitator_candidate_settlement.sql","88c4b81c4b5926179546b69a67c7efd5d2d68555511c42a49effb3944e9a159a"),13:("013_whop_webhook_inbox.sql","b587441a7e1af84a1143577180e93056374bfa011161269ebaf14bc8690e1f38")}
 TRANSITIONS={"reject":{"pending_payment","manual_review"},"refund":{"payment_confirmed","license_issued"},"revoke":{"license_issued"}}
 _CHECKPOINT_LOCKS_GUARD=threading.Lock();_CHECKPOINT_LOCKS:dict[str,threading.RLock]={}
 def _checkpoint_serialized(method):
@@ -77,7 +77,7 @@ class PaymentService:
  def _schema_snapshot(self,db):
   return [{"type":r[0],"name":r[1],"table":r[2],"sql":re.sub(r"\s+"," ",r[3].strip())} for r in db.execute("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE type IN('table','index','trigger') AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL ORDER BY type,name")]
  def _issuance_snapshot(self,db):
-  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ())+(("entitlement_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entitlement_outbox'").fetchone() else ())+(("revocation_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_outbox'").fetchone() else ())+(("settlement_candidates",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settlement_candidates'").fetchone() else ());closure={}
+  tables=("orders","payment_proofs","external_events","settlement_intents","audit_events","migration_ledger","terminal_checkpoint_state")+(("revocation_assertions",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_assertions'").fetchone() else ())+(("entitlement_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='entitlement_outbox'").fetchone() else ())+(("revocation_outbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revocation_outbox'").fetchone() else ())+(("settlement_candidates",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settlement_candidates'").fetchone() else ())+(("whop_webhook_inbox",) if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='whop_webhook_inbox'").fetchone() else ());closure={}
   for table in tables:
    cols=[r[1] for r in db.execute(f"PRAGMA table_info({table})")];order=",".join('"'+c+'"' for c in cols);closure[table]=[dict(r) for r in db.execute(f'SELECT * FROM "{table}" ORDER BY {order}')]
   schema=self._schema_snapshot(db);raw=json.dumps({"schema":schema,"rows":closure},sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
@@ -375,7 +375,7 @@ class PaymentService:
  def claim_outbox(self,worker_id,lease_seconds=30,order_id=None):
   now=datetime.now(timezone.utc);expires=(now+timedelta(seconds=lease_seconds)).isoformat()
   with self._db() as db:
-   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT e.*,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE ((o.state='payment_confirmed' AND e.state='pending' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?)) OR (e.state='leased' AND e.lease_expires_at<=? AND o.state IN('payment_confirmed','refunded')) OR (e.reconciliation_phase IN('crossing_authorized','readback_only') AND e.state='quarantined' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?) AND o.state IN('payment_confirmed','refunded')))";params=[now.isoformat(),now.isoformat(),now.isoformat()]
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT e.*,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE ((o.state='payment_confirmed' AND e.state='pending' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?)) OR (e.state='leased' AND e.lease_expires_at<=? AND (o.state IN('payment_confirmed','refunded') OR (o.state='revoked' AND e.reconciliation_phase='readback_only'))) OR (e.reconciliation_phase IN('crossing_authorized','readback_only') AND e.state='quarantined' AND (e.next_attempt_at IS NULL OR e.next_attempt_at<=?) AND (o.state IN('payment_confirmed','refunded') OR (o.state='revoked' AND e.reconciliation_phase='readback_only'))))";params=[now.isoformat(),now.isoformat(),now.isoformat()]
    if order_id is not None:sql+=" AND order_id=?";params.append(order_id)
    row=db.execute(sql+" ORDER BY created_at LIMIT 1",params).fetchone()
    if not row:db.rollback();return None
@@ -397,7 +397,7 @@ class PaymentService:
   # a concurrent refund of a pending entitlement must never create a license.
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT e.state,e.lease_owner,e.fencing_version,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE e.order_id=?",(row["order_id"],)).fetchone();db.rollback()
-  if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"] or fresh["order_state"] not in {"payment_confirmed","refunded"} or (fresh["order_state"]=="refunded" and row.get("reconciliation_phase")!="readback_only"):raise RuntimeError("outbox lease lost")
+  if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"] or fresh["order_state"] not in {"payment_confirmed","refunded","revoked"} or (fresh["order_state"] in {"refunded","revoked"} and row.get("reconciliation_phase")!="readback_only"):raise RuntimeError("outbox lease lost")
   identity=self._verify_authority_handshake(authority)
   if row.get("reconciliation_phase")!="readback_only":
    with self._db() as db:
@@ -417,36 +417,60 @@ class PaymentService:
    except RuntimeError:pass
   self._verify_authority_handshake(authority)
   try:ack=self._authority_call(authority.read_external_entitlement_acknowledgement,source=row["source"],source_id=row["source_id"],signer_identity=identity)
-  except RuntimeError:
-   with self._db() as db:
-    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT reconciliation_phase,attempt_count,state FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone()
-    if not fresh or fresh["reconciliation_phase"] not in {"crossing_authorized","readback_only"}:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
-    phase="manual_review" if fresh["attempt_count"]>=8 else "readback_only";changed=db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=? AND reconciliation_phase IN('crossing_authorized','readback_only')",(phase,(datetime.now(timezone.utc)+timedelta(seconds=min(3600,2**min(fresh["attempt_count"],10)))).isoformat(),self._hash('authority_reconciliation_pending'),row["order_id"])).rowcount
-    if changed!=1:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
-    self._commit_trusted(db)
+  except RuntimeError as error:
+   try:
+    with self._db() as db:
+     db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);self._requeue_reconciliation_failure(db,row,worker_id,error)
+   except RuntimeError as lost:
+    # A refund may have atomically fenced this crossing and already installed
+    # readback-only recovery. Preserve that state without letting a stale worker
+    # mutate it; revoked stale fences remain an explicit state-lost failure.
+    with self._db() as db:existing=db.execute("SELECT e.state,e.reconciliation_phase,o.state AS order_state FROM entitlement_outbox e JOIN orders o ON o.id=e.order_id WHERE e.order_id=?",(row["order_id"],)).fetchone()
+    if existing and tuple(existing)==("quarantined","readback_only","refunded"):raise RuntimeError("authority_reconciliation_pending") from None
+    raise lost
    raise RuntimeError("authority_reconciliation_pending") from None
-  response=response or {"license_id":ack["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":ack["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":ack["ack_signature"]}
-  self._verify_authority_handshake(authority);self._verify_authority_handshake(authority);entitlement=self._validate_entitlement_ack(ack,row,identity,digest)
-  expected_response={"license_id":entitlement["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":entitlement["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":entitlement["ack_signature"]}
+  try:
+   response=response or {"license_id":ack["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":ack["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":ack["ack_signature"]}
+   self._verify_authority_handshake(authority);self._verify_authority_handshake(authority);entitlement=self._validate_entitlement_ack(ack,row,identity,digest)
+   expected_response={"license_id":entitlement["license_id"],"edition":"personal","major_version":1,"device_allowance":2,"delivery_receipt":entitlement["delivery_receipt"],"authority_id":identity["authority_id"],"signer_identity":identity,"ack_signature":entitlement["ack_signature"]}
+  except Exception:raise RuntimeError("authority_acknowledgement_invalid") from None
   # The independently verified durable acknowledgement is authoritative. A lost or
   # contradictory transport response cannot discard signed evidence or compensation.
   entitlement=expected_response
   with self._db() as db:
    db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone();order=db.execute("SELECT state FROM orders WHERE id=?",(row["order_id"],)).fetchone();now=self.now()
    if fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:
-    if order and order["state"]=="refunded" and fresh["state"] in {"quarantined","pending","leased"}:
-     db.execute("UPDATE entitlement_outbox SET state='delivered',license_id=?,delivered_at=?,delivery_receipt=?,authority_ack_signature=?,lease_owner=NULL,lease_expires_at=NULL WHERE order_id=?",(entitlement["license_id"],now,entitlement["delivery_receipt"],entitlement["ack_signature"],row["order_id"]));self._enqueue_revocation(db,dict(fresh),entitlement["license_id"],"refund","refund",now);self._audit(db,"issuer","entitlement.compensating_revocation",row["order_id"],{"license_id":entitlement["license_id"]});self._commit_trusted(db);return entitlement
+    if order and order["state"] in {"refunded","revoked"} and fresh["state"] in {"quarantined","pending","leased"}:
+     action,reason=("refund","refund") if order["state"]=="refunded" else ("revoke","chargeback")
+     db.execute("UPDATE entitlement_outbox SET state='delivered',license_id=?,delivered_at=?,delivery_receipt=?,authority_ack_signature=?,lease_owner=NULL,lease_expires_at=NULL WHERE order_id=?",(entitlement["license_id"],now,entitlement["delivery_receipt"],entitlement["ack_signature"],row["order_id"]));self._enqueue_revocation(db,dict(fresh),entitlement["license_id"],action,reason,now);self._audit(db,"issuer","entitlement.compensating_revocation",row["order_id"],{"license_id":entitlement["license_id"],"action":action,"reason":reason});self._commit_trusted(db);return entitlement
     db.rollback();raise RuntimeError("outbox lease lost")
    db.execute("UPDATE entitlement_outbox SET state='delivered',license_id=?,delivered_at=?,delivery_receipt=?,authority_ack_signature=?,lease_owner=NULL,lease_expires_at=NULL WHERE order_id=?",(entitlement["license_id"],now,entitlement["delivery_receipt"],entitlement["ack_signature"],row["order_id"]))
    if order["state"]=="payment_confirmed":db.execute("UPDATE orders SET state='license_issued',license_id=?,updated_at=? WHERE id=?",(entitlement["license_id"],now,row["order_id"]));self._audit(db,"issuer","entitlement.delivered",row["order_id"],{"license_id":entitlement["license_id"]})
    elif order["state"]=="refunded":self._enqueue_revocation(db,row,entitlement["license_id"],"refund","refund",now);self._audit(db,"issuer","entitlement.delivered_after_refund",row["order_id"],{"license_id":entitlement["license_id"]})
+   elif order["state"]=="revoked":self._enqueue_revocation(db,row,entitlement["license_id"],"revoke","chargeback",now);self._audit(db,"issuer","entitlement.delivered_after_chargeback",row["order_id"],{"license_id":entitlement["license_id"]})
    else:db.rollback();raise RuntimeError("outbox lease lost")
    self._commit_trusted(db);return entitlement
+ def _requeue_reconciliation_failure(self,db,row,worker_id,error,max_attempts=8):
+  expected=row.get("reconciliation_phase")
+  if expected not in {"crossing_authorized","readback_only"}:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
+  fresh=db.execute("SELECT attempt_count,reconciliation_phase FROM entitlement_outbox WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=?",(row["order_id"],worker_id,row["fencing_version"])).fetchone()
+  if not fresh or fresh["reconciliation_phase"] not in {expected,"readback_only"}:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
+  current=fresh["reconciliation_phase"];attempts=fresh["attempt_count"];phase="manual_review" if attempts>=max_attempts else "readback_only";delay=min(3600,2**min(attempts,10));next_at=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat();digest=self._hash(type(error).__name__+":"+str(error))
+  changed=db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=? AND reconciliation_phase=?",(phase,next_at,digest,row["order_id"],worker_id,row["fencing_version"],current)).rowcount
+  if changed!=1:db.rollback();raise RuntimeError("authority_reconciliation_state_lost")
+  self._commit_trusted(db)
  def fail_outbox(self,row,worker_id,error,max_attempts=8):
   with self._db() as db:
-   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);fresh=db.execute("SELECT state,lease_owner,fencing_version,attempt_count FROM entitlement_outbox WHERE order_id=?",(row["order_id"],)).fetchone()
-   if not fresh or fresh["state"]!="leased" or fresh["lease_owner"]!=worker_id or fresh["fencing_version"]!=row["fencing_version"]:db.rollback();return
-   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));db.execute("UPDATE entitlement_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=?",(state,(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat(),hashlib.sha256(str(error).encode()).hexdigest(),row["order_id"]));self._commit_trusted(db)
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);expected=row.get("reconciliation_phase")
+   if expected in {"crossing_authorized","readback_only"}:
+    try:self._requeue_reconciliation_failure(db,row,worker_id,error,max_attempts)
+    except RuntimeError:return
+    return
+   fresh=db.execute("SELECT attempt_count,reconciliation_phase FROM entitlement_outbox WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=?",(row["order_id"],worker_id,row["fencing_version"])).fetchone()
+   if not fresh:db.rollback();return
+   state="quarantined" if fresh["attempt_count"]>=max_attempts else "pending";delay=min(3600,2**min(fresh["attempt_count"],10));next_at=(datetime.now(timezone.utc)+timedelta(seconds=delay)).isoformat();digest=self._hash(type(error).__name__+":"+str(error));changed=db.execute("UPDATE entitlement_outbox SET state=?,lease_owner=NULL,lease_expires_at=NULL,next_attempt_at=?,last_error_hash=? WHERE order_id=? AND state='leased' AND lease_owner=? AND fencing_version=? AND reconciliation_phase=?",(state,next_at,digest,row["order_id"],worker_id,row["fencing_version"],fresh["reconciliation_phase"])).rowcount
+   if changed!=1:db.rollback();return
+   self._commit_trusted(db)
  def deliver_entitlement(self,order_id,authority):
   worker="inline-"+uuid.uuid4().hex
   row=self.claim_outbox(worker,order_id=order_id)
@@ -616,6 +640,60 @@ class PaymentService:
    except Exception:pass
    rows.append(result)
   return rows
+ @_checkpoint_serialized
+ def receive_whop_event(self,event,raw_digest,max_attempts=3):
+  """Persist authenticated metadata, then idempotently apply it.
+
+  Paid events are intentionally quarantined unless the referenced order is
+  already durably paid: this slice has no reviewed Whop checkout/amount binding.
+  Reversals are monotonic and can arrive before paid.
+  """
+  if not re.fullmatch(r"[a-f0-9]{64}",raw_digest or "") or type(max_attempts) is not int or max_attempts<1 or max_attempts>20:raise ValueError("invalid Whop event")
+  immutable=(raw_digest,event.occurred_at,event.kind,event.order_id,event.provider_order_ref,event.provider_payment_ref)
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);row=db.execute("SELECT * FROM whop_webhook_inbox WHERE event_id=?",(event.event_id,)).fetchone()
+   if row:
+    if tuple(row[k] for k in ("raw_digest","occurred_at","kind","order_id","provider_order_ref","provider_payment_ref"))!=immutable:db.rollback();raise ValueError("conflicting Whop event")
+    db.rollback()
+   else:
+    now=self.now();db.execute("INSERT INTO whop_webhook_inbox(event_id,raw_digest,occurred_at,kind,order_id,provider_order_ref,provider_payment_ref,received_at,state) VALUES(?,?,?,?,?,?,?,?,'received')",(event.event_id,*immutable,now));self._audit(db,"whop.webhook","whop.event.received",event.order_id,{"event_id_hash":self._hash(event.event_id),"kind":event.kind});self._commit_trusted(db)
+  return self._apply_whop_event(event.event_id,max_attempts)
+ def _apply_whop_event(self,event_id,max_attempts):
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);event=db.execute("SELECT * FROM whop_webhook_inbox WHERE event_id=?",(event_id,)).fetchone()
+   if not event:db.rollback();raise KeyError("Whop event")
+   if event["state"] in {"applied","quarantined"}:db.rollback();return {"state":event["state"]}
+   try:
+    self._apply_whop_business_locked(db,event)
+    now=self.now();db.execute("UPDATE whop_webhook_inbox SET state='applied',attempts=attempts+1,last_attempt_at=?,applied_at=?,error_digest=NULL WHERE event_id=?",(now,now,event_id));self._audit(db,"whop.webhook","whop.event.applied",event["order_id"],{"event_id_hash":self._hash(event_id),"kind":event["kind"]});self._commit_trusted(db);return {"state":"applied"}
+   except Exception as error:
+    attempts=event["attempts"]+1;state="quarantined" if attempts>=max_attempts else "received";now=self.now();db.execute("UPDATE whop_webhook_inbox SET state=?,attempts=?,last_attempt_at=?,error_digest=? WHERE event_id=?",(state,attempts,now,self._hash(type(error).__name__+":"+str(error)),event_id));self._audit(db,"whop.webhook","whop.event.apply_failed",event["order_id"],{"event_id_hash":self._hash(event_id),"state":state});self._commit_trusted(db);return {"state":state}
+ def _apply_whop_business_locked(self,db,event):
+  order=db.execute("SELECT * FROM orders WHERE id=?",(event["order_id"],)).fetchone()
+  if not order:raise ValueError("unbound order")
+  kind=event["kind"]
+  if kind=="paid":
+   if order["state"] in {"refunded","revoked","rejected","expired"}:return
+   if order["state"] not in {"payment_confirmed","license_issued"}:raise ValueError("reviewed Whop checkout binding unavailable")
+   return
+  target="refunded" if kind=="refund" else "revoked"
+  if order["state"] in {"refunded","revoked"}:return
+  if order["state"] in {"rejected","expired"}:return
+  now=self.now();entitlement=db.execute("SELECT * FROM entitlement_outbox WHERE order_id=?",(order["id"],)).fetchone();delivered=entitlement and entitlement["state"]=="delivered" and entitlement["license_id"]
+  if delivered:
+   action="refund" if kind=="refund" else "revoke";reason="refund" if kind=="refund" else "chargeback"
+   assertion=self._revocation(entitlement["license_id"],self._utc_now().isoformat().replace("+00:00","Z"),1,reason)
+   db.execute("INSERT OR IGNORE INTO revocation_assertions VALUES(?,?,?,?,?,?,?)",(entitlement["license_id"],order["id"],1,assertion["revoked_at"],reason,json.dumps(assertion,separators=(",",":")),now));self._enqueue_revocation(db,entitlement,entitlement["license_id"],action,reason,now)
+  elif entitlement:
+   db.execute("UPDATE entitlement_outbox SET state='quarantined',reconciliation_phase=CASE WHEN reconciliation_phase IN('none','crossing_prepared') THEN 'none' ELSE 'readback_only' END,lease_owner=NULL,lease_expires_at=NULL,fencing_version=fencing_version+1,next_attempt_at=CASE WHEN reconciliation_phase='none' THEN next_attempt_at ELSE ? END,last_error_hash=? WHERE order_id=?",((self._utc_now()+timedelta(seconds=2)).isoformat(),self._hash("cancelled_by_whop_reversal"),order["id"]))
+  db.execute("UPDATE orders SET state=?,updated_at=? WHERE id=?",(target,now,order["id"]));self._audit(db,"whop.webhook",f"order.{kind}",order["id"],{"from":order["state"],"to":target})
+ @_checkpoint_serialized
+ def list_whop_inbox(self,status=None):
+  if status not in {None,"received","applied","quarantined"}:raise ValueError("invalid Whop inbox status")
+  with self._db() as db:
+   db.execute("BEGIN IMMEDIATE");self._assert_terminal_trust(db);sql="SELECT event_id,occurred_at,kind,order_id,provider_order_ref,provider_payment_ref,received_at,state,attempts,applied_at,last_attempt_at,error_digest FROM whop_webhook_inbox";params=[]
+   if status:sql+=" WHERE state=?";params=[status]
+   rows=[dict(r) for r in db.execute(sql+" ORDER BY received_at DESC LIMIT 200",params)];db.rollback();return rows
  def pending_outbox_orders(self):
   with self._db() as db:return [r[0] for r in db.execute("SELECT order_id FROM entitlement_outbox WHERE state='pending' ORDER BY created_at")]
  @_checkpoint_serialized
