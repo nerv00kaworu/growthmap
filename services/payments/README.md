@@ -76,3 +76,8 @@ Even cryptographically valid approvals are **necessary but insufficient source e
 
 A deterministic external-input schema/template and operator draft are provided at `deployment/production-input.schema.json`, `deployment/production-input.template.json`, and `../../docs/GROWTHMAP-X402-PRODUCTION-RUNBOOK.md`. They contain names and pins only, never secret values. They intentionally do not implement authorization: the repository has no independently authenticated deployment-authorization verifier, no concrete authenticated Authority transport, and no trustworthy measurement contract binding constructed runtime dependencies to reviewed deployed bytes. Until those external contracts are supplied and independently reviewed, adding a builder that accepts objects would reduce authorization to Python class/duck identity and is forbidden.
 
+### Isolated local operations evidence
+
+Executable local-only monitoring, reconciliation, and authenticated SQLite
+backup/restore drills are documented in [`docs/LOCAL_OPS_DRILLS.md`](docs/LOCAL_OPS_DRILLS.md).
+They refuse unmarked/live-looking paths and are not production operations evidence.
