@@ -6,12 +6,13 @@ import {pathToFileURL} from 'node:url';
 
 const root=path.resolve(import.meta.dirname,'..');
 const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const {workflowContent}=await import(pathToFileURL(path.join(root,'content/workflows.ts')));
 const {core,defaultLocale,labels,localeOrFallback,locales,parseLocale}=await import(pathToFileURL(path.join(root,'content/i18n.ts')));
 
 const shape=value=>Array.isArray(value)?['array',...value.map(shape)]:value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,shape(value[key])])):typeof value;
 
 test('deep locale catalogs have exact runtime shape parity anchored to zh-TW',()=>{
-  for(const catalog of [core,labels]) for(const locale of locales) assert.deepEqual(shape(catalog[locale]),shape(catalog['zh-TW']),`${locale} catalog drift`);
+  for(const catalog of [core,labels,workflowContent]) for(const locale of locales) assert.deepEqual(shape(catalog[locale]),shape(catalog['zh-TW']),`${locale} catalog drift`);
 });
 
 test('locale parsing and unknown/missing fallback are deterministic',()=>{
