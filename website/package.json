@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "audit:prod": "npm audit --omit=dev",
-    "test:routes": "node scripts/check-route-manifest.mjs"
+    "test:routes": "node scripts/check-route-manifest.mjs",
+    "check:static": "node scripts/check-static-build.mjs",
+    "check:html": "node scripts/check-production-html.mjs"
   },
   "dependencies": {
     "next": "^16.3.0",
