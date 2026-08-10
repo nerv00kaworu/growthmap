@@ -6,10 +6,10 @@ import path from 'node:path';
 const root=path.resolve(import.meta.dirname,'..');
 const files=[
   'app/[locale]/layout.tsx',...fs.readdirSync(path.join(root,'app/[locale]'),{withFileTypes:true}).filter(x=>x.isDirectory()).map(x=>`app/[locale]/${x.name}/page.tsx`),
-  'components/DemoMap.tsx','components/LocaleNav.tsx','components/Localized.tsx','components/ProductContent.tsx','components/ProofSections.tsx'
+  'components/DemoMap.tsx','components/HomeLanding.tsx','components/LocaleNav.tsx','components/Localized.tsx','components/ProductContent.tsx','components/ProofSections.tsx'
 ];
 // Exact exceptions only: brand/contact identity and compact technical/display tokens.
-const allowed=new Set(['GrowthMap','nerv00kaworu@gmail.com','@nerv00kaworu','nerv00kaworu@gmail.com ·','→','US$10','01 /','02 /','03 /','04 /',' / ']);
+const allowed=new Set(['GrowthMap','nerv00kaworu@gmail.com','@nerv00kaworu','nerv00kaworu@gmail.com ·','→','▶','Ⅱ','US$10','01 /','02 /','03 /','04 /',' / ']);
 const ordinary=/[A-Za-z]{2,}|[\u3400-\u9fff]/u;
 function candidates(source){
   const found=[];
