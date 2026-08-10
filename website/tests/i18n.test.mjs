@@ -31,3 +31,19 @@ test('catalog contract is strongly typed and component-local copy is migrated',(
   assert.ok(!read('content/legal.ts').includes('授权 activation'));
   assert.ok(read('content/legal.ts').includes('授权启用'));
 });
+
+const leaves=value=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(leaves):value&&typeof value==='object'?Object.values(value).flatMap(leaves):[];
+test('workflow locale leaves are translated and catalogs do not alias zh-TW objects',()=>{
+  const cjk=/[\u3400-\u9fff]/u;
+  for(const text of leaves(workflowContent.en)) assert.ok(!cjk.test(text),`English workflow contains CJK: ${text}`);
+  const traditionalOnly=/[與個為裡檔節點實會這還開後總說將讓從線導備網權據復歸劃]/u;
+  for(const text of leaves(workflowContent['zh-CN'])) assert.ok(!traditionalOnly.test(text),`zh-CN workflow contains reviewed traditional form: ${text}`);
+  for(const locale of ['en','zh-CN']) for(const page of Object.keys(workflowContent['zh-TW'])){
+    assert.notStrictEqual(workflowContent[locale][page],workflowContent['zh-TW'][page],`${locale}.${page} page aliases zh-TW`);
+    assert.notStrictEqual(workflowContent[locale][page].sections,workflowContent['zh-TW'][page].sections,`${locale}.${page}.sections aliases zh-TW`);
+    for(let index=0;index<workflowContent['zh-TW'][page].sections.length;index++){
+      assert.notStrictEqual(workflowContent[locale][page].sections[index],workflowContent['zh-TW'][page].sections[index],`${locale}.${page}.sections[${index}] aliases zh-TW`);
+      assert.notStrictEqual(workflowContent[locale][page].sections[index].items,workflowContent['zh-TW'][page].sections[index].items,`${locale}.${page}.items aliases zh-TW`);
+    }
+  }
+});
