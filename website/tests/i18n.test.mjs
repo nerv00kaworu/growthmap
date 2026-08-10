@@ -23,7 +23,7 @@ test('locale parsing and unknown/missing fallback are deterministic',()=>{
 });
 
 test('catalog contract is strongly typed and component-local copy is migrated',()=>{
-  const i18n=read('content/i18n.ts'),localized=read('components/Localized.tsx'),buy=read('app/[locale]/buy/page.tsx');
+  const i18n=read('content/i18n.ts'),localized=read('components/Localized.tsx'),buy=read('app/(localized)/[locale]/buy/page.tsx');
   assert.ok(i18n.includes('satisfies Record<Locale,CoreCatalog>'));
   assert.ok(!i18n.includes('Record<string,any>'));
   assert.ok(!localized.includes("locale==='zh-TW'?"));

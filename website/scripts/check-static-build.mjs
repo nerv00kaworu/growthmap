@@ -1,0 +1,2 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';
+const manifest=JSON.parse(fs.readFileSync('.next/prerender-manifest.json','utf8'));for(const locale of ['zh-TW','zh-CN','en'])for(const path of ['','features','agents','security','download','buy','docs','docs/developers']){const route=`/${locale}${path?`/${path}`:''}`;assert.ok(manifest.routes[route],`localized route is not prerendered: ${route}`)}console.log('static build: 24 localized routes are prerendered');

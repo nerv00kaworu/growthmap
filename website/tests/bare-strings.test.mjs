@@ -5,7 +5,7 @@ import path from 'node:path';
 
 const root=path.resolve(import.meta.dirname,'..');
 const files=[
-  'app/[locale]/layout.tsx',...fs.readdirSync(path.join(root,'app/[locale]'),{withFileTypes:true}).filter(x=>x.isDirectory()).map(x=>`app/[locale]/${x.name}/page.tsx`),
+  'app/(localized)/[locale]/layout.tsx',...fs.readdirSync(path.join(root,'app/(localized)/[locale]'),{withFileTypes:true}).filter(x=>x.isDirectory()).map(x=>`app/(localized)/[locale]/${x.name}/page.tsx`),
   'components/DemoMap.tsx','components/HomeLanding.tsx','components/LocaleNav.tsx','components/Localized.tsx','components/ProductContent.tsx','components/ProofSections.tsx'
 ];
 // Exact exceptions only: brand/contact identity and compact technical/display tokens.
