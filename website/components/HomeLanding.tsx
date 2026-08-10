@@ -2,7 +2,7 @@
 import {useEffect,useRef,useState} from 'react';
 import Link from 'next/link';
 import type {Locale} from '../content/i18n';
-import {homeContent} from '../content/home-content';
+import {homeContent} from '../content/home-content';import {ProductScreenshot} from './ProductScreenshot';import {StructuredData} from './StructuredData';
 
 const href=(locale:Locale,path:string)=>`/${locale}${path}`;
 type DemoKind='overview'|'gui'|'conversation';
@@ -32,12 +32,14 @@ function DemoVideo({locale,kind,label,play,pause}:{locale:Locale;kind:DemoKind;l
   return <figure className="home-video-card"><video ref={ref} muted loop playsInline preload="metadata" poster={media.poster} aria-label={label} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)}><source src={media.video} type="video/webm"/></video><button type="button" className="home-video-toggle" aria-label={playing?pause:play} onClick={()=>{const video=ref.current;if(!video)return;if(video.paused)void video.play();else video.pause()}}>{playing?'Ⅱ':'▶'}</button><figcaption>{label}</figcaption></figure>
 }
 
-export function HomeLanding({locale}:{locale:Locale}){const copy=homeContent[locale];return <>
+export function HomeLanding({locale}:{locale:Locale}){const copy=homeContent[locale];return <><StructuredData locale={locale}/>
   <section className="home-hero"><div><p className="eyebrow">{copy.eyebrow}</p><h1>{copy.title}</h1><p className="lead">{copy.lead}</p><div className="actions"><a className="button" href="#two-workflows">{copy.primary}</a><a className="textlink" href="#project-example">{copy.secondary} →</a></div><p className="home-micro">{copy.micro}</p></div><DemoVideo locale={locale} kind="overview" label={copy.overviewLabel} play={copy.play} pause={copy.pause}/></section>
+  <section className="home-free"><h2>{copy.freeTitle}</h2><p>{copy.freeBody}</p><Link className="button" href={href(locale,'/download')}>{copy.statusCta}</Link></section>
+  <section className="home-section"><ProductScreenshot locale={locale}/></section>
   <section className="home-section" id="two-workflows"><header className="home-section-head"><p className="eyebrow">{copy.pathsEyebrow}</p><h2>{copy.pathsTitle}</h2><p>{copy.pathsLead}</p></header><div className="home-paths">{copy.paths.map((path,index)=><article className="home-path" key={path.label}><span>{path.label}</span><h3>{path.title}</h3><p>{path.body}</p><div className="home-path-flow">{path.flow.map((item,i)=><span key={item}>{i>0&&<i>→</i>}<b>{item}</b></span>)}</div><DemoVideo locale={locale} kind={index===0?'gui':'conversation'} label={`${path.label} · ${copy.demoLabel}`} play={copy.play} pause={copy.pause}/></article>)}</div><p className="home-converge">{copy.converge}</p><p className="home-demo-note">{copy.demoNote}</p></section>
   <section className="home-section"><header className="home-section-head"><p className="eyebrow">{copy.governanceEyebrow}</p><h2>{copy.governanceTitle}</h2></header><div className="home-steps">{copy.steps.map(step=><article key={step.label}><span>{step.label}</span><h3>{step.title}</h3><p>{step.body}</p></article>)}</div></section>
   <section className="home-example" id="project-example"><div><p className="eyebrow">{copy.exampleEyebrow}</p><h2>{copy.exampleTitle}</h2><p>{copy.exampleBody}</p></div><div className="home-tree"><ul><li><span>{copy.tree[0].label} <small>{copy.tree[0].type}</small></span><ul><li><span>{copy.tree[1].label} <small>{copy.tree[1].type}</small></span></li><li><span>{copy.tree[2].label} <small>{copy.tree[2].type}</small></span><ul><li><span>{copy.tree[3].label} <small>{copy.tree[3].type}</small></span></li><li><span>{copy.tree[4].label} <small>{copy.tree[4].type}</small></span></li></ul></li><li><span>{copy.tree[5].label} <small>{copy.tree[5].type}</small></span></li><li><span>{copy.tree[6].label} <small>{copy.tree[6].type}</small></span></li></ul></li></ul></div></section>
   <section className="home-section"><header className="home-section-head"><p className="eyebrow">{copy.focusEyebrow}</p><h2>{copy.focusTitle}</h2></header><div className="home-focus">{copy.focusCards.map(card=><article key={card.title}><h3>{card.title}</h3><p>{card.body}</p></article>)}</div></section>
   <section className="home-section home-boundary"><header className="home-section-head"><p className="eyebrow">{copy.boundaryEyebrow}</p><h2>{copy.boundaryTitle}</h2></header><div className="home-boundary-grid">{copy.boundaries.map(card=><article key={card.title}><h3>{card.title}</h3><p>{card.body}</p></article>)}</div></section>
-  <section className="home-closing"><h2>{copy.closing}</h2><p>{copy.closingLead}</p><Link className="button" href={href(locale,'/features')}>{copy.explore}</Link></section>
+  <section className="home-closing"><h2>{copy.closing}</h2><p>{copy.closingLead}</p><div className="actions"><Link className="button" href={href(locale,'/features')}>{copy.explore}</Link><Link className="textlink" href={href(locale,'/download')}>{copy.statusCta} →</Link></div></section>
 </>}

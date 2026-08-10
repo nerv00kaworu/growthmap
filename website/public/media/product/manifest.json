@@ -1,0 +1,9 @@
+{
+  "asset": "/media/product/growthmap-windows-candidate.png",
+  "sha256": "3ca4a612b8af524ad708b91e288b0957d08dd654db6603372d40840e8ae9eaad",
+  "bytes": 70818,
+  "width": 1008,
+  "height": 681,
+  "source": "memory/scratchpad/growthmap-ci-30637339024/artifacts/growthmap-renderer.png",
+  "note": "Packaged Windows candidate screenshot. This is visual evidence only and is not a public release claim."
+}
