@@ -8,7 +8,8 @@ const htmlHeaders=[...securityHeaders,{key:'Cache-Control',value:'public, max-ag
 const sensitiveHeaders=[...securityHeaders,{key:'Cache-Control',value:'no-store, max-age=0'},{key:'Referrer-Policy',value:'no-referrer'}];
 const config: NextConfig = { experimental:{globalNotFound:true}, output: 'standalone', turbopack: { root: process.cwd() }, async headers(){return [
  {source:'/:path*',headers:htmlHeaders},
- {source:'/:path*\.(avif|gif|ico|jpg|jpeg|png|svg|webp|webm|woff2)',headers:[...securityHeaders,{key:'Cache-Control',value:'public, max-age=31536000, immutable'}]},
+ {source:'/(media|og)/:path*',headers:[...securityHeaders,{key:'Cache-Control',value:'public, max-age=3600, must-revalidate'}]},
+ {source:'/:file(favicon.png|apple-touch-icon.png|icon-192.png|icon-512.png|icon.svg|manifest.webmanifest)',headers:[...securityHeaders,{key:'Cache-Control',value:'public, max-age=3600, must-revalidate'}]},
  {source:'/(buy|download|status|privacy|terms|refund|order/:path*|api/:path*)',headers:sensitiveHeaders},
  {source:'/:locale(zh-TW|zh-CN|en)/(buy|download|status|privacy|terms|refund|order/:path*)',headers:sensitiveHeaders}
  ]}};
