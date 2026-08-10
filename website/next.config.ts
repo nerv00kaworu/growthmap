@@ -6,8 +6,10 @@ const securityHeaders = [
 ];
 const htmlHeaders=[...securityHeaders,{key:'Cache-Control',value:'public, max-age=0, s-maxage=3600, stale-while-revalidate=86400'}];
 const sensitiveHeaders=[...securityHeaders,{key:'Cache-Control',value:'no-store, max-age=0'},{key:'Referrer-Policy',value:'no-referrer'}];
+const immutableHeaders=[...securityHeaders,{key:'Cache-Control',value:'public, max-age=31536000, immutable'}];
 const config: NextConfig = { experimental:{globalNotFound:true}, output: 'standalone', turbopack: { root: process.cwd() }, async headers(){return [
  {source:'/:path*',headers:htmlHeaders},
+ {source:'/_next/static/:path*',headers:immutableHeaders},
  {source:'/(media|og)/:path*',headers:[...securityHeaders,{key:'Cache-Control',value:'public, max-age=3600, must-revalidate'}]},
  {source:'/:file(favicon.png|apple-touch-icon.png|icon-192.png|icon-512.png|icon.svg|manifest.webmanifest)',headers:[...securityHeaders,{key:'Cache-Control',value:'public, max-age=3600, must-revalidate'}]},
  {source:'/(buy|download|status|privacy|terms|refund|order/:path*|api/:path*)',headers:sensitiveHeaders},
