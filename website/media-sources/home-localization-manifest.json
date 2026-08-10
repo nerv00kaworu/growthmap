@@ -1,125 +1,167 @@
 {
-  "version": 1,
+  "version": 2,
   "entries": [
     {
+      "locale": "zh-TW",
+      "kind": "overview",
+      "asset": "video",
+      "sourceCopy": "media-sources/overview.zh-TW.html",
+      "sourceSha256": "55564ca30e701483c0eb6721295f979db2facfc60bf81c60feead23ff0dcdacc",
+      "output": "public/media/home/overview-growth.webm",
+      "outputSha256": "dcc5f50a81b80d0042876eb68080e67905b6f109d2f7929b9aeb5eb1b470e814"
+    },
+    {
+      "locale": "zh-TW",
+      "kind": "overview",
+      "asset": "poster",
+      "sourceCopy": "media-sources/overview.zh-TW.html",
+      "sourceSha256": "55564ca30e701483c0eb6721295f979db2facfc60bf81c60feead23ff0dcdacc",
+      "output": "public/media/home/overview-growth-poster.jpg",
+      "outputSha256": "a21ab98268c6305133b9559fc7937b490c2883e56e8337916b31e93475e23987"
+    },
+    {
+      "locale": "zh-TW",
+      "kind": "gui",
+      "asset": "video",
+      "sourceCopy": "media-sources/gui.zh-TW.html",
+      "sourceSha256": "a82dac6867fd4be4a3b5abe0a954365922d5f422553e73a5d4d6154374708ef7",
+      "output": "public/media/home/gui-growth.webm",
+      "outputSha256": "9aec8437fcce2589f79ba7c000bbe5edaa0eb962e4e5b99c4cbc96b8b3a01008"
+    },
+    {
+      "locale": "zh-TW",
+      "kind": "gui",
+      "asset": "poster",
+      "sourceCopy": "media-sources/gui.zh-TW.html",
+      "sourceSha256": "a82dac6867fd4be4a3b5abe0a954365922d5f422553e73a5d4d6154374708ef7",
+      "output": "public/media/home/gui-growth-poster.jpg",
+      "outputSha256": "c2f734c8d9eb8d732e5031b6781844f63fe6637d3010ae77a1b1a1d022c2c9eb"
+    },
+    {
+      "locale": "zh-TW",
+      "kind": "conversation",
+      "asset": "video",
+      "sourceCopy": "media-sources/conversation.zh-TW.html",
+      "sourceSha256": "71f9b33879096487db0c06edae7e87046f60d7f32d0562e5332072fa3209289e",
+      "output": "public/media/home/agent-conversation.webm",
+      "outputSha256": "104b7f3f33c43a78d501e5c81e147bda2875a56c23d85e7a035c680c390c6ec0"
+    },
+    {
+      "locale": "zh-TW",
+      "kind": "conversation",
+      "asset": "poster",
+      "sourceCopy": "media-sources/conversation.zh-TW.html",
+      "sourceSha256": "71f9b33879096487db0c06edae7e87046f60d7f32d0562e5332072fa3209289e",
+      "output": "public/media/home/agent-conversation-poster.jpg",
+      "outputSha256": "e190482d5510ef963240010b0f3b24fb172383ff9c146d8d09d57c37c2996468"
+    },
+    {
       "locale": "zh-CN",
       "kind": "overview",
       "asset": "video",
       "sourceCopy": "media-sources/overview.zh-CN.html",
-      "originalSource": "growthmap-hero-overview-demo-20260810/index.html",
-      "sourceSha256": "a4503bc32d36be0cfd4903a15b54b5cb2a472068d5d0f3dbab4a8ea0a1f7b6f0",
+      "sourceSha256": "6110e9d9b5c3a0bae8abdb180dcd4151a4ed3f7a5034f16c92cf92ab85faa7b0",
       "output": "public/media/home/overview-growth.zh-CN.webm",
-      "outputSha256": "6d10f14ad79993cf5e6359ba1cb33536952a726fc1d589b1459aac2b5e29edd3"
+      "outputSha256": "d988c4c87d631ade7a0621fe7e26ed987b7367265b2cada0db7ac84fcc29be89"
     },
     {
       "locale": "zh-CN",
       "kind": "overview",
       "asset": "poster",
       "sourceCopy": "media-sources/overview.zh-CN.html",
-      "originalSource": "growthmap-hero-overview-demo-20260810/index.html",
-      "sourceSha256": "a4503bc32d36be0cfd4903a15b54b5cb2a472068d5d0f3dbab4a8ea0a1f7b6f0",
+      "sourceSha256": "6110e9d9b5c3a0bae8abdb180dcd4151a4ed3f7a5034f16c92cf92ab85faa7b0",
       "output": "public/media/home/overview-growth.zh-CN.jpg",
-      "outputSha256": "d507f3ad1f1cb31fdc12981f863ef28abeaf46227eb27dd3da47342a12143d34"
-    },
-    {
-      "locale": "en",
-      "kind": "overview",
-      "asset": "video",
-      "sourceCopy": "media-sources/overview.en.html",
-      "originalSource": "growthmap-hero-overview-demo-20260810/index.html",
-      "sourceSha256": "dcd3233132137f96b392df39540019dbdad6d76e344e790faabec92126df362c",
-      "output": "public/media/home/overview-growth.en.webm",
-      "outputSha256": "4c230708eba55433c1bf25b91141de1c8d864b6721e15f67e112ae463ea1bccb"
-    },
-    {
-      "locale": "en",
-      "kind": "overview",
-      "asset": "poster",
-      "sourceCopy": "media-sources/overview.en.html",
-      "originalSource": "growthmap-hero-overview-demo-20260810/index.html",
-      "sourceSha256": "dcd3233132137f96b392df39540019dbdad6d76e344e790faabec92126df362c",
-      "output": "public/media/home/overview-growth.en.jpg",
-      "outputSha256": "177541908ff177be0646fcb41d6e77ca370adc4e32eed738b703ab6dfa2463d5"
+      "outputSha256": "ba67aaa83723e138d03c8715c2348d3460656e1c5a6d55d91a0043038ff5c492"
     },
     {
       "locale": "zh-CN",
       "kind": "gui",
       "asset": "video",
       "sourceCopy": "media-sources/gui.zh-CN.html",
-      "originalSource": "growthmap-concept-demo-20260810/index.html",
-      "sourceSha256": "bd1ed6bd2c2dc651c8125cd88d8f22f5b416e1f5ebbad38f7d15e6c05d78fa5a",
+      "sourceSha256": "1b050cb75e68292c303364f2c2e2129f94be8fb97e2698daa3f13dae64209d1c",
       "output": "public/media/home/gui-growth.zh-CN.webm",
-      "outputSha256": "6809884f78bc369e7b5bf94f5611f70cbef7e32448704ecd271de252fde28b0b"
+      "outputSha256": "1f951c55453be5144d8c5908302516e3704741a34c82f06f1e3813c09acce0ee"
     },
     {
       "locale": "zh-CN",
       "kind": "gui",
       "asset": "poster",
       "sourceCopy": "media-sources/gui.zh-CN.html",
-      "originalSource": "growthmap-concept-demo-20260810/index.html",
-      "sourceSha256": "bd1ed6bd2c2dc651c8125cd88d8f22f5b416e1f5ebbad38f7d15e6c05d78fa5a",
+      "sourceSha256": "1b050cb75e68292c303364f2c2e2129f94be8fb97e2698daa3f13dae64209d1c",
       "output": "public/media/home/gui-growth.zh-CN.jpg",
-      "outputSha256": "6d584f944b702680a4fc771047be305f868d15fe80c12f741ee3fc3b9f59c764"
-    },
-    {
-      "locale": "en",
-      "kind": "gui",
-      "asset": "video",
-      "sourceCopy": "media-sources/gui.en.html",
-      "originalSource": "growthmap-concept-demo-20260810/index.html",
-      "sourceSha256": "826a494c8fbf424d744d03d068c169c6831b97e4a3e10cce029d722ddcfdc37b",
-      "output": "public/media/home/gui-growth.en.webm",
-      "outputSha256": "ce7eb3d21ba583aec7f75b9cd61ea664b0275034b4ef72f0093895be1cfd8374"
-    },
-    {
-      "locale": "en",
-      "kind": "gui",
-      "asset": "poster",
-      "sourceCopy": "media-sources/gui.en.html",
-      "originalSource": "growthmap-concept-demo-20260810/index.html",
-      "sourceSha256": "826a494c8fbf424d744d03d068c169c6831b97e4a3e10cce029d722ddcfdc37b",
-      "output": "public/media/home/gui-growth.en.jpg",
-      "outputSha256": "61a60e8ea1987cddc8a5ec1179bb618ab1e0cc6496012c983a3e78c2331c6aa0"
+      "outputSha256": "15fff947d9cb72e45a300e3461cb6693b478415997b646d0b86421e37080a2e9"
     },
     {
       "locale": "zh-CN",
       "kind": "conversation",
       "asset": "video",
       "sourceCopy": "media-sources/conversation.zh-CN.html",
-      "originalSource": "growthmap-agent-conversation-demo-20260810/index.html",
-      "sourceSha256": "103df0ace5f239da3fe2bed9c034fba86c5bf5e9b6cc1e5e08339632709129b8",
+      "sourceSha256": "815172feb5c83c17bb2c5d52c2cac155459569d189f068c846c241ffe449276c",
       "output": "public/media/home/agent-conversation.zh-CN.webm",
-      "outputSha256": "d879cb58abe3186d9a539fdf9fe07d0c293f51032262265d1ae6b567bb37a204"
+      "outputSha256": "d109182a3b3fc063aadb886b285bd043319083b115f4e76c4b62040e4d3e2a42"
     },
     {
       "locale": "zh-CN",
       "kind": "conversation",
       "asset": "poster",
       "sourceCopy": "media-sources/conversation.zh-CN.html",
-      "originalSource": "growthmap-agent-conversation-demo-20260810/index.html",
-      "sourceSha256": "103df0ace5f239da3fe2bed9c034fba86c5bf5e9b6cc1e5e08339632709129b8",
+      "sourceSha256": "815172feb5c83c17bb2c5d52c2cac155459569d189f068c846c241ffe449276c",
       "output": "public/media/home/agent-conversation.zh-CN.jpg",
-      "outputSha256": "3ca43ede51993a6ec9e1fbc3d860696d4836ae8d9e67c4ff754b455be51cbe5f"
+      "outputSha256": "442ac7af0677eded27bec5ea25591e16a2f2376ea4f60de5c04bea118cd60bdf"
+    },
+    {
+      "locale": "en",
+      "kind": "overview",
+      "asset": "video",
+      "sourceCopy": "media-sources/overview.en.html",
+      "sourceSha256": "a2b438ea395ae978253310de1f58d9be9f52defe51381214ce7f0498469e97f4",
+      "output": "public/media/home/overview-growth.en.webm",
+      "outputSha256": "3cfc9be5e92ecd852e61ce7c33135249d62a52c883e0fca6876d6c97b453aa44"
+    },
+    {
+      "locale": "en",
+      "kind": "overview",
+      "asset": "poster",
+      "sourceCopy": "media-sources/overview.en.html",
+      "sourceSha256": "a2b438ea395ae978253310de1f58d9be9f52defe51381214ce7f0498469e97f4",
+      "output": "public/media/home/overview-growth.en.jpg",
+      "outputSha256": "686d616ec73f288ee82d9709808715b0e13cc793829215e317db1d643f840886"
+    },
+    {
+      "locale": "en",
+      "kind": "gui",
+      "asset": "video",
+      "sourceCopy": "media-sources/gui.en.html",
+      "sourceSha256": "ce20085acc4615176f43bff71ddd69e19ed6d81761363c0489d4e1812abcc60e",
+      "output": "public/media/home/gui-growth.en.webm",
+      "outputSha256": "acd863e79d48d50420e1aff9618be319bd7d9f49e09d0ccf672e7bf61c523d36"
+    },
+    {
+      "locale": "en",
+      "kind": "gui",
+      "asset": "poster",
+      "sourceCopy": "media-sources/gui.en.html",
+      "sourceSha256": "ce20085acc4615176f43bff71ddd69e19ed6d81761363c0489d4e1812abcc60e",
+      "output": "public/media/home/gui-growth.en.jpg",
+      "outputSha256": "e7798a2bdaa09bc1a4eba52d78179d7e92e3c47a5164e5d3732ef5547bc34255"
     },
     {
       "locale": "en",
       "kind": "conversation",
       "asset": "video",
       "sourceCopy": "media-sources/conversation.en.html",
-      "originalSource": "growthmap-agent-conversation-demo-20260810/index.html",
-      "sourceSha256": "b76b402ca33070f345caba9729b68c84523dc2cd645312d90dbb3bdc8ba44588",
+      "sourceSha256": "0f6d86d6d2b669d51c229f8a842b6bc592333d96fe6b1808b35f8a126356311d",
       "output": "public/media/home/agent-conversation.en.webm",
-      "outputSha256": "9dd83330d376d3bb5458922c60252c2cfc22e0351142a9ae01b74d5c38363c8b"
+      "outputSha256": "5433f6b3465681d15248569e46bb25febdf23b480ec633df64a7fd5d1646406f"
     },
     {
       "locale": "en",
       "kind": "conversation",
       "asset": "poster",
       "sourceCopy": "media-sources/conversation.en.html",
-      "originalSource": "growthmap-agent-conversation-demo-20260810/index.html",
-      "sourceSha256": "b76b402ca33070f345caba9729b68c84523dc2cd645312d90dbb3bdc8ba44588",
+      "sourceSha256": "0f6d86d6d2b669d51c229f8a842b6bc592333d96fe6b1808b35f8a126356311d",
       "output": "public/media/home/agent-conversation.en.jpg",
-      "outputSha256": "bb0a62fd29c2774627bcc5a3620a8c6fb78a34660021a3213a5b67963efb8039"
+      "outputSha256": "439bb52d3cf80275615e2e299952b8615ed05b492091899c27e23f9c7427afa0"
     }
   ]
 }

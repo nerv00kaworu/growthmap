@@ -3,7 +3,7 @@ import Link from 'next/link';
 import {locales,labels,parseLocale} from '../../../content/i18n';
 import {LocaleNav} from '../../../components/LocaleNav';
 const base=new URL(site.canonicalBase||'https://growthmap.app');
-export const metadata:Metadata={metadataBase:base,robots:{index:Boolean(site.canonicalBase),follow:Boolean(site.canonicalBase)}};
+export const metadata:Metadata={metadataBase:base,robots:{index:Boolean(site.canonicalBase),follow:Boolean(site.canonicalBase)},icons:{icon:[{url:'/favicon.png',type:'image/png'}],apple:'/apple-touch-icon.png'},manifest:'/manifest.webmanifest'};
 export function generateStaticParams(){return locales.map(locale=>({locale}))}
 const footerCopy={
   'zh-TW':{tagline:'人類與任意 Agent 共用的專案生長工作區。',local:'桌面專案資料留在你的本機；公開網站不會接收專案資料。',status:'狀態',privacy:'隱私',terms:'條款',refund:'退款',skip:'跳到主要內容',nav:'主要導覽',menu:'選單'},
