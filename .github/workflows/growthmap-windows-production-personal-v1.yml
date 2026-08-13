@@ -73,6 +73,16 @@ jobs:
       - name: Verify real main, exact public config, unsigned state and write hashes
         shell: pwsh
         run: ./.github/workflows/scripts/verify-production-unsigned-package.ps1 -ExpectedPin '${{ inputs.g1_public_key_sha256 }}' -SourceSha '${{ github.sha }}'
+      - name: Upload verifier diagnostic on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: growthmap-windows-production-diagnostic-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/growthmap-production-asar-diagnostic.txt
+            desktop/dist/win-unpacked/resources/app.asar
+          if-no-files-found: error
+          retention-days: 3
       - name: Upload installer and manifest hashes
         uses: actions/upload-artifact@v4
         with:

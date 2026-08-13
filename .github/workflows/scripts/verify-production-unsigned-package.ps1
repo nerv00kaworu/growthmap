@@ -12,7 +12,12 @@ $extract=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-verify';if(Test-P
 $productRoots=@(Get-ChildItem $extract -Recurse -File -Filter 'package.json'|ForEach-Object{try{$metadata=Get-Content $_.FullName -Raw|ConvertFrom-Json;if($metadata.name -ceq 'growthmap-desktop' -and $metadata.main -ceq 'main.js'){$_.Directory.FullName}}catch{}})
 if($productRoots.Count -ne 1){throw 'Unique GrowthMap desktop application root absent from ASAR'}
 $appRoot=$productRoots[0];$main=Join-Path $appRoot 'main.js';$releaseMode=Join-Path $appRoot 'release-mode.json'
-if(-not(Test-Path $main -PathType Leaf) -or -not(Test-Path $releaseMode -PathType Leaf)){throw 'Real main or release metadata absent from ASAR'}
+$mainPresent=Test-Path $main -PathType Leaf;$releaseModePresent=Test-Path $releaseMode -PathType Leaf
+if(-not $mainPresent -or -not $releaseModePresent){
+  $diagnostic=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-diagnostic.txt'
+  @("app_root=$([IO.Path]::GetRelativePath($extract,$appRoot))","main_present=$mainPresent","release_mode_present=$releaseModePresent","files:") + @(Get-ChildItem $appRoot -Recurse -File|ForEach-Object{[IO.Path]::GetRelativePath($appRoot,$_.FullName)}|Sort-Object) | Set-Content $diagnostic -Encoding utf8
+  throw "Real main or release metadata absent from ASAR (main=$mainPresent release_mode=$releaseModePresent)"
+}
 $relativeFiles=Get-ChildItem $appRoot -Recurse -File|ForEach-Object{[IO.Path]::GetRelativePath($appRoot,$_.FullName)}
 foreach($needle in @('e2e-main.js','e2e-commercial-config.js','create-e2e-fixture')){if($relativeFiles -contains $needle -or ($relativeFiles|Where-Object{$_ -like "*$needle*"})){throw "Forbidden ASAR material: $needle"}}
 $sourceText=(Get-Content $main -Raw)
