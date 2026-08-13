@@ -36,6 +36,24 @@ runtime adapter fails closed; deterministic tests use only the explicit SDK fact
 seam and never bypass post-verification normalization.
 
 
+### Whop verified-inbox fulfillment worker
+
+`growthmap_payments.whop_fulfillment` is the smallest production consumer for the separate verified ingress database. It reads only `verified_pending`/`retry_pending` rows, verifies the stored payload digest and exact envelope identity, accepts only `payment.succeeded`, `refund.created`, and `dispute.created`, and marks every other selected event `ignored` without interpretation. It pins company/product/plan/USD amount/status, atomically caps Early at the first 50 durable allocations, issues Personal v1 through the signed loopback Authority HTTP contract, and revokes only the entitlement linked by the exact provider payment ID. Attempts use exponential backoff and terminal failure after eight tries; persisted errors are type digests only.
+
+Example fixed config (values are references/identities, never inline private key material):
+
+```json
+{"database":"/var/lib/growthmap-payments-production/whop-inbox.sqlite3","authority_origin":"http://127.0.0.1:8321","authority_id":"growthmap-authority-primary","authority_audience":"growthmap-authority","edge_identity":"payments-production","edge_source":"loopback-edge","edge_private_key_file":"/run/credentials/growthmap-payments/authority-edge.pem","signer_identity":{"authority_id":"growthmap-authority-primary","key_id":"<reviewed-key-id>","generation":1,"public_key_sha256":"<64-lowercase-hex>","attestation":"<reviewed-attestation>"}}
+```
+
+Exact invocation:
+
+```sh
+PYTHONPATH=services/payments:src/backend python3 -m growthmap_payments.whop_fulfillment --config /etc/growthmap-payments-production/whop-fulfillment.json --interval 2 --limit 25
+```
+
+The worker does not perform Whop verification, query Whop, create synthetic payments, expose a listener, or widen any payment rail.
+
 Historical schema v4 authenticated terminal settlement evidence with HMAC-SHA256 using a dedicated external secret loaded only from `GROWTHMAP_SETTLEMENT_MAC_KEY_FILE` (minimum 32 bytes). The key is not stored in SQLite, logs, APIs, licenses, desktop artifacts, or packages. Loss of this key makes durable evidence unrecoverable and startup fails closed; key rotation requires a separately reviewed atomic re-MAC migration and is intentionally out of scope. Terminal settlement rows are database-trigger immutable except the evidence-preserving `settled` → `finalized_paid` transition. Release remains **NO-GO pending fresh independent review and Windows package-verifier CI**.
 
 ### R6 authenticated issuance closure
