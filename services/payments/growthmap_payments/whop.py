@@ -89,3 +89,107 @@ def parse_verified_event(payload:bytes)->VerifiedWhopEvent:
  except ValueError:raise WhopIngressError("invalid webhook") from None
  if stamp.tzinfo!=timezone.utc or stamp.isoformat()!=value["occurred_at"]:raise WhopIngressError("invalid webhook")
  return VerifiedWhopEvent(**value)
+
+# Official SDK adapter.  This remains caller-injected; no environment or
+# production composition code constructs it.
+import base64
+import importlib
+from decimal import Decimal,InvalidOperation
+from typing import Callable,Any
+
+_OFFICIAL_HEADERS={"webhook-id","webhook-timestamp","webhook-signature"}
+_OFFICIAL_EVENT_KEYS={"id","api_version","type","timestamp","company_id","data"}
+
+class OfficialWhopVerifier:
+ """Verify with ``whop-sdk`` and normalize one documented event shape.
+
+ The SDK is imported only on the first call.  Refund/dispute events are
+ intentionally unsupported because this source slice has no reviewed exact
+ linkage schema for those event data objects.
+ """
+ __slots__=("_api_key","_webhook_secret","_company_id","_product_id","_plan_id","_checkout_id","_currency","_total","_sdk_factory")
+ def __init__(self,*,api_key:str,webhook_secret:str,company_id:str,
+              expected_currency:str,expected_total:str,
+              product_id:str|None=None,plan_id:str|None=None,
+              checkout_configuration_id:str|None=None,
+              sdk_factory:Callable[...,Any]|None=None):
+  values=(api_key,webhook_secret,company_id,expected_currency,expected_total)
+  if any(type(v) is not str or not v for v in values):raise WhopIngressError("official Whop configuration unavailable")
+  if not _TOKEN.fullmatch(company_id) or not re.fullmatch(r"[a-z]{3}",expected_currency):raise WhopIngressError("official Whop configuration unavailable")
+  identifiers=(product_id,plan_id,checkout_configuration_id)
+  if not any(identifiers) or any(v is not None and (type(v) is not str or not _TOKEN.fullmatch(v)) for v in identifiers):raise WhopIngressError("official Whop configuration unavailable")
+  try:total=Decimal(expected_total)
+  except InvalidOperation:raise WhopIngressError("official Whop configuration unavailable") from None
+  if not total.is_finite() or total<=0:raise WhopIngressError("official Whop configuration unavailable")
+  self._api_key=api_key;self._webhook_secret=webhook_secret;self._company_id=company_id
+  self._currency=expected_currency;self._total=total;self._product_id=product_id
+  self._plan_id=plan_id;self._checkout_id=checkout_configuration_id;self._sdk_factory=sdk_factory
+
+ def _client(self):
+  factory=self._sdk_factory
+  if factory is None:
+   try:factory=getattr(importlib.import_module("whop_sdk"),"Whop")
+   except (ImportError,AttributeError):raise WhopIngressError("official Whop verifier unavailable") from None
+  try:
+   key=base64.b64encode(self._webhook_secret.encode("utf-8","strict")).decode("ascii")
+   return factory(api_key=self._api_key,webhook_key=key)
+  except Exception:raise WhopIngressError("official Whop verifier unavailable") from None
+
+ def verify(self,raw_body:bytes,signature_headers:Mapping[str,str])->bytes:
+  bounded,headers=bounded_request(raw_body,signature_headers)
+  if set(headers)!=_OFFICIAL_HEADERS:raise WhopIngressError("invalid webhook")
+  try:text=bounded.decode("utf-8","strict")
+  except UnicodeError:raise WhopIngressError("invalid webhook") from None
+  try:self._client().webhooks.unwrap(text,headers=dict(headers))
+  except WhopIngressError:raise
+  except Exception:raise WhopIngressError("invalid webhook") from None
+  value=_strict_official_json(text)
+  normalized=self._normalize_payment(value)
+  return json.dumps(normalized,separators=(",",":"),sort_keys=True).encode("utf-8")
+
+ def _normalize_payment(self,value:object)->dict[str,str]:
+  if type(value) is not dict or set(value)!=_OFFICIAL_EVENT_KEYS:raise WhopIngressError("invalid webhook")
+  if value["api_version"]!="v1" or value["type"]!="payment.succeeded":raise WhopIngressError("invalid webhook")
+  if value["company_id"]!=self._company_id:raise WhopIngressError("invalid webhook")
+  event_id=value["id"];data=value["data"]
+  if type(event_id) is not str or not _TOKEN.fullmatch(event_id) or type(data) is not dict:raise WhopIngressError("invalid webhook")
+  payment_id=data.get("id");status=data.get("status");currency=data.get("currency");metadata=data.get("metadata")
+  if type(payment_id) is not str or not _TOKEN.fullmatch(payment_id) or status!="succeeded" or currency!=self._currency or type(metadata) is not dict:raise WhopIngressError("invalid webhook")
+  order_id=metadata.get("order_id")
+  if type(order_id) is not str or not _TOKEN.fullmatch(order_id):raise WhopIngressError("invalid webhook")
+  total=data.get("total")
+  if type(total) not in (int,Decimal) or isinstance(total,bool) or Decimal(total)!=self._total:raise WhopIngressError("invalid webhook")
+  matched=[]
+  if self._product_id is not None:
+   product=data.get("product")
+   if type(product) is not dict or product.get("id")!=self._product_id:raise WhopIngressError("invalid webhook")
+   matched.append(self._product_id)
+  if self._plan_id is not None:
+   plan=data.get("plan")
+   if type(plan) is not dict or plan.get("id")!=self._plan_id:raise WhopIngressError("invalid webhook")
+   matched.append(self._plan_id)
+  if self._checkout_id is not None:
+   if data.get("checkout_configuration_id")!=self._checkout_id:raise WhopIngressError("invalid webhook")
+   matched.append(self._checkout_id)
+  stamp=_official_timestamp(value["timestamp"])
+  return {"event_id":event_id,"kind":"paid","occurred_at":stamp,"order_id":order_id,
+          "provider_order_ref":matched[-1],"provider_payment_ref":payment_id}
+
+def _strict_official_json(text:str)->object:
+ def pairs(items):
+  result={};folded=set()
+  for key,value in items:
+   if type(key) is not str or key.casefold() in folded:raise WhopIngressError("invalid webhook")
+   folded.add(key.casefold());result[key]=value
+  return result
+ try:return json.loads(text,object_pairs_hook=pairs,parse_float=Decimal,parse_int=int)
+ except (ValueError,TypeError,json.JSONDecodeError,WhopIngressError) as error:
+  if isinstance(error,WhopIngressError):raise
+  raise WhopIngressError("invalid webhook") from None
+
+def _official_timestamp(value:object)->str:
+ if type(value) is not str or not value.endswith("Z"):raise WhopIngressError("invalid webhook")
+ try:stamp=datetime.fromisoformat(value[:-1]+"+00:00")
+ except ValueError:raise WhopIngressError("invalid webhook") from None
+ if stamp.tzinfo!=timezone.utc:raise WhopIngressError("invalid webhook")
+ return stamp.isoformat()

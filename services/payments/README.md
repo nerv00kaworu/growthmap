@@ -18,6 +18,23 @@ Operations: stop writes or use SQLite online backup API; copy DB plus `-wal`/`-s
 
 `POST /v1/webhooks/whop` is a bounded, fail-closed local core only. It does **not** implement or guess Whop signature semantics. A caller-injected, independently reviewed verifier must authenticate the bounded raw request and return authenticated bytes before strict semantic parsing or storage; no verifier returns 503. The inbox stores only an immutable SHA-256 raw digest and bounded provider references, never the raw body or signature secret. Duplicate event IDs are idempotent, conflicting replays fail closed, retries are bounded, and terminal refund/dispute/chargeback states cannot be resurrected by late paid events. Paid events deliberately cannot create payment evidence or entitlement from an unreviewed Whop checkout/amount binding. Production composition remains unconditionally blocked and this source slice is not production-ready.
 
+A caller-injected `OfficialWhopVerifier` source adapter now lazily imports the official
+`whop-sdk`, passes the bounded UTF-8 body text unchanged to
+`client.webhooks.unwrap(text, headers=...)`, and only then strictly normalizes the
+documented `payment.succeeded` v1 envelope. Construction requires exact server-only
+API/webhook secrets plus reviewed company, currency, total, and at least one exact
+product/access-pass, plan, or checkout-configuration identifier; every configured
+identifier is bound, as is `metadata.order_id`. Only the three standard headers
+`webhook-id`, `webhook-timestamp`, and `webhook-signature` are admitted. The adapter
+is never constructed by `create_app()`/`from_env()` and cannot lift the production
+hard block. `refund.created`, `dispute.created`, and `dispute.updated` deliberately
+fail closed: their exact payment/order linkage schema has not been established in
+reviewed official documentation. No `whop-sdk` dependency was added to the lock:
+there is no locally established, reviewed package version/API pin and packages were
+not installed. Until that dependency is independently pinned and supplied, the
+runtime adapter fails closed; deterministic tests use only the explicit SDK factory
+seam and never bypass post-verification normalization.
+
 
 Historical schema v4 authenticated terminal settlement evidence with HMAC-SHA256 using a dedicated external secret loaded only from `GROWTHMAP_SETTLEMENT_MAC_KEY_FILE` (minimum 32 bytes). The key is not stored in SQLite, logs, APIs, licenses, desktop artifacts, or packages. Loss of this key makes durable evidence unrecoverable and startup fails closed; key rotation requires a separately reviewed atomic re-MAC migration and is intentionally out of scope. Terminal settlement rows are database-trigger immutable except the evidence-preserving `settled` → `finalized_paid` transition. Release remains **NO-GO pending fresh independent review and Windows package-verifier CI**.
 

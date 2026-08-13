@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from desktop.entitlements import verify_document
 from licensing.authority import LicenseAuthority
-from licensing.gift_api import create_candidate_app
+from licensing.authority_api import create_authority_app
 from licensing.signer_ceremony import DOMAIN, PURPOSE, OfflineFixtureMonotonicAnchor
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,8 +29,13 @@ class ExternalTestSigner:
     def sign(self, message): return self.key.sign(message)
 
 
-class TestAdminSession:
-    def verify(self, token): return token == "local-admin-session"
+class FixtureDescriptor:
+    def __init__(self, authority): self.authority = authority
+    def descriptor(self): return self.authority.handshake() | {"status": "active"}
+
+
+class FixtureAnchorVerifier:
+    def verify(self, _descriptor): return True
 
 
 def external_authority(tmp_path):
@@ -75,9 +80,9 @@ class GiftHttpFixture:
 @pytest.fixture
 def gift_http(tmp_path):
     authority = external_authority(tmp_path)
-    app = create_candidate_app(
-        authority=authority, session_verifier=TestAdminSession(), allowed_admin_origin="https://admin.test",
-        csrf_secret="local-csrf", rate_limit=100,
+    app = create_authority_app(
+        authority=authority, signer_descriptor_provider=FixtureDescriptor(authority),
+        anchor_verifier=FixtureAnchorVerifier(),
     )
     # Keep the listening socket open until Uvicorn owns it so no other local process
     # can claim the ephemeral port between allocation and server startup.
@@ -93,7 +98,7 @@ def gift_http(tmp_path):
         thread.start()
         for _ in range(100):
             try:
-                urlopen(base + "/openapi.json", timeout=.1).read()
+                urlopen(base + "/v1/authority/identity", timeout=.1).read()
                 break
             except OSError:
                 time.sleep(.02)
@@ -102,16 +107,6 @@ def gift_http(tmp_path):
         yield fixture
     finally:
         fixture.shutdown()
-
-
-def admin(base, path, body=None):
-    payload = None if body is None else json.dumps(body).encode()
-    request = Request(base + path, data=payload, method="POST" if body is not None else "GET", headers={
-        "Authorization": "Bearer local-admin-session", "Origin": "https://admin.test", "X-CSRF-Token": "local-csrf",
-        **({"Content-Type": "application/json"} if payload is not None else {}),
-    })
-    with urlopen(request, timeout=5) as response:
-        return json.loads(response.read())
 
 
 def desktop_activate(claim_key, loopback_base):
@@ -139,7 +134,7 @@ def response_json(result):
 
 def test_gmg1_desktop_http_challenge_persisted_certificate_offline_reread_rotation_revoke_and_seat_replacement(gift_http, tmp_path):
     authority, base = gift_http.authority, gift_http.base
-    created = admin(base, "/v1/admin/gifts", {})
+    created = authority.create_gift()
     old_key, gift_id = created["claim_key"], created["gift_id"]
 
     first = response_json(desktop_activate(old_key, base))
@@ -149,7 +144,7 @@ def test_gmg1_desktop_http_challenge_persisted_certificate_offline_reread_rotati
     imported = tmp_path / "desktop-license.json"
     imported.write_text(json.dumps(first["certificate"], separators=(",", ":")))
 
-    rotated = admin(base, f"/v1/admin/gifts/{gift_id}/recover", {})
+    rotated = authority.recover_gift(gift_id)
     with pytest.raises(HTTPError) as stale:
         urlopen(Request(base + "/v1/gifts/claim/challenge", data=json.dumps({"claim_key": old_key, "device_public_key": first["devicePublicKey"]}).encode(), headers={"Content-Type": "application/json"}), timeout=5)
     assert stale.value.code == 404
@@ -157,17 +152,17 @@ def test_gmg1_desktop_http_challenge_persisted_certificate_offline_reread_rotati
     second = response_json(desktop_activate(rotated["claim_key"], base))
     seat_full = desktop_activate(rotated["claim_key"], base)
     assert seat_full.returncode == 23 and "授權碼無效或尚未付款" in seat_full.stderr
-    devices = admin(base, f"/v1/admin/gifts/{gift_id}/devices")
+    devices = authority.list_gift_devices(gift_id)
     assert {row["device_id"] for row in devices} == {first["certificate"]["device_id"], second["certificate"]["device_id"]}
-    released = admin(base, f"/v1/admin/gifts/{gift_id}/devices/deactivate", {"device_id": first["certificate"]["device_id"]})
+    released = {"deactivated": authority.deactivate_gift_device(gift_id, first["certificate"]["device_id"])}
     assert released == {"deactivated": True}
     replacement = response_json(desktop_activate(rotated["claim_key"], base))
     assert replacement["certificate"]["device_id"] not in {first["certificate"]["device_id"], second["certificate"]["device_id"]}
-    devices = admin(base, f"/v1/admin/gifts/{gift_id}/devices")
+    devices = authority.list_gift_devices(gift_id)
     assert next(row for row in devices if row["device_id"] == first["certificate"]["device_id"])["deactivated_at"] is not None
     assert len([row for row in devices if row["deactivated_at"] is None]) == 2
 
-    assert admin(base, f"/v1/admin/gifts/{gift_id}/revoke", {})["status"] == "revoked"
+    assert authority.revoke_gift(gift_id)["status"] == "revoked"
     revoked = desktop_activate(rotated["claim_key"], base)
     assert revoked.returncode == 23 and "授權碼無效或尚未付款" in revoked.stderr
 
