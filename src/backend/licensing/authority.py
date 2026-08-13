@@ -9,7 +9,9 @@ import base64, hashlib, hmac, json, re, secrets, sqlite3, threading, uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from abc import ABC, abstractmethod
 from .signer_ceremony import DOMAIN as CEREMONY_DOMAIN, PURPOSE as CEREMONY_PURPOSE, OfflineFixtureMonotonicAnchor, validate_anchor_claim, validate as validate_ceremony
+from .pem_signer import load_ed25519_private_key, validate_descriptor
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
@@ -23,51 +25,8 @@ REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
 # SQLite's own busy timeout remains the cross-process boundary.
 _SCHEMA_BOOTSTRAP_LOCK=threading.RLock()
 
-def canonical(value: dict[str,Any]) -> bytes:
-    return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
-
-def utc(value: datetime|None=None) -> str:
-    return (value or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00","Z")
-
-def device_identifier(public_key_b64: str) -> str:
-    raw=base64.b64decode(public_key_b64,validate=True)
-    if len(raw)!=32: raise ValueError("invalid_device_public_key")
-    Ed25519PublicKey.from_public_bytes(raw)
-    return "gmdev_"+hashlib.sha256(raw).hexdigest()
-
-def activation_challenge(license_id: str, public_key_b64: str, nonce: str) -> bytes:
-    return DEVICE_KEY_DOMAIN+canonical({"license_id":license_id,"device_public_key":public_key_b64,"nonce":nonce})
-
-class LicenseAuthority:
-    """SQLite seat ledger with transactional unique constraints and idempotent certificates."""
-    def __init__(self, database: Path, private_key_file: Path|None, *, now=lambda: datetime.now(timezone.utc), authority_id="growthmap-authority-primary"):
-        """Explicit legacy isolated-file candidate seam; production uses from_external_signer."""
-        if private_key_file is None:raise RuntimeError("license_signing_key_required")
-        try:key=serialization.load_pem_private_key(Path(private_key_file).read_bytes(),password=None)
-        except Exception as error:raise RuntimeError("license_signing_key_unavailable") from error
-        if not isinstance(key,Ed25519PrivateKey):raise RuntimeError("license_signing_key_must_be_ed25519")
-        public=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
-        descriptor={"schema_version":1,"purpose":CEREMONY_PURPOSE,"domain":CEREMONY_DOMAIN,"algorithm":"Ed25519","authority_id":authority_id,"key_id":"isolated-fixture-key","generation":1,"activated_at":"1970-01-01T00:00:00Z","predecessor_generation":None,"public_key_sha256":hashlib.sha256(public).hexdigest(),"provider_attestation_id":"offline-fixture"}
-        self._construct(database,key,descriptor,public,OfflineFixtureMonotonicAnchor(),now)
-
-    @classmethod
-    def from_file_key_for_isolated_tests(cls,database:Path,private_key_file:Path,**kwargs):return cls(database,private_key_file,**kwargs)
-
-    @classmethod
-    def from_external_signer(cls,database:Path,*,signer,ceremony_descriptor,reviewed_public_key:bytes,generation_anchor,now=lambda:datetime.now(timezone.utc)):
-        instance=cls.__new__(cls);instance._construct(database,signer,ceremony_descriptor,reviewed_public_key,generation_anchor,now);return instance
-
-    def _construct(self,database,signer,descriptor,reviewed_public_key,anchor,now):
-        if not callable(getattr(signer,"sign",None)) or not callable(getattr(anchor,"read",None)) or not callable(getattr(anchor,"compare_and_advance",None)):raise RuntimeError("signer_configuration_invalid")
-        try:ceremony,public,descriptor_bytes=validate_ceremony(descriptor,reviewed_public_key,now())
-        except RuntimeError:raise
-        except Exception:raise RuntimeError("signer_ceremony_invalid") from None
-        self.signer,self.public_key,self.ceremony,self._ceremony_bytes,self.anchor=signer,public,ceremony,descriptor_bytes,anchor
-        self.database,self.now,self.authority_id=Path(database),now,ceremony["authority_id"];self._lock=threading.RLock()
-        self.database.parent.mkdir(parents=True,exist_ok=True)
-        with _SCHEMA_BOOTSTRAP_LOCK,self._connect() as db:
-            db.executescript("""
-            PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+AUTHORITY_SCHEMA_SCRIPT="""
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS signer_ceremonies(
               generation INTEGER PRIMARY KEY CHECK(generation>0), key_id TEXT NOT NULL,
               descriptor_json TEXT NOT NULL UNIQUE, public_key_sha256 TEXT NOT NULL,
@@ -129,28 +88,127 @@ class LicenseAuthority:
             CREATE TABLE IF NOT EXISTS audit_log(
               sequence INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, event TEXT NOT NULL,
               license_id TEXT NOT NULL, device_id TEXT, detail TEXT NOT NULL);
-            """)
+            COMMIT;
+            """
+
+class AuthorityDatabaseBroker(ABC):
+    """Narrow database capability retained by LicenseAuthority for every operation."""
+    @property
+    @abstractmethod
+    def identity(self): ...
+    @abstractmethod
+    def connect(self): ...
+
+class FixtureSQLiteBroker(AuthorityDatabaseBroker):
+    """Explicit test/library-only adapter; never constructed by the production CLI."""
+    fixture=True
+    def __init__(self,database:Path):
+        self.database=Path(database);self.database.parent.mkdir(parents=True,exist_ok=True)
+    @property
+    def identity(self):return ("fixture-sqlite",str(self.database.resolve()))
+    def connect(self):
+        db=sqlite3.connect(self.database,timeout=30,isolation_level=None);db.row_factory=sqlite3.Row;db.execute("PRAGMA foreign_keys=ON");return db
+
+def canonical(value: dict[str,Any]) -> bytes:
+    return json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()
+
+def canonical_ceremony_claim(ceremony: dict[str,Any]) -> dict[str,Any]:
+    """Return the single canonical monotonic-anchor claim for a validated ceremony shape.
+
+    This function is deliberately pure so offline provisioning and runtime construction cannot
+    drift into hashing different JSON documents. Validation remains the caller's boundary.
+    """
+    if type(ceremony) is not dict or type(ceremony.get("generation")) is not int or ceremony["generation"] <= 0:
+        raise RuntimeError("signer_ceremony_invalid")
+    return {"generation":ceremony["generation"],"ceremony_sha256":hashlib.sha256(canonical(ceremony)).hexdigest()}
+
+def utc(value: datetime|None=None) -> str:
+    return (value or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat().replace("+00:00","Z")
+
+def device_identifier(public_key_b64: str) -> str:
+    raw=base64.b64decode(public_key_b64,validate=True)
+    if len(raw)!=32: raise ValueError("invalid_device_public_key")
+    Ed25519PublicKey.from_public_bytes(raw)
+    return "gmdev_"+hashlib.sha256(raw).hexdigest()
+
+def activation_challenge(license_id: str, public_key_b64: str, nonce: str) -> bytes:
+    return DEVICE_KEY_DOMAIN+canonical({"license_id":license_id,"device_public_key":public_key_b64,"nonce":nonce})
+
+class LicenseAuthority:
+    """SQLite seat ledger with transactional unique constraints and idempotent certificates."""
+    def __init__(self, database: Path, private_key_file: Path|None, *, now=lambda: datetime.now(timezone.utc), authority_id="growthmap-authority-primary"):
+        """Explicit legacy isolated-file candidate seam; production uses from_external_signer."""
+        if private_key_file is None:raise RuntimeError("license_signing_key_required")
+        try:key=serialization.load_pem_private_key(Path(private_key_file).read_bytes(),password=None)
+        except Exception as error:raise RuntimeError("license_signing_key_unavailable") from error
+        if not isinstance(key,Ed25519PrivateKey):raise RuntimeError("license_signing_key_must_be_ed25519")
+        public=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+        descriptor={"schema_version":1,"purpose":CEREMONY_PURPOSE,"domain":CEREMONY_DOMAIN,"algorithm":"Ed25519","authority_id":authority_id,"key_id":"isolated-fixture-key","generation":1,"activated_at":"1970-01-01T00:00:00Z","predecessor_generation":None,"public_key_sha256":hashlib.sha256(public).hexdigest(),"provider_attestation_id":"offline-fixture"}
+        self._construct(FixtureSQLiteBroker(database),key,descriptor,public,OfflineFixtureMonotonicAnchor(),now)
+
+    @classmethod
+    def from_file_key_for_isolated_tests(cls,database:Path,private_key_file:Path,**kwargs):return cls(database,private_key_file,**kwargs)
+
+    @classmethod
+    def from_hardened_pem(cls,database:Path|None=None,*,database_broker:AuthorityDatabaseBroker|None=None,private_key_file:Path,expected_uid:int,
+                          signer_descriptor,ceremony_record,reviewed_public_key:bytes,
+                          authorized_reviewers,generation_anchor,approved_directory_uids=None,
+                          now=lambda:datetime.now(timezone.utc),authority_id="growthmap-authority-primary"):
+        """Hardened PEM seam. Production callers must additionally enforce a production-safe anchor."""
+        loaded=load_ed25519_private_key(private_key_file,expected_uid=expected_uid,
+                                        approved_directory_uids=approved_directory_uids)
+        descriptor=validate_descriptor(signer_descriptor,ceremony_record,loaded,reviewed_public_key,
+                                       authority_id=authority_id,authorized_reviewers=authorized_reviewers)
+        ceremony={"schema_version":1,"purpose":CEREMONY_PURPOSE,"domain":CEREMONY_DOMAIN,"algorithm":"Ed25519",
+                  "authority_id":authority_id,"key_id":descriptor["key_id"],"generation":descriptor["generation"],
+                  "activated_at":descriptor["activated_at"],"predecessor_generation":descriptor["predecessor_generation"],
+                  "public_key_sha256":descriptor["public_pem_sha256"],
+                  "provider_attestation_id":"pem-witness:"+descriptor["ceremony_record_sha256"]}
+        instance=cls.__new__(cls)
+        if database_broker is None:
+            if database is None:raise RuntimeError("authority_database_broker_required")
+            database_broker=FixtureSQLiteBroker(database)
+        instance._construct(database_broker,loaded,ceremony,reviewed_public_key,generation_anchor,now)
+        return instance
+
+    @classmethod
+    def from_external_signer(cls,database:Path,*,signer,ceremony_descriptor,reviewed_public_key:bytes,generation_anchor,now=lambda:datetime.now(timezone.utc)):
+        instance=cls.__new__(cls);instance._construct(FixtureSQLiteBroker(database),signer,ceremony_descriptor,reviewed_public_key,generation_anchor,now);return instance
+
+    def _construct(self,database_broker,signer,descriptor,reviewed_public_key,anchor,now):
+        if not callable(getattr(signer,"sign",None)) or not callable(getattr(anchor,"read",None)) or not callable(getattr(anchor,"compare_and_advance",None)):raise RuntimeError("signer_configuration_invalid")
+        try:ceremony,public,descriptor_bytes=validate_ceremony(descriptor,reviewed_public_key,now())
+        except RuntimeError:raise
+        except Exception:raise RuntimeError("signer_ceremony_invalid") from None
+        if not isinstance(database_broker,AuthorityDatabaseBroker) or not callable(getattr(database_broker,"connect",None)) or database_broker.identity is None:raise RuntimeError("authority_database_broker_invalid")
+        self.signer,self.public_key,self.ceremony,self._ceremony_bytes,self.anchor=signer,public,ceremony,descriptor_bytes,anchor
+        self._database_broker,self.database,self.now,self.authority_id=database_broker,(database_broker.database if type(database_broker) is FixtureSQLiteBroker else None),now,ceremony["authority_id"];self._lock=threading.RLock()
+        with _SCHEMA_BOOTSTRAP_LOCK,self._connect() as db:
+            bootstrap=getattr(db,"bootstrap_authority_schema",None)
+            if bootstrap is None:db.executescript(AUTHORITY_SCHEMA_SCRIPT)
+            else:bootstrap(AUTHORITY_SCHEMA_SCRIPT)
             # Challenge protocol identity is an append-only upgrade. Existing rows stay
             # NULL and therefore fail closed; their provenance cannot be safely guessed.
-            challenge_columns={row[1] for row in db.execute("PRAGMA table_info(activation_challenges)")}
+            columns=getattr(db,"authority_table_columns",None)
+            challenge_columns=(columns("activation_challenges") if columns else {row[1] for row in db.execute("PRAGMA table_info(activation_challenges)")})
             if "flow_kind" not in challenge_columns:db.execute("ALTER TABLE activation_challenges ADD COLUMN flow_kind TEXT CHECK(flow_kind IN ('gift','payment'))")
             if "entitlement_generation" not in challenge_columns:db.execute("ALTER TABLE activation_challenges ADD COLUMN entitlement_generation INTEGER")
             # Authority inbox identity columns are an append-only local schema upgrade.
             for table in ("external_entitlements","external_revocations"):
-                columns={row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+                table_columns=(columns(table) if columns else {row[1] for row in db.execute(f"PRAGMA table_info({table})")})
                 for name,kind in (("signer_key_id","TEXT"),("signer_generation","INTEGER"),("signer_public_key_sha256","TEXT"),("signer_attestation","TEXT"),("ack_signature","TEXT")):
-                    if name not in columns:db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+                    if name not in table_columns:db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
             # Reject locally impossible/stale rotations before touching the external
             # monotonic source. The later pin is still a separate-system operation.
             self._check_ceremony_transition(db)
-        generation=ceremony["generation"];digest=hashlib.sha256(descriptor_bytes).hexdigest();anchor_failed=False
+        generation=ceremony["generation"];claimed=canonical_ceremony_claim(ceremony);digest=claimed["ceremony_sha256"];anchor_failed=False
         previous_digest=None
         if generation>1:
             with self._connect() as db:
                 previous=db.execute("SELECT descriptor_json FROM signer_ceremonies WHERE generation=?",(generation-1,)).fetchone()
             if not previous:raise RuntimeError("signer_predecessor_invalid")
             previous_digest=hashlib.sha256(previous["descriptor_json"].encode()).hexdigest()
-        expected={"generation":generation-1,"ceremony_sha256":previous_digest};claimed={"generation":generation,"ceremony_sha256":digest}
+        expected={"generation":generation-1,"ceremony_sha256":previous_digest}
         try:anchored=validate_anchor_claim(anchor.compare_and_advance(expected,claimed),allow_zero=False)
         except Exception:anchor_failed=True;anchored=None
         if anchor_failed or anchored!=claimed:raise RuntimeError("signer_generation_anchor_unavailable_or_conflicting") from None
@@ -174,17 +232,19 @@ class LicenseAuthority:
                 c=self.ceremony;db.execute("INSERT INTO signer_ceremonies VALUES(?,?,?,?,?,?)",(c["generation"],c["key_id"],self._ceremony_bytes.decode(),c["public_key_sha256"],c["provider_attestation_id"],utc(self.now())))
             db.commit()
         except Exception:db.rollback();raise
-    def _assert_signer_state(self):
+    def _assert_signer_state(self,db=None):
         anchor_failed=False
         try:anchored=validate_anchor_claim(self.anchor.read(),allow_zero=False)
         except Exception:anchor_failed=True;anchored=None
         if anchor_failed:raise RuntimeError("signer_state_unavailable") from None
-        expected={"generation":self.ceremony["generation"],"ceremony_sha256":hashlib.sha256(self._ceremony_bytes).hexdigest()}
+        expected=canonical_ceremony_claim(self.ceremony)
         if anchored!=expected:raise RuntimeError("signer_state_conflict")
-        with self._connect() as db:latest=db.execute("SELECT generation,descriptor_json FROM signer_ceremonies ORDER BY generation DESC LIMIT 1").fetchone()
+        if db is None:
+            with self._connect() as own_db:latest=own_db.execute("SELECT generation,descriptor_json FROM signer_ceremonies ORDER BY generation DESC LIMIT 1").fetchone()
+        else:latest=db.execute("SELECT generation,descriptor_json FROM signer_ceremonies ORDER BY generation DESC LIMIT 1").fetchone()
         if not latest or latest["generation"]!=self.ceremony["generation"] or not hmac.compare_digest(latest["descriptor_json"],self._ceremony_bytes.decode()):raise RuntimeError("signer_state_conflict")
-    def _sign_verified(self,message:bytes)->bytes:
-        self._assert_signer_state();provider_failed=False
+    def _sign_verified(self,message:bytes,db=None)->bytes:
+        self._assert_signer_state(db);provider_failed=False
         try:signature=self.signer.sign(message)
         except Exception:provider_failed=True;signature=None
         if provider_failed:raise RuntimeError("license_signing_unavailable") from None
@@ -192,8 +252,10 @@ class LicenseAuthority:
         try:self.public_key.verify(signature,message)
         except Exception:raise RuntimeError("license_signing_failed") from None
         return signature
-    def _connect(self):
-        db=sqlite3.connect(self.database,timeout=30,isolation_level=None);db.row_factory=sqlite3.Row;db.execute("PRAGMA foreign_keys=ON");return db
+    def _connect(self):return self._database_broker.connect()
+    def close(self):
+        close=getattr(self._database_broker,"close",None)
+        if callable(close):close()
     def _audit(self,db,event,license_id,device_id=None,detail="{}"):
         db.execute("INSERT INTO audit_log(at,event,license_id,device_id,detail) VALUES(?,?,?,?,?)",(utc(self.now()),event,license_id,device_id,detail))
     def create_license(self, *, license_id: str|None=None, edition="personal", major_version=1, seat_limit=2, expires_at=None, check_in_days=30):
@@ -289,7 +351,7 @@ class LicenseAuthority:
         expected=self.handshake()
         if type(identity) is not dict or set(identity)!=set(expected) or any(type(identity[k]) is not type(expected[k]) or not hmac.compare_digest(str(identity[k]),str(expected[k])) for k in expected):raise ValueError("authority_identity_mismatch")
         return expected
-    def _signed_ack(self,domain:bytes,payload:dict[str,Any])->str:return base64.b64encode(self._sign_verified(domain+canonical(payload))).decode()
+    def _signed_ack(self,domain:bytes,payload:dict[str,Any],db=None)->str:return base64.b64encode(self._sign_verified(domain+canonical(payload),db)).decode()
     def create_external_entitlement(self, *, source: str, source_id: str, payload_digest: str, authority_id: str, signer_identity: dict[str,Any], edition="personal", major_version=1, seat_limit=2) -> dict[str,Any]:
         """Idempotent inbox for a durable external payment source.
 
@@ -311,7 +373,7 @@ class LicenseAuthority:
                 receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":prior["license_id"]})).hexdigest();db.commit();return {"license_id":prior["license_id"],"edition":prior["edition"],"major_version":prior["major_version"],"device_allowance":prior["seat_limit"],"delivery_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":prior["ack_signature"]}
             license_id="gm_"+uuid.uuid4().hex;issued=utc(self.now())
             db.execute("INSERT INTO licenses VALUES(?,?,?,?,?,?,?,?)",(license_id,edition,major_version,seat_limit,issued,None,None,30))
-            receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id})).hexdigest();ack_payload={"authority_id":authority_id,"delivery_receipt":receipt,"license_id":license_id,"payload_digest":payload_digest,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(ENTITLEMENT_ACK_DOMAIN,ack_payload)
+            receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":source,"source_id":source_id,"payload_digest":payload_digest,"license_id":license_id})).hexdigest();ack_payload={"authority_id":authority_id,"delivery_receipt":receipt,"license_id":license_id,"payload_digest":payload_digest,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(ENTITLEMENT_ACK_DOMAIN,ack_payload,db)
             db.execute("INSERT INTO external_entitlements(source,source_id,license_id,created_at,payload_digest,authority_id,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,license_id,issued,payload_digest,authority_id,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature))
             self._audit(db,"external_entitlement_created",license_id,detail=json.dumps({"source":source,"source_id":source_id,"payload_digest":payload_digest,"signer_identity":identity}));db.commit()
             return {"license_id":license_id,"edition":edition,"major_version":major_version,"device_allowance":seat_limit,"delivery_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
@@ -356,7 +418,7 @@ class LicenseAuthority:
         if (not old or old["deactivated_at"] is not None) and count>=lic["seat_limit"]:raise ValueError("seat_limit_reached")
         activated=utc(now);activation_id="gma_"+uuid.uuid4().hex
         cert={"schema_version":2,"certificate_type":"growthmap_device_activation","product":"growthmap","edition":lic["edition"],"license_id":license_id,"activation_id":activation_id,"major_version":lic["major_version"],"device_allowance":lic["seat_limit"],"device_id":device_id,"device_public_key":device_public_key,"issued_at":activated,"expires_at":lic["expires_at"],"revoked_at":None,"max_active_projects":None,"next_check_in_at":utc(now+timedelta(days=lic["check_in_days"]))}
-        cert["signature"]=base64.b64encode(self._sign_verified(CERT_DOMAIN+canonical(cert))).decode();cert_json=json.dumps(cert,separators=(",",":"))
+        cert["signature"]=base64.b64encode(self._sign_verified(CERT_DOMAIN+canonical(cert),db)).decode();cert_json=json.dumps(cert,separators=(",",":"))
         try:db.execute("INSERT INTO activation_requests VALUES(?,?,?,?,?,?,?,?,?)",(request_digest,license_id,device_id,nonce_hash,proof_hash,activated,"active",activation_id,cert_json))
         except sqlite3.IntegrityError as error:raise ValueError("activation_nonce_consumed") from error
         if old:db.execute("UPDATE activations SET activation_id=?,device_public_key=?,activated_at=?,deactivated_at=NULL,certificate_json=?,activation_nonce_digest=? WHERE license_id=? AND device_id=?",(activation_id,device_public_key,activated,cert_json,request_digest,license_id,device_id))
@@ -434,8 +496,11 @@ class LicenseAuthority:
                 if prior["ack_signature"] is None:db.rollback();raise ValueError("legacy_identity_unproven")
                 db.commit();return {"license_id":prior["license_id"],"revoked_at":prior["revoked_at"],"revocation_receipt":prior["receipt"],"authority_id":authority_id,"signer_identity":identity,"ack_signature":prior["ack_signature"]}
             try:
-                event_time=datetime.fromisoformat(created_at.replace("Z","+00:00"))
-                if event_time.tzinfo is None:raise ValueError
+                # Preserve the accepted spelling because it participates in the request digest,
+                # durable replay identity, readback, and signed acknowledgement contract.
+                if not isinstance(created_at,str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)",created_at):raise ValueError
+                event_time=datetime.fromisoformat(created_at[:-1]+"+00:00" if created_at.endswith("Z") else created_at)
+                if event_time.tzinfo is None or event_time.utcoffset()!=timedelta(0):raise ValueError
                 event_time=event_time.astimezone(timezone.utc);clock=self.now()
                 if not isinstance(clock,datetime) or clock.tzinfo is None:raise RuntimeError("invalid_authority_clock")
                 now=clock.astimezone(timezone.utc)
@@ -444,7 +509,7 @@ class LicenseAuthority:
                 db.rollback();raise
             except (AttributeError,TypeError,ValueError) as error:db.rollback();raise ValueError("invalid_revocation_created_at") from error
             revoked_at=utc(now);receipt=hashlib.sha256(canonical({"authority_id":authority_id,"request_digest":request_digest,"license_id":row["license_id"],"revoked_at":revoked_at})).hexdigest()
-            ack_payload={"authority_id":authority_id,"license_id":row["license_id"],"request_digest":request_digest,"revocation_receipt":receipt,"revoked_at":revoked_at,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(REVOCATION_ACK_DOMAIN,ack_payload)
+            ack_payload={"authority_id":authority_id,"license_id":row["license_id"],"request_digest":request_digest,"revocation_receipt":receipt,"revoked_at":revoked_at,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(REVOCATION_ACK_DOMAIN,ack_payload,db)
             db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations(source,source_id,authority_id,payload_digest,license_id,action,reason,payment_proof,tx_hash,event_created_at,revoked_at,request_digest,receipt,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt,"signer_identity":identity}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
     def read_external_revocation_acknowledgement(self, *, source:str, source_id:str, signer_identity:dict[str,Any]) -> dict[str,Any]:
         identity=self._accepted_signer_identity(signer_identity)
