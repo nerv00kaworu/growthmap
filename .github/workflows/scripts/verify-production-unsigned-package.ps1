@@ -9,9 +9,11 @@ if($doc.updateUrl -cne '' -or $doc.updateOrigin -cne ''){throw 'Updater must be 
 if($doc.licensePublicKeySha256 -cne $ExpectedPin -or (Get-FileHash $key -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedPin){throw 'Packaged G1 public-key pin mismatch'}
 $pem=Get-Content $key -Raw;if($pem -notmatch 'BEGIN PUBLIC KEY' -or $pem -match 'PRIVATE KEY'){throw 'Packaged key is not public-only PEM'}
 $extract=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-verify';if(Test-Path $extract){Remove-Item $extract -Recurse -Force};& npx --yes @electron/asar extract $asar $extract
-$main=Join-Path $extract 'main.js';$releaseMode=Join-Path $extract 'release-mode.json'
+$productRoots=@(Get-ChildItem $extract -Recurse -File -Filter 'package.json'|ForEach-Object{try{$metadata=Get-Content $_.FullName -Raw|ConvertFrom-Json;if($metadata.name -ceq 'growthmap-desktop' -and $metadata.main -ceq 'main.js'){$_.Directory.FullName}}catch{}})
+if($productRoots.Count -ne 1){throw 'Unique GrowthMap desktop application root absent from ASAR'}
+$appRoot=$productRoots[0];$main=Join-Path $appRoot 'main.js';$releaseMode=Join-Path $appRoot 'release-mode.json'
 if(-not(Test-Path $main -PathType Leaf) -or -not(Test-Path $releaseMode -PathType Leaf)){throw 'Real main or release metadata absent from ASAR'}
-$relativeFiles=Get-ChildItem $extract -Recurse -File|ForEach-Object{[IO.Path]::GetRelativePath($extract,$_.FullName)}
+$relativeFiles=Get-ChildItem $appRoot -Recurse -File|ForEach-Object{[IO.Path]::GetRelativePath($appRoot,$_.FullName)}
 foreach($needle in @('e2e-main.js','e2e-commercial-config.js','create-e2e-fixture')){if($relativeFiles -contains $needle -or ($relativeFiles|Where-Object{$_ -like "*$needle*"})){throw "Forbidden ASAR material: $needle"}}
 $sourceText=(Get-Content $main -Raw)
 if($sourceText -match 'PRIVATE KEY'){throw 'Forbidden ASAR material: PRIVATE KEY'}
