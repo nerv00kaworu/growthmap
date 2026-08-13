@@ -120,3 +120,21 @@ A deterministic external-input schema/template and operator draft are provided a
 Executable local-only monitoring, reconciliation, and authenticated SQLite
 backup/restore drills are documented in [`docs/LOCAL_OPS_DRILLS.md`](docs/LOCAL_OPS_DRILLS.md).
 They refuse unmarked/live-looking paths and are not production operations evidence.
+
+## Gift Admin / public claim bridge (source-only)
+
+Run as two separate loopback services behind route-specific Cloudflare ingress; never mount the
+admin app on `payments.growthmap.work`:
+
+```bash
+PYTHONPATH=services/payments:src/backend uvicorn 'growthmap_payments.gift_bridge:build_gift_bridge(load_gift_bridge_config("/etc/growthmap-payments/gift-bridge.json"), public=False)' --factory --host 127.0.0.1 --port <admin-port> --no-proxy-headers
+PYTHONPATH=services/payments:src/backend uvicorn 'growthmap_payments.gift_bridge:build_gift_bridge(load_gift_bridge_config("/etc/growthmap-payments/gift-bridge.json"), public=True)' --factory --host 127.0.0.1 --port <public-port> --no-proxy-headers
+```
+
+The fixed JSON config requires: `access_issuer` (`https://<team>.cloudflareaccess.com`),
+`access_audience` (the exact Access application AUD tag), `access_email`
+(`nerv00kaworu@gmail.com`), `access_jwks_url` (`<issuer>/cdn-cgi/access/certs`), absolute
+`session_hmac_key_file` (at least 32 random bytes), `session_ttl_seconds` (60–1800), and the
+existing signed Authority edge fields: `authority_origin`, `authority_id`, `authority_audience`,
+`edge_identity`, `edge_source`, absolute `edge_private_key_file`, and exact `signer_identity`.
+The Authority DB remains owned by Authority; the bridge adds no persistent database.

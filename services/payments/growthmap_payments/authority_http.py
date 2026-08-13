@@ -30,6 +30,15 @@ class SignedAuthorityHTTPAdapter:
         "read_external_revocation_acknowledgement": "/v1/service/revocations/read",
         "issue_activation_challenge": "/v1/service/activation/challenge",
         "activate_challenge": "/v1/service/activation/complete",
+        "create_gift": "/v1/service/gifts/create",
+        "list_gifts": "/v1/service/gifts/list",
+        "get_gift": "/v1/service/gifts/get",
+        "recover_gift": "/v1/service/gifts/recover",
+        "revoke_gift": "/v1/service/gifts/revoke",
+        "list_gift_devices": "/v1/service/gifts/devices",
+        "deactivate_gift_device": "/v1/service/gifts/devices/deactivate",
+        "gift_claim_challenge": "/v1/service/gifts/claim/challenge",
+        "gift_claim_complete": "/v1/service/gifts/claim/complete",
     }
 
     def __init__(self, *, origin: str, authority_id: str, audience: str,
@@ -157,3 +166,72 @@ class SignedAuthorityHTTPAdapter:
                         "issued_at", "next_check_in_at", "signature"))):
             raise AuthorityHTTPError("authority response invalid")
         return certificate
+
+
+# Gift response validation is deliberately exact: an Authority version drift fails closed.
+def _gift_public(adapter, value):
+    keys = ("gift_id", "license_id", "status", "edition", "major_version", "device_allowance",
+            "expires_at", "check_in_days", "created_at", "rotated_at", "revoked_at")
+    adapter._exact(value, keys)
+    if (type(value["gift_id"]) is not str or re.fullmatch(r"[0-9a-f-]{36}", value["gift_id"]) is None
+            or type(value["license_id"]) is not str or value["status"] not in {"active", "revoked"}
+            or value["edition"] not in {"personal", "pro", "studio"} or value["major_version"] != 1
+            or value["device_allowance"] not in {1, 2} or type(value["check_in_days"]) is not int
+            or type(value["created_at"]) is not str):
+        raise AuthorityHTTPError("authority response invalid")
+    return value
+
+
+def _claim_result(adapter, result, claim_key, device_public_key):
+    adapter._exact(result, ("state", "challenge")); challenge=result["challenge"]
+    adapter._exact(challenge, ("challenge_id", "nonce", "license_id", "device_public_key"))
+    if (result["state"] != "challenge_issued" or challenge["device_public_key"] != device_public_key
+            or re.fullmatch(r"gmc_[a-f0-9]{32}", challenge["challenge_id"] or "") is None
+            or type(claim_key) is not str): raise AuthorityHTTPError("authority response invalid")
+    return challenge
+
+
+def _create_gift(self, **policy):
+    value=self._post("create_gift", policy); claim=value.pop("claim_key", None)
+    _gift_public(self, value)
+    if type(claim) is not str or re.fullmatch(r"GMG1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]{32}", claim) is None:
+        raise AuthorityHTTPError("authority response invalid")
+    return value | {"claim_key": claim}
+def _list_gifts(self):
+    value=self._post("list_gifts", {}); self._exact(value,("gifts",))
+    if type(value["gifts"]) is not list or len(value["gifts"])>10000: raise AuthorityHTTPError("authority response invalid")
+    return [_gift_public(self,item) for item in value["gifts"]]
+def _get_gift(self,gift_id): return _gift_public(self,self._post("get_gift",{"gift_id":gift_id}))
+def _recover_gift(self,gift_id):
+    value=self._post("recover_gift",{"gift_id":gift_id});claim=value.pop("claim_key",None);_gift_public(self,value)
+    if type(claim) is not str or re.fullmatch(r"GMG1\.[0-9a-f-]{36}\.[A-Za-z0-9_-]{32}",claim) is None:raise AuthorityHTTPError("authority response invalid")
+    return value|{"claim_key":claim}
+def _revoke_gift(self,gift_id): return _gift_public(self,self._post("revoke_gift",{"gift_id":gift_id}))
+def _list_gift_devices(self,gift_id):
+    value=self._post("list_gift_devices",{"gift_id":gift_id});self._exact(value,("devices",))
+    if type(value["devices"]) is not list:raise AuthorityHTTPError("authority response invalid")
+    for item in value["devices"]:
+        self._exact(item,("device_id","device_public_key","activated_at","deactivated_at"))
+        if type(item["device_id"]) is not str or type(item["device_public_key"]) is not str:raise AuthorityHTTPError("authority response invalid")
+    return value["devices"]
+def _deactivate_gift_device(self,gift_id,device_id):
+    value=self._post("deactivate_gift_device",{"gift_id":gift_id,"device_id":device_id});self._exact(value,("deactivated",))
+    if type(value["deactivated"]) is not bool:raise AuthorityHTTPError("authority response invalid")
+    return value["deactivated"]
+def _gift_claim_challenge(self,claim_key,device_public_key):return _claim_result(self,self._post("gift_claim_challenge",{"claim_key":claim_key,"device_public_key":device_public_key}),claim_key,device_public_key)
+def _gift_claim_complete(self,challenge_id,proof):
+    result=self._post("gift_claim_complete",{"challenge_id":challenge_id,"proof":proof});self._exact(result,("state","certificate"))
+    if result["state"]!="activated":raise AuthorityHTTPError("authority response invalid")
+    # Reuse the complete certificate validator without issuing another request.
+    certificate=result["certificate"];required=("schema_version","certificate_type","product","edition","license_id","activation_id","major_version","device_allowance","device_id","device_public_key","issued_at","expires_at","revoked_at","max_active_projects","next_check_in_at","signature");self._exact(certificate,required)
+    if certificate["schema_version"]!=2 or certificate["certificate_type"]!="growthmap_device_activation":raise AuthorityHTTPError("authority response invalid")
+    return certificate
+SignedAuthorityHTTPAdapter.create_gift=_create_gift
+SignedAuthorityHTTPAdapter.list_gifts=_list_gifts
+SignedAuthorityHTTPAdapter.get_gift=_get_gift
+SignedAuthorityHTTPAdapter.recover_gift=_recover_gift
+SignedAuthorityHTTPAdapter.revoke_gift=_revoke_gift
+SignedAuthorityHTTPAdapter.list_gift_devices=_list_gift_devices
+SignedAuthorityHTTPAdapter.deactivate_gift_device=_deactivate_gift_device
+SignedAuthorityHTTPAdapter.gift_claim_challenge=_gift_claim_challenge
+SignedAuthorityHTTPAdapter.gift_claim_complete=_gift_claim_complete

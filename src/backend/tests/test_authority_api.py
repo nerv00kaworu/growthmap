@@ -537,7 +537,11 @@ def test_production_omitted_policy_is_exact_service_only_and_invalid_policy_fail
     application=production_app(authority)
     expected={"/v1/authority/identity","/v1/service/entitlements","/v1/service/entitlements/read",
         "/v1/service/revocations","/v1/service/revocations/read",
-        "/v1/service/activation/challenge","/v1/service/activation/complete"}
+        "/v1/service/activation/challenge","/v1/service/activation/complete",
+        "/v1/service/gifts/create","/v1/service/gifts/list","/v1/service/gifts/get",
+        "/v1/service/gifts/recover","/v1/service/gifts/revoke","/v1/service/gifts/devices",
+        "/v1/service/gifts/devices/deactivate","/v1/service/gifts/claim/challenge",
+        "/v1/service/gifts/claim/complete"}
     assert {route.path for route in application.routes if getattr(route,'path','').startswith('/v1/')}==expected
     assert gift_constructions==[]
     for policy in ('all','ALL','service_only','service-only-alias','',None,False,1,object()):
@@ -554,7 +558,11 @@ def test_production_excluded_route_alias_matrix_and_identity_are_effect_free(aut
     application=production_app(authority)
     expected={"/v1/authority/identity","/v1/service/entitlements","/v1/service/entitlements/read",
         "/v1/service/revocations","/v1/service/revocations/read",
-        "/v1/service/activation/challenge","/v1/service/activation/complete"}
+        "/v1/service/activation/challenge","/v1/service/activation/complete",
+        "/v1/service/gifts/create","/v1/service/gifts/list","/v1/service/gifts/get",
+        "/v1/service/gifts/recover","/v1/service/gifts/revoke","/v1/service/gifts/devices",
+        "/v1/service/gifts/devices/deactivate","/v1/service/gifts/claim/challenge",
+        "/v1/service/gifts/claim/complete"}
     excluded=("/v1/licenses/activation/challenge","/v1/licenses/activation/complete",
         "/v1/gifts/claim/challenge","/v1/gifts/claim/complete","/v1/private/devices/deactivate")
     for path in excluded:
@@ -597,7 +605,11 @@ def test_service_only_route_policy_is_exact_closed_surface_and_excluded_methods_
     application=app(authority,route_policy='service-only')
     expected={"/v1/authority/identity","/v1/service/entitlements","/v1/service/entitlements/read",
         "/v1/service/revocations","/v1/service/revocations/read",
-        "/v1/service/activation/challenge","/v1/service/activation/complete"}
+        "/v1/service/activation/challenge","/v1/service/activation/complete",
+        "/v1/service/gifts/create","/v1/service/gifts/list","/v1/service/gifts/get",
+        "/v1/service/gifts/recover","/v1/service/gifts/revoke","/v1/service/gifts/devices",
+        "/v1/service/gifts/devices/deactivate","/v1/service/gifts/claim/challenge",
+        "/v1/service/gifts/claim/complete"}
     assert {route.path for route in application.routes if getattr(route,'path','').startswith('/v1/')}==expected
     client=TestClient(application)
     excluded=("/v1/licenses/activation/challenge","/v1/licenses/activation/complete",

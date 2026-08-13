@@ -118,6 +118,22 @@ class GiftChallengeBody(StrictModel):
     device_public_key: DevicePublicKey
 
 
+class ServiceGiftCreateBody(StrictModel):
+    edition: Literal["personal", "pro", "studio"] = "personal"
+    major_version: Literal[1] = 1
+    seat_limit: Literal[1, 2] = 2
+    expires_at: None = None
+    check_in_days: Annotated[int, Field(strict=True, ge=1, le=365)] = 30
+
+
+class ServiceGiftIdBody(StrictModel):
+    gift_id: Annotated[str, StringConstraints(strict=True, pattern=r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")]
+
+
+class ServiceGiftDeviceBody(ServiceGiftIdBody):
+    device_id: DeviceId
+
+
 class CompleteBody(StrictModel):
     challenge_id: ChallengeId
     proof: Proof
@@ -846,6 +862,52 @@ def create_authority_app(
         except Exception:
             raise _error(404) from None
 
+    async def service_gift(request: Request, model, operation):
+        headers = _raw_headers(request); value, _, digest = await _body(request, model, headers)
+        authenticated = service_preflight(request, value, digest, headers)
+        try:
+            return service_execute(authenticated, lambda: operation(value))
+        except HTTPException:
+            raise
+        except Exception:
+            raise _error(404) from None
+
+    @app.post("/v1/service/gifts/create")
+    async def service_gift_create(request: Request):
+        return await service_gift(request, ServiceGiftCreateBody, lambda value: GiftLicenseService(authority).create(**value.model_dump()))
+
+    @app.post("/v1/service/gifts/list")
+    async def service_gift_list(request: Request):
+        return await service_gift(request, StrictModel, lambda _value: {"gifts": GiftLicenseService(authority).list()})
+
+    @app.post("/v1/service/gifts/get")
+    async def service_gift_get(request: Request):
+        return await service_gift(request, ServiceGiftIdBody, lambda value: GiftLicenseService(authority).get(value.gift_id))
+
+    @app.post("/v1/service/gifts/recover")
+    async def service_gift_recover(request: Request):
+        return await service_gift(request, ServiceGiftIdBody, lambda value: GiftLicenseService(authority).rotate(value.gift_id))
+
+    @app.post("/v1/service/gifts/revoke")
+    async def service_gift_revoke(request: Request):
+        return await service_gift(request, ServiceGiftIdBody, lambda value: GiftLicenseService(authority).revoke(value.gift_id))
+
+    @app.post("/v1/service/gifts/devices")
+    async def service_gift_devices(request: Request):
+        return await service_gift(request, ServiceGiftIdBody, lambda value: {"devices": GiftLicenseService(authority).devices(value.gift_id)})
+
+    @app.post("/v1/service/gifts/devices/deactivate")
+    async def service_gift_deactivate(request: Request):
+        return await service_gift(request, ServiceGiftDeviceBody, lambda value: {"deactivated": GiftLicenseService(authority).deactivate(value.gift_id, value.device_id)})
+
+    @app.post("/v1/service/gifts/claim/challenge", response_model=ChallengeResponse)
+    async def service_gift_claim_challenge(request: Request):
+        return await service_gift(request, GiftChallengeBody, lambda value: {"state": "challenge_issued", "challenge": GiftLicenseService(authority).challenge(value.claim_key, value.device_public_key)})
+
+    @app.post("/v1/service/gifts/claim/complete", response_model=ActivationResponse)
+    async def service_gift_claim_complete(request: Request):
+        return await service_gift(request, CompleteBody, lambda value: {"state": "activated", "certificate": GiftLicenseService(authority).complete(value.challenge_id, value.proof)})
+
     async def deactivate(request: Request):
         headers = _raw_headers(request); value, _, digest = await _body(request, DeactivateBody, headers)
         owner_auth(request, digest, headers, value, _path(request))
@@ -863,7 +925,11 @@ def create_authority_app(
     else:
         allowed=frozenset(("/v1/authority/identity","/v1/service/entitlements",
             "/v1/service/entitlements/read","/v1/service/revocations","/v1/service/revocations/read",
-            "/v1/service/activation/challenge","/v1/service/activation/complete"))
+            "/v1/service/activation/challenge","/v1/service/activation/complete",
+            "/v1/service/gifts/create","/v1/service/gifts/list","/v1/service/gifts/get",
+            "/v1/service/gifts/recover","/v1/service/gifts/revoke","/v1/service/gifts/devices",
+            "/v1/service/gifts/devices/deactivate","/v1/service/gifts/claim/challenge",
+            "/v1/service/gifts/claim/complete"))
         @app.middleware("http")
         async def closed_production_route_surface(request: Request, call_next):
             # Exact decoded and raw path agreement prevents slash/percent/normalization aliases.
