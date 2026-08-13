@@ -8,7 +8,9 @@ const config=required('GROWTHMAP_PRODUCTION_PUBLIC_CONFIG');
 const publicKey=required('GROWTHMAP_PRODUCTION_LICENSE_PUBLIC_KEY');
 module.exports={
  ...base,
- files:[...base.files.filter(x=>x!=='release-mode.json'&&x!=='commercial-config.json'),{from:'release-mode-production-unsigned.json',to:'release-mode.json'}],
+ // The workflow materializes the reviewed production metadata at the canonical
+ // release-mode.json path before electron-builder evaluates the ordinary file list.
+ files:[...base.files.filter(x=>x!=='commercial-config.json')],
  extraResources:[
   ...base.extraResources.filter(x=>x.to!=='commercial-config.json'&&x.to!=='commercial/license_public_key.pem'),
   {from:config,to:'commercial-config.json'},

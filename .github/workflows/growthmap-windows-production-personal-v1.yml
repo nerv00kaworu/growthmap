@@ -69,7 +69,10 @@ jobs:
           WIN_CSC_LINK: ''
           WIN_CSC_KEY_PASSWORD: ''
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run dist:win:production-unsigned
+        run: |
+          Copy-Item release-mode.json (Join-Path $env:RUNNER_TEMP 'growthmap-release-mode.source.json')
+          Copy-Item release-mode-production-unsigned.json release-mode.json -Force
+          try { npm run dist:win:production-unsigned } finally { Copy-Item (Join-Path $env:RUNNER_TEMP 'growthmap-release-mode.source.json') release-mode.json -Force }
       - name: Verify real main, exact public config, unsigned state and write hashes
         shell: pwsh
         run: ./.github/workflows/scripts/verify-production-unsigned-package.ps1 -ExpectedPin '${{ inputs.g1_public_key_sha256 }}' -SourceSha '${{ github.sha }}'
