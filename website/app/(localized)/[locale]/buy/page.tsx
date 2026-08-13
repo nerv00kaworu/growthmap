@@ -1,6 +1,7 @@
 import {localizedMetadata} from '../../../../content/metadata';
 import {core,parseLocale} from '../../../../content/i18n';
 import {buyPlans} from '../../../../content/buy-content';
+import {whopCheckoutUrl} from '../../../../content/whop-checkout';
 import {notFound} from 'next/navigation';
 
 export const generateMetadata=({params}:{params:Promise<{locale:string}>})=>localizedMetadata(params,'buy');
@@ -33,6 +34,7 @@ export default async function BuyPage({params}:{params:Promise<{locale:string}>}
       </div>
     </section>
     <ol className="payment-flow">{c.stages.map((stage:string,i:number)=><li key={stage} className={i===0?'current':''}><b>0{i+1}</b><span>{stage}</span><em>{i===0?c.current:c.locked}</em></li>)}</ol>
-    <p className="notice">{c.guard}</p><button disabled aria-disabled="true">{c.disabled}</button>
+    <p className="notice">{c.guard}</p>
+    {whopCheckoutUrl?<div className="checkout-action"><p>{c.checkoutNotice}</p><a className="button" href={whopCheckoutUrl} rel="noreferrer">{c.checkout}</a></div>:<button disabled aria-disabled="true">{c.disabled}</button>}
   </section>
 }
