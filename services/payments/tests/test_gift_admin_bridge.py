@@ -75,6 +75,8 @@ def test_csrf_origin_batch_and_one_time_secret_not_in_list_or_logs(caplog):
     key=rsa.generate_private_key(public_exponent=65537,key_size=2048);authority=Authority()
     client=TestClient(create_gift_admin_app(authority=authority,access=verifier(key),sessions=SessionCodec(b"k"*32,ttl=300)),base_url="https://admin-api.growthmap.work")
     page=login(client,key);assert page.status_code==200
+    assert "可直接交給親友的 GMG1 授權碼" in page.text
+    assert "複製授權碼" in page.text and "下載 TXT" in page.text
     csrf=page.text.split("name=csrf content='")[1].split("'")[0]
     body={"count":2,"edition":"personal","major_version":1,"seat_limit":2,"expires_at":None,"check_in_days":30}
     assert client.post("/v1/admin/gifts/create",json=body).status_code==403
