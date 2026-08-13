@@ -1,9 +1,41 @@
 import type {Locale} from './i18n';
 
-export const licenseContent:Record<Locale,{
- eyebrow:string;title:string;lead:string;early:string;standard:string;earlyBody:string;standardBody:string;buyEarly:string;buyStandard:string;includedTitle:string;included:string[];flowTitle:string;flow:string[];friendTitle:string;friendBody:string;updatesTitle:string;updatesBody:string;download:string;
-}>={
- 'zh-TW':{eyebrow:'PERSONAL v1 授權',title:'一次購買，永久使用 GrowthMap major v1。',lead:'Personal v1 可啟用不限專案，供授權簽發對象最多使用於 2 台個人裝置。付款與授權由 Whop、GrowthMap License Experience 與 Production Authority 完成。',early:'Early｜前 50 筆',standard:'Standard｜第 51 筆起',earlyBody:'US$10，一次性付款。名額依全球已確認並成功發證的付款順序計算；瀏覽或開啟結帳不保留名額。',standardBody:'US$29，一次性付款。Early 名額用完後使用此正式方案。',buyEarly:'購買 Early — US$10',buyStandard:'購買 Standard — US$29',includedTitle:'Personal v1 包含',included:['major v1 永久授權','不限同時啟用的專案數量','最多 2 台個人裝置','同一 major v1 的更新權利'],flowTitle:'購買與啟用',flow:['在 Whop 完成 Early 或 Standard 付款。','進入 Whop 內的 GrowthMap License Experience。','複製只屬於你的 GM1 啟用碼。','在 Windows 桌面版輸入完整啟用碼。','退款或爭議成立時，系統會撤銷對應授權。'],friendTitle:'親友版',friendBody:'親友版尚未正式啟用，也尚未生成可發放的親友金鑰。它不是 Early 方案；正式可用前不會對外宣稱已完成。',updatesTitle:'目前版本的更新方式',updatesBody:'0.1.0-desktop.2 的線上更新功能目前停用。新版本發布時，請回下載頁取得新版 installer 並覆蓋安裝；本機專案資料庫會保留。',download:'前往 Windows 下載頁'},
- 'zh-CN':{eyebrow:'PERSONAL v1 授权',title:'一次购买，永久使用 GrowthMap major v1。',lead:'Personal v1 可启用不限项目，供授权签发对象最多用于 2 台个人设备。付款与授权由 Whop、GrowthMap License Experience 与 Production Authority 完成。',early:'Early｜前 50 笔',standard:'Standard｜第 51 笔起',earlyBody:'US$10，一次性付款。名额按全球已确认并成功发证的付款顺序计算；浏览或打开结账不会保留名额。',standardBody:'US$29，一次性付款。Early 名额用完后使用此正式方案。',buyEarly:'购买 Early — US$10',buyStandard:'购买 Standard — US$29',includedTitle:'Personal v1 包含',included:['major v1 永久授权','不限同时启用的项目数量','最多 2 台个人设备','同一 major v1 的更新权利'],flowTitle:'购买与启用',flow:['在 Whop 完成 Early 或 Standard 付款。','进入 Whop 内的 GrowthMap License Experience。','复制只属于你的 GM1 激活码。','在 Windows 桌面版输入完整激活码。','退款或争议成立时，系统会撤销对应授权。'],friendTitle:'亲友版',friendBody:'亲友版尚未正式启用，也尚未生成可发放的亲友密钥。它不是 Early 方案；正式可用前不会对外宣称已完成。',updatesTitle:'当前版本的更新方式',updatesBody:'0.1.0-desktop.2 的在线更新功能目前停用。新版本发布时，请回下载页获取新版 installer 并覆盖安装；本地项目数据库会保留。',download:'前往 Windows 下载页'},
- en:{eyebrow:'PERSONAL v1 LICENSE',title:'One purchase, perpetual use of GrowthMap major v1.',lead:'Personal v1 unlocks unlimited active projects for the named license holder on up to 2 personal devices. Whop, the GrowthMap License Experience, and the Production Authority handle payment and fulfillment.',early:'Early | first 50',standard:'Standard | payment 51 onward',earlyBody:'US$10 one-time. Allocation follows worldwide payment-confirmed, successfully fulfilled order; visiting checkout does not reserve a slot.',standardBody:'US$29 one-time. This is the production plan after Early allocation is exhausted.',buyEarly:'Buy Early — US$10',buyStandard:'Buy Standard — US$29',includedTitle:'Personal v1 includes',included:['Perpetual major v1 license','Unlimited simultaneously active projects','Up to 2 personal devices','Updates released within major v1'],flowTitle:'Purchase and activation',flow:['Complete an Early or Standard purchase on Whop.','Open the GrowthMap License Experience inside Whop.','Copy the GM1 activation key visible only to your verified account.','Enter the complete key in the Windows desktop app.','A completed refund or dispute revokes the linked license.'],friendTitle:'Friends & family edition',friendBody:'The friends-and-family edition is not live and no distributable friend key has been generated. It is separate from Early and will not be represented as complete before activation.',updatesTitle:'How this release updates',updatesBody:'Online updates are disabled in 0.1.0-desktop.2. When a new build is published, download the new installer and install it over the existing app; local project databases remain in place.',download:'Open the Windows download page'}
+type LicenseContent={
+  eyebrow:string;title:string;lead:string;plansLabel:string;
+  early:string;earlyBadge:string;earlyPrice:string;earlyBody:string;buyEarly:string;
+  standard:string;standardBadge:string;standardPrice:string;standardBody:string;buyStandard:string;
+  includedTitle:string;included:string[];flowTitle:string;flow:string[];download:string;
+};
+
+export const licenseContent:Record<Locale,LicenseContent>={
+  'zh-TW':{
+    eyebrow:'PERSONAL v1 授權',title:'一次購買，永久使用 GrowthMap major v1。',
+    lead:'解鎖不限同時啟用的專案，最多可在 2 台個人裝置使用。兩種價格提供相同的 Personal v1 授權內容。',
+    plansLabel:'選擇 Personal v1 方案',
+    early:'Early',earlyBadge:'全球前 50 筆',earlyPrice:'US$10',earlyBody:'一次性付款。依付款確認並成功發證的順序分配；開啟結帳不會保留名額。',buyEarly:'購買 Early — US$10',
+    standard:'Standard',standardBadge:'第 51 筆起',standardPrice:'US$29',standardBody:'一次性付款。Early 名額用完後使用此正式價格，授權內容完全相同。',buyStandard:'購買 Standard — US$29',
+    includedTitle:'Personal v1 包含',included:['major v1 永久授權','不限同時啟用的專案數量','最多 2 台個人裝置','同一 major v1 的更新權利'],
+    flowTitle:'購買與啟用',flow:['在 Whop 完成 Early 或 Standard 付款。','進入 Whop 內的 GrowthMap License Experience。','複製只屬於你的 GM1 啟用碼。','在 Windows 桌面版輸入完整啟用碼。'],
+    download:'先下載 Windows 版本'
+  },
+  'zh-CN':{
+    eyebrow:'PERSONAL v1 授权',title:'一次购买，永久使用 GrowthMap major v1。',
+    lead:'解锁不限同时启用的项目，最多可在 2 台个人设备使用。两种价格提供相同的 Personal v1 授权内容。',
+    plansLabel:'选择 Personal v1 方案',
+    early:'Early',earlyBadge:'全球前 50 笔',earlyPrice:'US$10',earlyBody:'一次性付款。按付款确认并成功发证的顺序分配；打开结账不会保留名额。',buyEarly:'购买 Early — US$10',
+    standard:'Standard',standardBadge:'第 51 笔起',standardPrice:'US$29',standardBody:'一次性付款。Early 名额用完后使用此正式价格，授权内容完全相同。',buyStandard:'购买 Standard — US$29',
+    includedTitle:'Personal v1 包含',included:['major v1 永久授权','不限同时启用的项目数量','最多 2 台个人设备','同一 major v1 的更新权利'],
+    flowTitle:'购买与激活',flow:['在 Whop 完成 Early 或 Standard 付款。','进入 Whop 内的 GrowthMap License Experience。','复制只属于你的 GM1 激活码。','在 Windows 桌面版输入完整激活码。'],
+    download:'先下载 Windows 版本'
+  },
+  en:{
+    eyebrow:'PERSONAL v1 LICENSE',title:'One purchase. Perpetual use of GrowthMap major v1.',
+    lead:'Unlock unlimited active projects on up to 2 personal devices. Both prices include the same Personal v1 license.',
+    plansLabel:'Choose a Personal v1 option',
+    early:'Early',earlyBadge:'First 50 worldwide',earlyPrice:'US$10',earlyBody:'One-time payment. Places are assigned after confirmed payment and successful license fulfillment; opening checkout does not reserve one.',buyEarly:'Buy Early — US$10',
+    standard:'Standard',standardBadge:'From purchase 51',standardPrice:'US$29',standardBody:'One-time payment. This price begins after Early places are filled and includes the exact same license.',buyStandard:'Buy Standard — US$29',
+    includedTitle:'Personal v1 includes',included:['Perpetual major v1 license','Unlimited simultaneously active projects','Up to 2 personal devices','Updates released within major v1'],
+    flowTitle:'Purchase and activation',flow:['Complete an Early or Standard purchase on Whop.','Open the GrowthMap License Experience inside Whop.','Copy the GM1 activation key shown only to your verified account.','Enter the complete key in the Windows desktop app.'],
+    download:'Download the Windows version first'
+  }
 };
