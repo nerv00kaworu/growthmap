@@ -35,7 +35,7 @@ def setup(tmp_path, authority=None):
     path = tmp_path / "inbox.sqlite3"
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE inbox(webhook_id TEXT PRIMARY KEY,event_type TEXT NOT NULL,payload_sha256 TEXT NOT NULL,payload BLOB NOT NULL,status TEXT NOT NULL)")
-    worker = Worker(path, authority or Authority()); worker.initialize(); return worker
+    worker = Worker(path, authority or Authority(), b"d" * 32); worker.initialize(); return worker
 
 
 def envelope(event_id, event_type="payment.succeeded", payment_id="pay_1", *, early=False, status=None, amount=None):
@@ -44,7 +44,7 @@ def envelope(event_id, event_type="payment.succeeded", payment_id="pay_1", *, ea
     total = amount if amount is not None else (10 if early else 29)
     status = status or {"payment.succeeded": "succeeded", "refund.created": "refunded", "dispute.created": "open"}.get(event_type, "whatever")
     payment = {"id": payment_id, "status": status, "currency": "usd", "total": total,
-               "product": {"id": product}, "plan": {"id": plan}}
+               "product": {"id": product}, "plan": {"id": plan}, "user": {"id": "user_buyer_1"}}
     data = payment if event_type == "payment.succeeded" else {"payment": payment}
     return json.dumps({"id": event_id, "type": event_type, "company_id": "biz_RVr0w7JHwRZgIq",
                        "timestamp": "2026-08-13T02:00:00Z", "data": data}, separators=(",", ":")).encode()
@@ -69,6 +69,30 @@ def test_grants_personal_v1_idempotently_and_ignores_unknown_selected_event(tmp_
     with worker._db() as db:
         grant = dict(db.execute("SELECT * FROM whop_fulfillments").fetchone())
     assert grant["state"] == "granted" and grant["tier"] == "standard" and len(authority.entitlements) == 1
+
+
+def test_buyer_delivery_uses_real_data_user_id_and_desktop_gm1_capability(tmp_path):
+    authority = Authority(); worker = setup(tmp_path, authority)
+    raw = envelope("buyer", payment_id="pay_buyer"); insert(worker, "buyer", raw)
+    assert worker.run_once()["granted"] == 1
+    assert worker.delivery.list_for_verified_user("user_other") == []
+    delivered = worker.delivery.list_for_verified_user("user_buyer_1")
+    assert len(delivered) == 1 and delivered[0]["payment_id"] == "pay_buyer"
+    prefix, order_id, recovery = delivered[0]["activation_key"].split(".")
+    assert prefix == "GM1" and len(recovery) == 32
+    entitlement = worker.delivery.authenticated_entitlement(order_id, recovery)
+    assert entitlement["license_id"] in authority.entitlements.values()
+    with worker._db() as db:
+        stored = dict(db.execute("SELECT * FROM whop_fulfillments").fetchone())
+    assert recovery.encode() not in bytes(stored["recovery_ciphertext"])
+    assert stored["recovery_code_hash"] == hashlib.sha256(recovery.encode()).hexdigest()
+
+
+def test_payment_without_real_data_user_id_fails_closed(tmp_path):
+    authority = Authority(); worker = setup(tmp_path, authority)
+    value = json.loads(envelope("missing-user")); del value["data"]["user"]
+    raw = json.dumps(value, separators=(",", ":")).encode(); insert(worker, "missing-user", raw)
+    assert worker.run_once()["failed"] == 1 and not authority.entitlements
 
 
 def test_refund_and_dispute_revoke_only_exact_linked_license(tmp_path):
@@ -107,7 +131,7 @@ def test_early_first_fifty_is_atomic_under_concurrency(tmp_path):
 def test_retry_is_bounded_backoff_and_error_is_digest_only(tmp_path):
     authority = Authority(); authority.fail = True
     clock = [datetime(2026, 8, 13, 2, 0, tzinfo=timezone.utc)]
-    worker = Worker((tmp_path / "inbox.sqlite3"), authority, max_attempts=2, clock=lambda: clock[0])
+    worker = Worker((tmp_path / "inbox.sqlite3"), authority, b"d" * 32, max_attempts=2, clock=lambda: clock[0])
     with sqlite3.connect(worker.db_path) as db:
         db.execute("CREATE TABLE inbox(webhook_id TEXT PRIMARY KEY,event_type TEXT NOT NULL,payload_sha256 TEXT NOT NULL,payload BLOB NOT NULL,status TEXT NOT NULL)")
     worker.initialize(); raw = envelope("retry"); insert(worker, "retry", raw)

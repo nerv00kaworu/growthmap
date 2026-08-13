@@ -7,15 +7,21 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
+import re
+import secrets
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .authority_http import SignedAuthorityHTTPAdapter
 
@@ -51,6 +57,7 @@ class Event:
     status: str
     occurred_at: str
     payload_sha256: str
+    whop_user_id: str | None
 
 
 def _strict_json(raw: bytes) -> dict[str, Any]:
@@ -134,8 +141,16 @@ def parse_event(webhook_id: str, event_type: str, raw: bytes, stored_digest: str
     if not amount.is_finite():
         raise PermanentFulfillmentError("invalid verified event")
     occurred_at = _timestamp(_required(envelope, "timestamp", "created_at"))
+    whop_user_id = None
+    if event_type == "payment.succeeded":
+        # Whop's real v1 payment.succeeded object identifies the purchaser at
+        # data.user.id. Never accept metadata/customer/email as an identity substitute.
+        user = data.get("user")
+        if type(user) is not dict:
+            raise PermanentFulfillmentError("invalid verified event")
+        whop_user_id = _identifier(_required(user, "id"))
     return Event(webhook_id, event_type, payment_id, company_id, product_id, plan_id,
-                 currency, amount, status, occurred_at, stored_digest)
+                 currency, amount, status, occurred_at, stored_digest, whop_user_id)
 
 
 def _validate_semantics(event: Event) -> tuple[str, Decimal]:
@@ -154,7 +169,8 @@ def _validate_semantics(event: Event) -> tuple[str, Decimal]:
 
 def _canonical_event_digest(event: Event) -> str:
     value = [event.event_type, event.payment_id, event.company_id, event.product_id,
-             event.plan_id, event.currency.lower(), str(event.amount), event.status.lower()]
+             event.plan_id, event.currency.lower(), str(event.amount), event.status.lower(),
+             event.whop_user_id]
     return hashlib.sha256(json.dumps(value, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -171,7 +187,12 @@ CREATE TABLE IF NOT EXISTS whop_fulfillments(
  state TEXT NOT NULL CHECK(state IN('granting','granted','revoked')),
  grant_webhook_id TEXT NOT NULL UNIQUE,
  granted_at TEXT,
- revoked_at TEXT
+ revoked_at TEXT,
+ whop_user_id TEXT NOT NULL,
+ order_id TEXT NOT NULL UNIQUE,
+ recovery_code_hash TEXT NOT NULL UNIQUE,
+ recovery_nonce BLOB NOT NULL,
+ recovery_ciphertext BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS whop_fulfillment_attempts(
  webhook_id TEXT PRIMARY KEY,
@@ -181,13 +202,76 @@ CREATE TABLE IF NOT EXISTS whop_fulfillment_attempts(
  last_error_digest TEXT
 );
 CREATE INDEX IF NOT EXISTS whop_fulfillments_tier_state ON whop_fulfillments(tier,state);
+CREATE TRIGGER IF NOT EXISTS whop_fulfillment_binding_immutable BEFORE UPDATE ON whop_fulfillments
+WHEN NEW.payment_id IS NOT OLD.payment_id OR NEW.commercial_digest IS NOT OLD.commercial_digest OR
+ NEW.product_id IS NOT OLD.product_id OR NEW.plan_id IS NOT OLD.plan_id OR NEW.tier IS NOT OLD.tier OR
+ NEW.source_id IS NOT OLD.source_id OR NEW.payload_digest IS NOT OLD.payload_digest OR
+ NEW.grant_webhook_id IS NOT OLD.grant_webhook_id OR NEW.whop_user_id IS NOT OLD.whop_user_id OR
+ NEW.order_id IS NOT OLD.order_id OR NEW.recovery_code_hash IS NOT OLD.recovery_code_hash OR
+ NEW.recovery_nonce IS NOT OLD.recovery_nonce OR NEW.recovery_ciphertext IS NOT OLD.recovery_ciphertext
+BEGIN SELECT RAISE(ABORT,'Whop fulfillment binding is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS whop_fulfillment_no_delete BEFORE DELETE ON whop_fulfillments
+BEGIN SELECT RAISE(ABORT,'Whop fulfillment is append-only'); END;
 """
 
 
+class BuyerDeliveryStore:
+    """Buyer capability store shared by the verified Experience and activation API.
+
+    The caller supplies only a Whop user id obtained from the live, verified
+    Experience session. This class deliberately does not accept user ids from
+    query strings, request bodies, or unverified headers.
+    """
+    def __init__(self, db_path: Path, encryption_key: bytes):
+        if type(encryption_key) is not bytes or len(encryption_key) != 32:
+            raise FulfillmentError("buyer delivery key unavailable")
+        self.db_path = Path(db_path); self._aead = AESGCM(encryption_key)
+
+    def _db(self):
+        db = sqlite3.connect(self.db_path, timeout=30)
+        db.row_factory = sqlite3.Row
+        return db
+
+    @staticmethod
+    def _user_id(value: str) -> str:
+        if type(value) is not str or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,191}", value):
+            raise FulfillmentError("verified buyer identity invalid")
+        return value
+
+    def _decrypt(self, row) -> str:
+        aad = ("growthmap-whop-delivery-v1\0" + row["payment_id"] + "\0" +
+               row["whop_user_id"] + "\0" + row["order_id"]).encode()
+        try:
+            code = self._aead.decrypt(bytes(row["recovery_nonce"]), bytes(row["recovery_ciphertext"]), aad).decode("ascii")
+        except Exception:
+            raise FulfillmentError("buyer delivery unavailable") from None
+        if not re.fullmatch(r"[A-Za-z0-9_-]{32}", code) or not hmac.compare_digest(hashlib.sha256(code.encode()).hexdigest(), row["recovery_code_hash"]):
+            raise FulfillmentError("buyer delivery unavailable")
+        return code
+
+    def list_for_verified_user(self, verified_user_id: str) -> list[dict[str, str]]:
+        user_id = self._user_id(verified_user_id)
+        with self._db() as db:
+            rows = db.execute("SELECT * FROM whop_fulfillments WHERE whop_user_id=? AND state='granted' ORDER BY granted_at", (user_id,)).fetchall()
+        return [{"payment_id": row["payment_id"], "tier": row["tier"],
+                 "activation_key": f'GM1.{row["order_id"]}.{self._decrypt(row)}'} for row in rows]
+
+    def authenticated_entitlement(self, order_id: str, recovery_code: str):
+        if type(order_id) is not str or type(recovery_code) is not str:
+            return None
+        digest = hashlib.sha256(recovery_code.encode()).hexdigest()
+        with self._db() as db:
+            row = db.execute("SELECT order_id,license_id,state,recovery_code_hash FROM whop_fulfillments WHERE order_id=?", (order_id,)).fetchone()
+        if not row or row["state"] != "granted" or not row["license_id"] or not hmac.compare_digest(row["recovery_code_hash"], digest):
+            return None
+        return {"id": row["order_id"], "state": "license_issued", "license_id": row["license_id"]}
+
+
 class Worker:
-    def __init__(self, db_path: Path, authority: SignedAuthorityHTTPAdapter,
+    def __init__(self, db_path: Path, authority: SignedAuthorityHTTPAdapter, encryption_key: bytes,
                  *, max_attempts: int = MAX_ATTEMPTS, clock=lambda: datetime.now(timezone.utc)):
         self.db_path = Path(db_path); self.authority = authority; self.max_attempts = max_attempts; self.clock = clock
+        self.delivery = BuyerDeliveryStore(db_path, encryption_key)
         self._run_lock = threading.Lock()
         if not 1 <= max_attempts <= 32:
             raise FulfillmentError("worker configuration invalid")
@@ -204,6 +288,10 @@ class Worker:
             required = {"webhook_id", "event_type", "payload_sha256", "payload", "status"}
             if not required <= columns:
                 raise FulfillmentError("verified inbox schema unavailable")
+            fulfillment_columns = {row[1] for row in db.execute("PRAGMA table_info(whop_fulfillments)")}
+            buyer_columns = {"whop_user_id", "order_id", "recovery_code_hash", "recovery_nonce", "recovery_ciphertext"}
+            if not buyer_columns <= fulfillment_columns:
+                raise FulfillmentError("buyer delivery migration required")
 
     def run_once(self, limit: int = 25) -> dict[str, int]:
         # One worker object never overlaps batches. SQLite BEGIN IMMEDIATE below remains the
@@ -247,6 +335,8 @@ class Worker:
     def _grant(self, event: Event, tier: str) -> str:
         source_id = hashlib.sha256(("whop-payment\0" + event.payment_id).encode()).hexdigest()
         digest = _canonical_event_digest(event)
+        if event.whop_user_id is None:
+            raise PermanentFulfillmentError("verified buyer identity unavailable")
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT * FROM whop_fulfillments WHERE payment_id=?", (event.payment_id,)).fetchone()
@@ -258,8 +348,14 @@ class Worker:
             else:
                 if tier == "early" and db.execute("SELECT count(*) FROM whop_fulfillments WHERE tier='early' AND state IN('granting','granted','revoked')").fetchone()[0] >= EARLY_LIMIT:
                     db.rollback(); raise PermanentFulfillmentError("early allocation exhausted")
-                db.execute("INSERT INTO whop_fulfillments(payment_id,commercial_digest,product_id,plan_id,tier,source_id,payload_digest,state,grant_webhook_id) VALUES(?,?,?,?,?,?,?,'granting',?)",
-                           (event.payment_id, digest, event.product_id, event.plan_id, tier, source_id, event.payload_sha256, event.webhook_id))
+                order_id = str(uuid.uuid4())
+                recovery_code = secrets.token_urlsafe(24)
+                recovery_hash = hashlib.sha256(recovery_code.encode()).hexdigest()
+                nonce = secrets.token_bytes(12)
+                aad = ("growthmap-whop-delivery-v1\0" + event.payment_id + "\0" + event.whop_user_id + "\0" + order_id).encode()
+                ciphertext = self.delivery._aead.encrypt(nonce, recovery_code.encode("ascii"), aad)
+                db.execute("INSERT INTO whop_fulfillments(payment_id,commercial_digest,product_id,plan_id,tier,source_id,payload_digest,state,grant_webhook_id,whop_user_id,order_id,recovery_code_hash,recovery_nonce,recovery_ciphertext) VALUES(?,?,?,?,?,?,?,'granting',?,?,?,?,?,?)",
+                           (event.payment_id, digest, event.product_id, event.plan_id, tier, source_id, event.payload_sha256, event.webhook_id, event.whop_user_id, order_id, recovery_hash, nonce, ciphertext))
             identity = self.authority.handshake()
             body = {"source": "whop", "source_id": source_id, "payload_digest": event.payload_sha256,
                     "authority_id": identity["authority_id"], "signer_identity": identity,
@@ -332,13 +428,17 @@ def load_worker(config_path: Path) -> Worker:
     except Exception:
         raise FulfillmentError("worker configuration unavailable") from None
     required = {"database", "authority_origin", "authority_id", "authority_audience", "edge_identity",
-                "edge_source", "edge_private_key_file", "signer_identity"}
+                "edge_source", "edge_private_key_file", "signer_identity", "buyer_delivery_key_file"}
     if type(config) is not dict or set(config) != required:
         raise FulfillmentError("worker configuration invalid")
     adapter = SignedAuthorityHTTPAdapter(origin=config["authority_origin"], authority_id=config["authority_id"],
         audience=config["authority_audience"], edge_identity=config["edge_identity"], edge_source=config["edge_source"],
         private_key_file=Path(config["edge_private_key_file"]), signer_identity=config["signer_identity"])
-    return Worker(Path(config["database"]), adapter)
+    try:
+        delivery_key = Path(config["buyer_delivery_key_file"]).read_bytes()
+    except Exception:
+        raise FulfillmentError("buyer delivery key unavailable") from None
+    return Worker(Path(config["database"]), adapter, delivery_key)
 
 
 def main(argv=None):

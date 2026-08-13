@@ -43,7 +43,7 @@ seam and never bypass post-verification normalization.
 Example fixed config (values are references/identities, never inline private key material):
 
 ```json
-{"database":"/var/lib/growthmap-payments-production/whop-inbox.sqlite3","authority_origin":"http://127.0.0.1:8321","authority_id":"growthmap-authority-primary","authority_audience":"growthmap-authority","edge_identity":"payments-production","edge_source":"loopback-edge","edge_private_key_file":"/run/credentials/growthmap-payments/authority-edge.pem","signer_identity":{"authority_id":"growthmap-authority-primary","key_id":"<reviewed-key-id>","generation":1,"public_key_sha256":"<64-lowercase-hex>","attestation":"<reviewed-attestation>"}}
+{"database":"/var/lib/growthmap-payments-production/whop-inbox.sqlite3","authority_origin":"http://127.0.0.1:8321","authority_id":"growthmap-authority-primary","authority_audience":"growthmap-authority","edge_identity":"payments-production","edge_source":"loopback-edge","edge_private_key_file":"/run/credentials/growthmap-payments/authority-edge.pem","buyer_delivery_key_file":"/run/credentials/growthmap-payments/whop-buyer-delivery.key","signer_identity":{"authority_id":"growthmap-authority-primary","key_id":"<reviewed-key-id>","generation":1,"public_key_sha256":"<64-lowercase-hex>","attestation":"<reviewed-attestation>"}}
 ```
 
 Exact invocation:
@@ -52,7 +52,11 @@ Exact invocation:
 PYTHONPATH=services/payments:src/backend python3 -m growthmap_payments.whop_fulfillment --config /etc/growthmap-payments-production/whop-fulfillment.json --interval 2 --limit 25
 ```
 
-The worker does not perform Whop verification, query Whop, create synthetic payments, expose a listener, or widen any payment rail.
+The worker does not perform Whop verification, query Whop, create synthetic payments, expose a listener, or widen any payment rail. Whop is intentionally **not** inserted into `orders.rail`: that schema remains constrained to `x402`/`paypal`. Instead, the verified-inbox fulfillment ledger owns the Whop payment, exact `data.user.id`, generated UUID order capability, and Authority license link.
+
+For buyer delivery, configure `buyer_delivery_key_file` in the worker config. It must contain exactly 32 random bytes loaded from a service credential (not inline JSON/environment). Each accepted `payment.succeeded` generates a 32-character URL-safe recovery code with OS CSPRNG, stores SHA-256 for activation authentication, and stores only AES-256-GCM ciphertext/nonces for authenticated Experience redisplay. The AEAD associated data binds payment ID, verified Whop user ID, and generated order UUID. `BuyerDeliveryStore.list_for_verified_user()` must be called only after the live Experience adapter verifies the session and `checkAccess`; it returns `GM1.<UUID>.<recovery_code>`. `create_whop_buyer_router()` exposes that authenticated projection plus the existing `/v1/activation/challenge` and `/complete` desktop contract. Responses are no-store and no route accepts a caller-supplied buyer identity.
+
+Existing databases require `whop_fulfillment_migrations/001_buyer_delivery.sql` during a stopped-service maintenance window. Historical grants cannot be assigned a buyer or reconstructed into keys and therefore remain intentionally non-deliverable pending explicit reconciliation. The migration is not auto-run by the worker.
 
 Historical schema v4 authenticated terminal settlement evidence with HMAC-SHA256 using a dedicated external secret loaded only from `GROWTHMAP_SETTLEMENT_MAC_KEY_FILE` (minimum 32 bytes). The key is not stored in SQLite, logs, APIs, licenses, desktop artifacts, or packages. Loss of this key makes durable evidence unrecoverable and startup fails closed; key rotation requires a separately reviewed atomic re-MAC migration and is intentionally out of scope. Terminal settlement rows are database-trigger immutable except the evidence-preserving `settled` → `finalized_paid` transition. Release remains **NO-GO pending fresh independent review and Windows package-verifier CI**.
 
