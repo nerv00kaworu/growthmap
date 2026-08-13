@@ -1,7 +1,65 @@
 import type {Locale} from './i18n';
-export type ReleaseCopy={eyebrow:string;title:string;lead:string;status:string;cta:string;signed:string;unsigned:string;platformSuffix:string;fields:{version:string;commit:string;ci:string;file:string;bytes:string;sha:string;publisher:string;platform:string;requirements:string};requirements:string;warning:string;changelogTitle:string;changelog:string;updateTitle:string;updateBody:string;license:string};
+
+export type ReleaseCopy={
+  eyebrow:string; title:string; lead:string; cta:string; platformSuffix:string;
+  fields:{version:string;size:string;platform:string};
+  installTitle:string; installSteps:string[];
+  requirementsTitle:string; requirements:string;
+  warningTitle:string; warning:string;
+  updateTitle:string; updateBody:string;
+  license:string;
+};
+
 export const releaseCopy:Record<Locale,ReleaseCopy>={
-'zh-TW':{eyebrow:'WINDOWS 正式下載',title:'GrowthMap Personal v1 for Windows x64',lead:'此安裝包已由 exact-source Windows CI 建置與驗證。下載後請核對檔名與 SHA-256。',status:'公開發行：已上線',cta:'下載 Windows x64 installer',signed:'已簽章',unsigned:'未簽章',platformSuffix:'Production Personal v1',fields:{version:'版本',commit:'Commit',ci:'CI 執行編號',file:'檔名',bytes:'位元組',sha:'SHA-256',publisher:'發行者／簽章',platform:'平台',requirements:'系統需求'},requirements:'目前正式驗證範圍為 Windows x64；不宣稱支援 Windows ARM。建議安裝前備份重要專案。',warning:'此版本依發行決策採手動未簽章模式，Windows 會顯示 Unknown Publisher，SmartScreen 也可能警告。請只從 growthmap.work 下載並核對 SHA-256；不要關閉系統安全功能。',changelogTitle:'版本摘要',changelog:'0.1.0-desktop.2：Production G1、Whop Personal v1 授權與線上啟用；本機優先專案資料與 Windows x64 封裝。',updateTitle:'如何更新',updateBody:'此 build 不支援程式內線上更新。新版本發布後，回到本頁下載新版 installer 並覆蓋安裝；現有本機專案資料庫會保留。',license:'查看 Personal v1 授權與購買'},
-'zh-CN':{eyebrow:'WINDOWS 正式下载',title:'GrowthMap Personal v1 for Windows x64',lead:'此安装包已由 exact-source Windows CI 构建并验证。下载后请核对文件名与 SHA-256。',status:'公开发行：已上线',cta:'下载 Windows x64 installer',signed:'已签名',unsigned:'未签名',platformSuffix:'Production Personal v1',fields:{version:'版本',commit:'Commit',ci:'CI 运行编号',file:'文件名',bytes:'字节',sha:'SHA-256',publisher:'发行者／签名',platform:'平台',requirements:'系统需求'},requirements:'当前正式验证范围为 Windows x64；不声明支持 Windows ARM。建议安装前备份重要项目。',warning:'此版本按发行决定采用手动未签名模式，Windows 会显示 Unknown Publisher，SmartScreen 也可能警告。请只从 growthmap.work 下载并核对 SHA-256；不要关闭系统安全功能。',changelogTitle:'版本摘要',changelog:'0.1.0-desktop.2：Production G1、Whop Personal v1 授权与在线激活；本地优先项目数据与 Windows x64 封装。',updateTitle:'如何更新',updateBody:'此 build 不支持程序内在线更新。新版本发布后，回到本页下载新版 installer 并覆盖安装；现有本地项目数据库会保留。',license:'查看 Personal v1 授权与购买'},
-en:{eyebrow:'WINDOWS PRODUCTION DOWNLOAD',title:'GrowthMap Personal v1 for Windows x64',lead:'This installer was built and verified by exact-source Windows CI. Verify the filename and SHA-256 after downloading.',status:'Public release: live',cta:'Download the Windows x64 installer',signed:'signed',unsigned:'unsigned',platformSuffix:'Production Personal v1',fields:{version:'Version',commit:'Commit',ci:'CI run',file:'Filename',bytes:'Bytes',sha:'SHA-256',publisher:'Publisher / signing',platform:'Platform',requirements:'System requirements'},requirements:'The production-verified target is Windows x64. Windows ARM support is not claimed. Back up important projects before installation.',warning:'This release intentionally uses manual unsigned distribution. Windows shows Unknown Publisher and SmartScreen may warn. Download only from growthmap.work, verify SHA-256, and do not disable platform security controls.',changelogTitle:'Release summary',changelog:'0.1.0-desktop.2: Production G1, Whop Personal v1 fulfillment and online activation, local-first project data, and the verified Windows x64 package.',updateTitle:'How to update',updateBody:'In-app online updates are disabled in this build. When a new release is available, download its installer from this page and install it over the existing app; local project databases remain in place.',license:'View Personal v1 licensing and purchase'}
+  'zh-TW':{
+    eyebrow:'WINDOWS 下載',
+    title:'下載 GrowthMap Personal v1',
+    lead:'適用於 Windows x64。下載安裝程式後，即可開始建立你的本機專案地圖。',
+    cta:'下載 Windows 安裝程式',
+    platformSuffix:'Windows x64',
+    fields:{version:'目前版本',size:'下載大小',platform:'適用系統'},
+    installTitle:'安裝方式',
+    installSteps:['下載安裝程式。','開啟下載的檔案並依畫面完成安裝。','啟動 GrowthMap；若已有授權碼，可在程式內貼上並啟用。'],
+    requirementsTitle:'使用前請確認',
+    requirements:'目前支援 Windows x64，不支援 Windows ARM。專案資料預設保存在你的電腦上。',
+    warningTitle:'Windows 安全提示',
+    warning:'目前安裝程式尚未簽章，因此 Windows 可能顯示「未知的發行者」或 SmartScreen 提示。請確認檔案是從 growthmap.work 下載；不需要關閉 Windows 安全功能。',
+    updateTitle:'日後如何更新',
+    updateBody:'新版發布後，回到本頁下載新版安裝程式並直接覆蓋安裝。既有 Personal v1 授權、裝置身分與本機專案資料都會保留。',
+    license:'查看 Personal v1 授權與購買'
+  },
+  'zh-CN':{
+    eyebrow:'WINDOWS 下载',
+    title:'下载 GrowthMap Personal v1',
+    lead:'适用于 Windows x64。下载安装程序后，即可开始建立你的本地项目地图。',
+    cta:'下载 Windows 安装程序',
+    platformSuffix:'Windows x64',
+    fields:{version:'当前版本',size:'下载大小',platform:'适用系统'},
+    installTitle:'安装方式',
+    installSteps:['下载安装程序。','打开下载的文件并按画面提示完成安装。','启动 GrowthMap；如已有激活码，可在程序内粘贴并激活。'],
+    requirementsTitle:'使用前请确认',
+    requirements:'目前支持 Windows x64，不支持 Windows ARM。项目数据默认保存在你的电脑上。',
+    warningTitle:'Windows 安全提示',
+    warning:'目前安装程序尚未签名，因此 Windows 可能显示“未知发布者”或 SmartScreen 提示。请确认文件来自 growthmap.work；无需关闭 Windows 安全功能。',
+    updateTitle:'以后如何更新',
+    updateBody:'新版本发布后，回到本页下载新版安装程序并直接覆盖安装。现有 Personal v1 授权、设备身份和本地项目数据都会保留。',
+    license:'查看 Personal v1 授权与购买'
+  },
+  en:{
+    eyebrow:'WINDOWS DOWNLOAD',
+    title:'Download GrowthMap Personal v1',
+    lead:'For Windows x64. Download the installer and start building your local project map.',
+    cta:'Download the Windows installer',
+    platformSuffix:'Windows x64',
+    fields:{version:'Current version',size:'Download size',platform:'System'},
+    installTitle:'How to install',
+    installSteps:['Download the installer.','Open the downloaded file and follow the installation prompts.','Launch GrowthMap. If you have a license key, paste it into the app to activate.'],
+    requirementsTitle:'Before you begin',
+    requirements:'Windows x64 is currently supported; Windows ARM is not. Project data stays on your computer by default.',
+    warningTitle:'Windows security notice',
+    warning:'The installer is currently unsigned, so Windows may show “Unknown Publisher” or a SmartScreen notice. Make sure the file came from growthmap.work. You do not need to disable Windows security features.',
+    updateTitle:'How future updates work',
+    updateBody:'When a new version is released, return to this page and install the new version over the existing app. Your Personal v1 license, device identity, and local project data will remain in place.',
+    license:'View Personal v1 licensing and purchase'
+  }
 };
