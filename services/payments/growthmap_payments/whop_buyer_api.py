@@ -23,6 +23,17 @@ class ActivationChallengeBody(BaseModel):
     device_public_key: StrictStr
 
 
+class ActivationRefreshChallengeBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    activation_id: StrictStr
+    license_id: StrictStr
+    device_public_key: StrictStr
+
+class ActivationRefreshCompleteBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    challenge_id: StrictStr
+    proof: StrictStr
+
 class ActivationCompleteBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     challenge_id: StrictStr
@@ -62,6 +73,21 @@ def create_buyer_activation_router(*, store: BuyerDeliveryStore, authority: Any)
         except Exception:
             return _not_found()
         return JSONResponse({"state": "challenge_issued", "challenge": challenge}, headers=_PRIVATE_HEADERS)
+
+    @router.post("/v1/activation/refresh/challenge")
+    async def activation_refresh_challenge(request: Request):
+        try:
+            body=await _body(request,ActivationRefreshChallengeBody)
+            challenge=authority.issue_activation_refresh_challenge(activation_id=body.activation_id,license_id=body.license_id,device_public_key=body.device_public_key,expected_flow_kind="payment")
+        except Exception:return _not_found()
+        return JSONResponse({"state":"challenge_issued","challenge":challenge},headers=_PRIVATE_HEADERS)
+
+    @router.post("/v1/activation/refresh/complete")
+    async def activation_refresh_complete(request: Request):
+        try:
+            body=await _body(request,ActivationRefreshCompleteBody);certificate=authority.complete_activation_refresh(challenge_id=body.challenge_id,proof=body.proof,expected_flow_kind="payment")
+        except Exception:return _not_found()
+        return JSONResponse({"state":"activated","certificate":certificate},headers=_PRIVATE_HEADERS)
 
     @router.post("/v1/activation/complete")
     async def activation_complete(request: Request):

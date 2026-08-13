@@ -30,6 +30,8 @@ class SignedAuthorityHTTPAdapter:
         "read_external_revocation_acknowledgement": "/v1/service/revocations/read",
         "issue_activation_challenge": "/v1/service/activation/challenge",
         "activate_challenge": "/v1/service/activation/complete",
+        "issue_activation_refresh_challenge": "/v1/service/activation/refresh/challenge",
+        "complete_activation_refresh": "/v1/service/activation/refresh/complete",
         "create_gift": "/v1/service/gifts/create",
         "list_gifts": "/v1/service/gifts/list",
         "get_gift": "/v1/service/gifts/get",
@@ -39,6 +41,8 @@ class SignedAuthorityHTTPAdapter:
         "deactivate_gift_device": "/v1/service/gifts/devices/deactivate",
         "gift_claim_challenge": "/v1/service/gifts/claim/challenge",
         "gift_claim_complete": "/v1/service/gifts/claim/complete",
+        "gift_refresh_challenge": "/v1/service/gifts/refresh/challenge",
+        "gift_refresh_complete": "/v1/service/gifts/refresh/complete",
     }
 
     def __init__(self, *, origin: str, authority_id: str, audience: str,
@@ -144,12 +148,26 @@ class SignedAuthorityHTTPAdapter:
             raise AuthorityHTTPError("authority response invalid")
         return challenge
 
-    def activate_challenge(self, *, challenge_id: str, proof: str, expected_flow_kind: str = "payment"):
-        if expected_flow_kind != "payment":
-            raise AuthorityHTTPError("authority request invalid")
-        result = self._post("activate_challenge", {"challenge_id": challenge_id, "proof": proof})
-        self._exact(result, ("state", "certificate"))
-        certificate = result["certificate"]
+    @staticmethod
+    def _canonical_b64(value, length):
+        if type(value) is not str:
+            raise AuthorityHTTPError("authority response invalid")
+        try: raw=base64.b64decode(value,validate=True)
+        except Exception: raise AuthorityHTTPError("authority response invalid") from None
+        if len(raw)!=length or base64.b64encode(raw).decode("ascii")!=value:
+            raise AuthorityHTTPError("authority response invalid")
+        return raw
+
+    @staticmethod
+    def _canonical_timestamp(value):
+        if type(value) is not str or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z",value) is None:
+            raise AuthorityHTTPError("authority response invalid")
+        try: parsed=datetime.fromisoformat(value[:-1]+"+00:00")
+        except ValueError: raise AuthorityHTTPError("authority response invalid") from None
+        if parsed.utcoffset()!=timezone.utc.utcoffset(parsed):raise AuthorityHTTPError("authority response invalid")
+
+    def _certificate(self, result):
+        self._exact(result, ("state", "certificate"));certificate=result["certificate"]
         required = ("schema_version", "certificate_type", "product", "edition", "license_id",
                     "activation_id", "major_version", "device_allowance", "device_id",
                     "device_public_key", "issued_at", "expires_at", "revoked_at",
@@ -157,15 +175,33 @@ class SignedAuthorityHTTPAdapter:
         self._exact(certificate, required)
         if (result["state"] != "activated" or certificate["schema_version"] != 2
                 or certificate["certificate_type"] != "growthmap_device_activation"
-                or certificate["product"] != "growthmap"
-                or certificate["edition"] not in {"personal", "pro", "studio"}
-                or certificate["major_version"] != 1
-                or certificate["device_allowance"] not in {1, 2}
-                or any(type(certificate[key]) is not str for key in
-                       ("license_id", "activation_id", "device_id", "device_public_key",
-                        "issued_at", "next_check_in_at", "signature"))):
-            raise AuthorityHTTPError("authority response invalid")
+                or certificate["product"] != "growthmap" or certificate["edition"] not in {"personal","pro","studio"}
+                or type(certificate["major_version"]) is not int or certificate["major_version"] != 1
+                or type(certificate["device_allowance"]) is not int or certificate["device_allowance"] not in {1,2}
+                or certificate["revoked_at"] is not None or certificate["max_active_projects"] is not None
+                or type(certificate["license_id"]) is not str or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",certificate["license_id"]) is None
+                or type(certificate["activation_id"]) is not str or re.fullmatch(r"gma_[a-f0-9]{32}",certificate["activation_id"]) is None
+                or type(certificate["device_id"]) is not str or re.fullmatch(r"gmdev_[a-f0-9]{64}",certificate["device_id"]) is None):raise AuthorityHTTPError("authority response invalid")
+        public=self._canonical_b64(certificate["device_public_key"],32);self._canonical_b64(certificate["signature"],64)
+        self._canonical_timestamp(certificate["issued_at"]);self._canonical_timestamp(certificate["next_check_in_at"])
+        if certificate["expires_at"] is not None:self._canonical_timestamp(certificate["expires_at"])
+        if certificate["device_id"]!="gmdev_"+hashlib.sha256(public).hexdigest():raise AuthorityHTTPError("authority response invalid")
         return certificate
+
+    def activate_challenge(self, *, challenge_id: str, proof: str, expected_flow_kind: str = "payment"):
+        if expected_flow_kind != "payment":
+            raise AuthorityHTTPError("authority request invalid")
+        result = self._post("activate_challenge", {"challenge_id": challenge_id, "proof": proof})
+        return self._certificate(result)
+
+    def issue_activation_refresh_challenge(self, *, activation_id:str, license_id:str, device_public_key:str, expected_flow_kind:str="payment"):
+        if expected_flow_kind!="payment":raise AuthorityHTTPError("authority request invalid")
+        result=self._post("issue_activation_refresh_challenge",{"activation_id":activation_id,"license_id":license_id,"device_public_key":device_public_key})
+        return _refresh_result(self,result,activation_id,license_id,device_public_key)
+
+    def complete_activation_refresh(self, *, challenge_id:str, proof:str, expected_flow_kind:str="payment"):
+        if expected_flow_kind!="payment":raise AuthorityHTTPError("authority request invalid")
+        return self._certificate(self._post("complete_activation_refresh",{"challenge_id":challenge_id,"proof":proof}))
 
 
 # Gift response validation is deliberately exact: an Authority version drift fails closed.
@@ -219,13 +255,26 @@ def _deactivate_gift_device(self,gift_id,device_id):
     if type(value["deactivated"]) is not bool:raise AuthorityHTTPError("authority response invalid")
     return value["deactivated"]
 def _gift_claim_challenge(self,claim_key,device_public_key):return _claim_result(self,self._post("gift_claim_challenge",{"claim_key":claim_key,"device_public_key":device_public_key}),claim_key,device_public_key)
+def _refresh_result(adapter,result,activation_id,license_id,device_public_key):
+    adapter._exact(result,("state","challenge"));challenge=result["challenge"]
+    adapter._exact(challenge,("challenge_id","activation_id","nonce","license_id","device_public_key"))
+    adapter._canonical_b64(challenge["device_public_key"],32)
+    if (result["state"]!="challenge_issued" or challenge["activation_id"]!=activation_id or challenge["license_id"]!=license_id
+            or challenge["device_public_key"]!=device_public_key
+            or any(type(challenge[key]) is not str for key in challenge)
+            or re.fullmatch(r"gma_[a-f0-9]{32}",challenge["activation_id"]) is None
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}",challenge["license_id"]) is None
+            or re.fullmatch(r"gmr_[a-f0-9]{32}",challenge["challenge_id"]) is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{16,128}",challenge["nonce"]) is None):raise AuthorityHTTPError("authority response invalid")
+    return challenge
+
+def _gift_refresh_challenge(self,activation_id,license_id,device_public_key):
+    result=self._post("gift_refresh_challenge",{"activation_id":activation_id,"license_id":license_id,"device_public_key":device_public_key})
+    return _refresh_result(self,result,activation_id,license_id,device_public_key)
+
+def _gift_refresh_complete(self,challenge_id,proof):return self._certificate(self._post("gift_refresh_complete",{"challenge_id":challenge_id,"proof":proof}))
 def _gift_claim_complete(self,challenge_id,proof):
-    result=self._post("gift_claim_complete",{"challenge_id":challenge_id,"proof":proof});self._exact(result,("state","certificate"))
-    if result["state"]!="activated":raise AuthorityHTTPError("authority response invalid")
-    # Reuse the complete certificate validator without issuing another request.
-    certificate=result["certificate"];required=("schema_version","certificate_type","product","edition","license_id","activation_id","major_version","device_allowance","device_id","device_public_key","issued_at","expires_at","revoked_at","max_active_projects","next_check_in_at","signature");self._exact(certificate,required)
-    if certificate["schema_version"]!=2 or certificate["certificate_type"]!="growthmap_device_activation":raise AuthorityHTTPError("authority response invalid")
-    return certificate
+    return self._certificate(self._post("gift_claim_complete",{"challenge_id":challenge_id,"proof":proof}))
 SignedAuthorityHTTPAdapter.create_gift=_create_gift
 SignedAuthorityHTTPAdapter.list_gifts=_list_gifts
 SignedAuthorityHTTPAdapter.get_gift=_get_gift
@@ -235,3 +284,5 @@ SignedAuthorityHTTPAdapter.list_gift_devices=_list_gift_devices
 SignedAuthorityHTTPAdapter.deactivate_gift_device=_deactivate_gift_device
 SignedAuthorityHTTPAdapter.gift_claim_challenge=_gift_claim_challenge
 SignedAuthorityHTTPAdapter.gift_claim_complete=_gift_claim_complete
+SignedAuthorityHTTPAdapter.gift_refresh_challenge=_gift_refresh_challenge
+SignedAuthorityHTTPAdapter.gift_refresh_complete=_gift_refresh_complete

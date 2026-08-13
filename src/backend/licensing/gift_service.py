@@ -33,3 +33,6 @@ class GiftLicenseService:
   if cap.kind!="gift":raise ValueError("gift_unavailable")
   return self.authority.issue_gift_claim_challenge(gift_id=cap.identity,secret=cap.secret,device_public_key=device_public_key)
  def complete(self,challenge_id,proof):return self.authority.activate_challenge(challenge_id=challenge_id,proof=proof,expected_flow_kind="gift")
+ def refresh_challenge(self,activation_id,license_id,device_public_key):
+  return self.authority.issue_gift_refresh_challenge(activation_id=activation_id,license_id=license_id,device_public_key=device_public_key)
+ def refresh_complete(self,challenge_id,proof):return self.authority.complete_activation_refresh(challenge_id=challenge_id,proof=proof,expected_flow_kind="gift")

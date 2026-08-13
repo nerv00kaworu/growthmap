@@ -95,3 +95,47 @@ def test_real_payment_revocation_builder_accepts_both_utc_forms(tmp_path):
         assert result["revocation_receipt"]
         with authority._connect() as db:
             assert db.execute("select event_created_at from external_revocations").fetchone()[0] == stamp
+
+
+def test_signed_adapter_refresh_route_bodies_and_strict_responses(monkeypatch):
+    from growthmap_payments.authority_http import SignedAuthorityHTTPAdapter, AuthorityHTTPError
+    adapter=object.__new__(SignedAuthorityHTTPAdapter);calls=[]
+    import base64
+    activation_id="gma_"+"a"*32;license_id="gm_"+"b"*32;raw=b"p"*32;public=base64.b64encode(raw).decode()
+    challenge={"challenge_id":"gmr_"+"c"*32,"activation_id":activation_id,"nonce":"n"*24,"license_id":license_id,"device_public_key":public}
+    certificate={"schema_version":2,"certificate_type":"growthmap_device_activation","product":"growthmap","edition":"personal","license_id":license_id,"activation_id":activation_id,"major_version":1,"device_allowance":2,"device_id":"gmdev_"+hashlib.sha256(raw).hexdigest(),"device_public_key":public,"issued_at":"2026-08-08T00:00:00Z","expires_at":None,"revoked_at":None,"max_active_projects":None,"next_check_in_at":"2026-09-07T00:00:00Z","signature":base64.b64encode(b"s"*64).decode()}
+    def post(operation,body):
+        calls.append((operation,body));return {"state":"challenge_issued","challenge":challenge} if operation.endswith("challenge") else {"state":"activated","certificate":certificate}
+    adapter._post=post
+    assert adapter.issue_activation_refresh_challenge(activation_id=activation_id,license_id=license_id,device_public_key=public)==challenge
+    assert adapter.gift_refresh_challenge(activation_id,license_id,public)==challenge
+    assert adapter.complete_activation_refresh(challenge_id=challenge["challenge_id"],proof="A"*88)==certificate
+    assert adapter.gift_refresh_complete(challenge["challenge_id"],"A"*88)==certificate
+    assert calls[0][1]==calls[1][1]=={"activation_id":activation_id,"license_id":license_id,"device_public_key":public}
+    adapter._post=lambda *_:{"state":"challenge_issued","challenge":challenge|{"portable_secret":"leak"}}
+    with __import__('pytest').raises(AuthorityHTTPError):adapter.issue_activation_refresh_challenge(activation_id=activation_id,license_id=license_id,device_public_key=public)
+    adapter._post=lambda *_:{"state":"activated","certificate":certificate|{"extra":"leak"}}
+    with __import__('pytest').raises(AuthorityHTTPError):adapter.complete_activation_refresh(challenge_id=challenge["challenge_id"],proof="A"*88)
+
+
+def test_refresh_certificate_validator_rejects_malformed_values():
+    import base64
+    import pytest
+    from growthmap_payments.authority_http import SignedAuthorityHTTPAdapter, AuthorityHTTPError
+    adapter=object.__new__(SignedAuthorityHTTPAdapter);raw=b"k"*32;public=base64.b64encode(raw).decode();certificate={"schema_version":2,"certificate_type":"growthmap_device_activation","product":"growthmap","edition":"personal","license_id":"gm_"+"a"*32,"activation_id":"gma_"+"b"*32,"major_version":1,"device_allowance":2,"device_id":"gmdev_"+hashlib.sha256(raw).hexdigest(),"device_public_key":public,"issued_at":"2026-08-08T00:00:00Z","expires_at":"2027-08-08T00:00:00Z","revoked_at":None,"max_active_projects":None,"next_check_in_at":"2026-09-07T00:00:00Z","signature":base64.b64encode(b"s"*64).decode()}
+    assert adapter._certificate({"state":"activated","certificate":certificate})==certificate
+    cases=[("license_id",""),("device_public_key",""),("device_public_key",base64.b64encode(b"x"*31).decode()),("device_public_key",public.rstrip("=")),("signature",base64.b64encode(b"x"*63).decode()),("signature",certificate["signature"].rstrip("=")),("issued_at","2026-08-08T00:00:00+00:00"),("issued_at","2026-13-08T00:00:00Z"),("next_check_in_at",""),("expires_at","2027-08-08"),("device_id","gmdev_"+"0"*64)]
+    for key,value in cases:
+        with pytest.raises(AuthorityHTTPError):adapter._certificate({"state":"activated","certificate":certificate|{key:value}})
+
+
+def test_refresh_challenge_rejects_malformed_wrong_length_and_noncanonical_device_keys():
+    import base64
+    import pytest
+    from growthmap_payments.authority_http import SignedAuthorityHTTPAdapter, AuthorityHTTPError
+    adapter=object.__new__(SignedAuthorityHTTPAdapter);activation_id="gma_"+"a"*32;license_id="gm_"+"b"*32
+    for public in ("***",base64.b64encode(b"x"*31).decode(),base64.b64encode(b"x"*32).decode().rstrip("=")):
+        challenge={"challenge_id":"gmr_"+"c"*32,"activation_id":activation_id,"nonce":"n"*24,"license_id":license_id,"device_public_key":public}
+        adapter._post=lambda *_args,_challenge=challenge:{"state":"challenge_issued","challenge":_challenge}
+        with pytest.raises(AuthorityHTTPError):adapter.issue_activation_refresh_challenge(activation_id=activation_id,license_id=license_id,device_public_key=public)
+        with pytest.raises(AuthorityHTTPError):adapter.gift_refresh_challenge(activation_id,license_id,public)

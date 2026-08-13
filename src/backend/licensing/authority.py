@@ -20,6 +20,7 @@ DEVICE_KEY_DOMAIN=b"growthmap-activation-request-v1\0"
 CERT_DOMAIN=b"growthmap-activation-certificate-v2\0"
 ENTITLEMENT_ACK_DOMAIN=b"growthmap-entitlement-authority-ack-v1\0"
 REVOCATION_ACK_DOMAIN=b"growthmap-revocation-authority-ack-v1\0"
+REFRESH_REQUEST_DOMAIN=b"growthmap-license-refresh-request-v1\0"
 # SQLite WAL bootstrap can report BUSY before its connection timeout applies to
 # PRAGMA journal_mode. Serialize schema bootstrap within one service process;
 # SQLite's own busy timeout remains the cross-process boundary.
@@ -74,6 +75,14 @@ AUTHORITY_SCHEMA_SCRIPT="""
               request_digest TEXT, certificate_json TEXT,
               flow_kind TEXT CHECK(flow_kind IN ('gift','payment')),
               entitlement_generation INTEGER);
+            CREATE TABLE IF NOT EXISTS refresh_challenges(
+              challenge_id TEXT PRIMARY KEY, activation_id TEXT NOT NULL,
+              license_id TEXT NOT NULL REFERENCES licenses(license_id), device_id TEXT NOT NULL,
+              device_public_key TEXT NOT NULL, nonce TEXT NOT NULL UNIQUE,
+              flow_kind TEXT NOT NULL CHECK(flow_kind IN ('gift','payment')),
+              entitlement_generation INTEGER, issued_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+              consumed_at TEXT, request_digest TEXT, certificate_json TEXT);
+            CREATE INDEX IF NOT EXISTS refresh_challenges_activation ON refresh_challenges(activation_id,issued_at);
             CREATE TABLE IF NOT EXISTS activations(
               activation_id TEXT PRIMARY KEY, license_id TEXT NOT NULL REFERENCES licenses(license_id),
               device_id TEXT NOT NULL, device_public_key TEXT NOT NULL, activated_at TEXT NOT NULL,
@@ -133,6 +142,9 @@ def device_identifier(public_key_b64: str) -> str:
 
 def activation_challenge(license_id: str, public_key_b64: str, nonce: str) -> bytes:
     return DEVICE_KEY_DOMAIN+canonical({"license_id":license_id,"device_public_key":public_key_b64,"nonce":nonce})
+
+def refresh_challenge(activation_id: str, license_id: str, public_key_b64: str, nonce: str) -> bytes:
+    return REFRESH_REQUEST_DOMAIN+canonical({"activation_id":activation_id,"license_id":license_id,"device_public_key":public_key_b64,"nonce":nonce})
 
 class LicenseAuthority:
     """SQLite seat ledger with transactional unique constraints and idempotent certificates."""
@@ -307,6 +319,7 @@ class LicenseAuthority:
                 generation=row["secret_generation"]+1
                 db.execute("UPDATE gift_entitlements SET secret_digest=?,secret_generation=?,rotated_at=? WHERE gift_id=?",(digest,generation,now,gift_id))
                 db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]))
+                db.execute("UPDATE refresh_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=? AND flow_kind='gift'",(now,row["license_id"]))
                 db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,now,"rotated",generation,"{}"));self._audit(db,"gift_claim_rotated",row["license_id"],detail=json.dumps({"gift_id":gift_id,"secret_generation":generation}));db.commit()
             except Exception:db.rollback();raise
         result=self.get_gift(gift_id);result["claim_key"]=f"GMG1.{gift_id}.{secret}";return result
@@ -320,7 +333,7 @@ class LicenseAuthority:
                 row=db.execute("SELECT * FROM gift_entitlements WHERE gift_id=?",(gift_id,)).fetchone()
                 if not row:raise ValueError("gift_unavailable")
                 if row["status"]=="active":
-                    db.execute("UPDATE gift_entitlements SET status='revoked',revoked_at=? WHERE gift_id=?",(now,gift_id));db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,now,"revoked",row["secret_generation"],"{}"));self._audit(db,"gift_revoked",row["license_id"],detail=json.dumps({"gift_id":gift_id}));
+                    db.execute("UPDATE gift_entitlements SET status='revoked',revoked_at=? WHERE gift_id=?",(now,gift_id));db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("UPDATE refresh_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(now,row["license_id"]));db.execute("INSERT INTO gift_events(gift_id,at,event,secret_generation,detail) VALUES(?,?,?,?,?)",(gift_id,now,"revoked",row["secret_generation"],"{}"));self._audit(db,"gift_revoked",row["license_id"],detail=json.dumps({"gift_id":gift_id}));
                 db.commit()
             except Exception:db.rollback();raise
         return self.get_gift(gift_id)
@@ -337,6 +350,9 @@ class LicenseAuthority:
                 db.execute("UPDATE activation_challenges SET consumed_at=? WHERE license_id=? AND device_id=? AND consumed_at IS NULL",(utc(now),row["license_id"],device_id));db.execute("INSERT INTO activation_challenges(challenge_id,license_id,device_id,device_public_key,nonce,issued_at,expires_at,consumed_at,request_digest,certificate_json,flow_kind,entitlement_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(challenge_id,row["license_id"],device_id,device_public_key,nonce,utc(now),utc(now+timedelta(seconds=max(30,min(int(ttl_seconds),300)))),None,None,None,"gift",row["secret_generation"]));db.commit()
             except Exception:db.rollback();raise
         return {"challenge_id":challenge_id,"nonce":nonce,"license_id":row["license_id"],"device_public_key":device_public_key}
+    def issue_gift_refresh_challenge(self, *, activation_id, license_id, device_public_key, ttl_seconds=300):
+        return self.issue_activation_refresh_challenge(activation_id=activation_id,license_id=license_id,device_public_key=device_public_key,expected_flow_kind="gift",ttl_seconds=ttl_seconds)
+
     def list_gift_devices(self,gift_id):
         gift=self.get_gift(gift_id)
         with self._connect() as db:rows=db.execute("SELECT device_id,device_public_key,activated_at,deactivated_at FROM activations WHERE license_id=? ORDER BY activated_at",(gift["license_id"],)).fetchall()
@@ -472,6 +488,71 @@ class LicenseAuthority:
             except Exception:
                 db.rollback();raise
 
+    def _refreshed_certificate(self,db,activation,lic,now):
+        # Keep the activation certificate schema and activation identity byte-for-byte compatible.
+        cert={"schema_version":2,"certificate_type":"growthmap_device_activation","product":"growthmap","edition":lic["edition"],"license_id":activation["license_id"],"activation_id":activation["activation_id"],"major_version":lic["major_version"],"device_allowance":lic["seat_limit"],"device_id":activation["device_id"],"device_public_key":activation["device_public_key"],"issued_at":utc(now),"expires_at":lic["expires_at"],"revoked_at":None,"max_active_projects":None,"next_check_in_at":utc(now+timedelta(days=lic["check_in_days"]))}
+        cert["signature"]=base64.b64encode(self._sign_verified(CERT_DOMAIN+canonical(cert),db)).decode()
+        return cert
+
+    def _valid_payment_provenance(self,db,license_id):
+        row=db.execute("SELECT * FROM external_entitlements WHERE license_id=?",(license_id,)).fetchone()
+        if not row:return False
+        try:
+            identity=self._accepted_signer_identity({"authority_id":row["authority_id"],"key_id":row["signer_key_id"],"generation":row["signer_generation"],"public_key_sha256":row["signer_public_key_sha256"],"attestation":row["signer_attestation"]})
+            if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}",row["source"] or "") or not re.fullmatch(r"[a-f0-9]{64}",row["source_id"] or "") or not re.fullmatch(r"[a-f0-9]{64}",row["payload_digest"] or ""):return False
+            receipt=hashlib.sha256(canonical({"signer_identity":identity,"source":row["source"],"source_id":row["source_id"],"payload_digest":row["payload_digest"],"license_id":license_id})).hexdigest()
+            payload={"authority_id":self.authority_id,"delivery_receipt":receipt,"license_id":license_id,"payload_digest":row["payload_digest"],"signer_identity":identity,"source":row["source"],"source_id":row["source_id"]}
+            signature=base64.b64decode(row["ack_signature"],validate=True)
+            if len(signature)!=64 or base64.b64encode(signature).decode()!=row["ack_signature"]:return False
+            self.public_key.verify(signature,ENTITLEMENT_ACK_DOMAIN+canonical(payload));return True
+        except Exception:return False
+
+    def issue_activation_refresh_challenge(self, *, activation_id:str, license_id:str, device_public_key:str, expected_flow_kind:str, ttl_seconds=300):
+        if expected_flow_kind not in {"gift","payment"}:raise ValueError("refresh_unavailable")
+        device_id=device_identifier(device_public_key);now=self.now();nonce=secrets.token_urlsafe(24);challenge_id="gmr_"+uuid.uuid4().hex
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                activation=db.execute("SELECT * FROM activations WHERE activation_id=? AND license_id=?",(activation_id,license_id)).fetchone();lic=db.execute("SELECT * FROM licenses WHERE license_id=?",(license_id,)).fetchone()
+                if not activation or activation["deactivated_at"] is not None or activation["device_id"]!=device_id or activation["device_public_key"]!=device_public_key or not lic or lic["revoked_at"] or (lic["expires_at"] and datetime.fromisoformat(lic["expires_at"].replace("Z","+00:00"))<=now):raise ValueError("refresh_unavailable")
+                gift=db.execute("SELECT status,secret_generation FROM gift_entitlements WHERE license_id=?",(license_id,)).fetchone()
+                generation=None
+                if expected_flow_kind=="gift":
+                    if not gift or gift["status"]!="active":raise ValueError("refresh_unavailable")
+                    generation=gift["secret_generation"]
+                else:
+                    # Current payment provenance is an Authority-signed external entitlement.
+                    # Legacy rows missing identity/ack fields fail closed, as do all Gift licenses.
+                    if gift or not self._valid_payment_provenance(db,license_id):raise ValueError("refresh_unavailable")
+                db.execute("UPDATE refresh_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE activation_id=? AND consumed_at IS NULL",(utc(now),activation_id))
+                db.execute("INSERT INTO refresh_challenges VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(challenge_id,activation_id,license_id,device_id,device_public_key,nonce,expected_flow_kind,generation,utc(now),utc(now+timedelta(seconds=max(30,min(int(ttl_seconds),300)))),None,None,None));db.commit()
+            except Exception:db.rollback();raise
+        return {"challenge_id":challenge_id,"activation_id":activation_id,"nonce":nonce,"license_id":license_id,"device_public_key":device_public_key}
+
+    def complete_activation_refresh(self, *, challenge_id:str, proof:str, expected_flow_kind:str):
+        with self._lock,self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute("SELECT * FROM refresh_challenges WHERE challenge_id=?",(challenge_id,)).fetchone()
+                if not row or expected_flow_kind not in {"gift","payment"} or row["flow_kind"]!=expected_flow_kind or row["consumed_at"]:raise ValueError("refresh_unavailable")
+                now=self.now()
+                if datetime.fromisoformat(row["expires_at"].replace("Z","+00:00"))<=now:raise ValueError("refresh_unavailable")
+                try:
+                    raw=base64.b64decode(row["device_public_key"],validate=True);signature=base64.b64decode(proof,validate=True)
+                    Ed25519PublicKey.from_public_bytes(raw).verify(signature,refresh_challenge(row["activation_id"],row["license_id"],row["device_public_key"],row["nonce"]))
+                except Exception:raise ValueError("refresh_unavailable") from None
+                activation=db.execute("SELECT * FROM activations WHERE activation_id=? AND license_id=?",(row["activation_id"],row["license_id"])).fetchone();lic=db.execute("SELECT * FROM licenses WHERE license_id=?",(row["license_id"],)).fetchone()
+                if not activation or activation["deactivated_at"] is not None or activation["device_id"]!=row["device_id"] or activation["device_public_key"]!=row["device_public_key"] or not lic or lic["revoked_at"] or (lic["expires_at"] and datetime.fromisoformat(lic["expires_at"].replace("Z","+00:00"))<=now):raise ValueError("refresh_unavailable")
+                if expected_flow_kind=="gift":
+                    gift=db.execute("SELECT status,secret_generation FROM gift_entitlements WHERE license_id=?",(row["license_id"],)).fetchone()
+                    if not gift or gift["status"]!="active" or row["entitlement_generation"] is None or gift["secret_generation"]!=row["entitlement_generation"]:raise ValueError("refresh_unavailable")
+                elif row["entitlement_generation"] is not None or db.execute("SELECT 1 FROM gift_entitlements WHERE license_id=?",(row["license_id"],)).fetchone() or not self._valid_payment_provenance(db,row["license_id"]):raise ValueError("refresh_unavailable")
+                cert=self._refreshed_certificate(db,activation,lic,now);encoded=json.dumps(cert,separators=(",",":"));digest=hashlib.sha256(proof.encode()).hexdigest()
+                updated=db.execute("UPDATE refresh_challenges SET consumed_at=?,request_digest=?,certificate_json=? WHERE challenge_id=? AND consumed_at IS NULL",(utc(now),digest,encoded,challenge_id)).rowcount
+                if updated!=1:raise ValueError("refresh_unavailable")
+                db.execute("UPDATE activations SET certificate_json=? WHERE activation_id=?",(encoded,row["activation_id"]));self._audit(db,"activation_refreshed",row["license_id"],row["device_id"],json.dumps({"activation_id":row["activation_id"],"flow_kind":expected_flow_kind}));db.commit();return cert
+            except Exception:db.rollback();raise
+
     def activate(self, *, license_id: str, device_public_key: str, nonce: str, proof: str) -> dict[str,Any]:
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -511,7 +592,7 @@ class LicenseAuthority:
             except (AttributeError,TypeError,ValueError) as error:db.rollback();raise ValueError("invalid_revocation_created_at") from error
             revoked_at=utc(now);receipt=hashlib.sha256(canonical({"authority_id":authority_id,"request_digest":request_digest,"license_id":row["license_id"],"revoked_at":revoked_at})).hexdigest()
             ack_payload={"authority_id":authority_id,"license_id":row["license_id"],"request_digest":request_digest,"revocation_receipt":receipt,"revoked_at":revoked_at,"signer_identity":identity,"source":source,"source_id":source_id};signature=self._signed_ack(REVOCATION_ACK_DOMAIN,ack_payload,db)
-            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations(source,source_id,authority_id,payload_digest,license_id,action,reason,payment_proof,tx_hash,event_created_at,revoked_at,request_digest,receipt,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt,"signer_identity":identity}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
+            db.execute("UPDATE licenses SET revoked_at=COALESCE(revoked_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activations SET deactivated_at=COALESCE(deactivated_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=?",(row["license_id"],));db.execute("UPDATE activation_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("UPDATE refresh_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=?",(revoked_at,row["license_id"]));db.execute("INSERT INTO external_revocations(source,source_id,authority_id,payload_digest,license_id,action,reason,payment_proof,tx_hash,event_created_at,revoked_at,request_digest,receipt,signer_key_id,signer_generation,signer_public_key_sha256,signer_attestation,ack_signature) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(source,source_id,authority_id,payload_digest,row["license_id"],action,reason,payment_proof,tx_hash,created_at,revoked_at,request_digest,receipt,identity["key_id"],identity["generation"],identity["public_key_sha256"],identity["attestation"],signature));self._audit(db,"external_entitlement_revoked",row["license_id"],detail=json.dumps({"action":action,"reason":reason,"receipt":receipt,"signer_identity":identity}));db.commit();return {"license_id":row["license_id"],"revoked_at":revoked_at,"revocation_receipt":receipt,"authority_id":authority_id,"signer_identity":identity,"ack_signature":signature}
     def read_external_revocation_acknowledgement(self, *, source:str, source_id:str, signer_identity:dict[str,Any]) -> dict[str,Any]:
         identity=self._accepted_signer_identity(signer_identity)
         with self._connect() as db:row=db.execute("SELECT * FROM external_revocations WHERE source=? AND source_id=?",(source,source_id)).fetchone()
@@ -525,4 +606,4 @@ class LicenseAuthority:
         with self._lock,self._connect() as db:
             db.execute("BEGIN IMMEDIATE");row=db.execute("SELECT deactivated_at FROM activations WHERE license_id=? AND device_id=?",(license_id,device_id)).fetchone()
             if not row or row["deactivated_at"] is not None: db.commit();return False
-            db.execute("UPDATE activations SET deactivated_at=? WHERE license_id=? AND device_id=?",(utc(self.now()),license_id,device_id));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=? AND device_id=? AND status='active'",(license_id,device_id));self._audit(db,"device_deactivated",license_id,device_id,json.dumps({"reason":reason}));db.commit();return True
+            now=utc(self.now());db.execute("UPDATE activations SET deactivated_at=? WHERE license_id=? AND device_id=?",(now,license_id,device_id));db.execute("UPDATE activation_requests SET status='consumed' WHERE license_id=? AND device_id=? AND status='active'",(license_id,device_id));db.execute("UPDATE refresh_challenges SET consumed_at=COALESCE(consumed_at,?) WHERE license_id=? AND device_id=?",(now,license_id,device_id));self._audit(db,"device_deactivated",license_id,device_id,json.dumps({"reason":reason}));db.commit();return True

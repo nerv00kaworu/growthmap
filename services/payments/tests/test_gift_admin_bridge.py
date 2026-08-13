@@ -94,3 +94,12 @@ def test_public_claim_success_and_generic_failure():
     ok=client.post("/v1/gifts/claim/challenge",json={"claim_key":"GMG1.x.y","device_public_key":"d"*44})
     assert ok.status_code==200 and ok.json()["state"]=="challenge_issued" and ok.headers["cache-control"]=="no-store"
     assert client.post("/v1/gifts/claim/challenge",json={}).status_code in {400,422}
+
+
+def test_public_refresh_has_no_portable_secret_and_extra_body_is_generic():
+    authority=Authority();authority.gift_refresh_challenge=lambda activation_id,license_id,device_public_key:{"challenge_id":"gmr_"+"a"*32,"activation_id":activation_id,"nonce":"n"*24,"license_id":license_id,"device_public_key":device_public_key}
+    authority.gift_refresh_complete=lambda challenge_id,proof:{"schema_version":2,"certificate_type":"growthmap_device_activation"}
+    client=TestClient(create_public_gift_claim_app(authority=authority));body={"activation_id":"gma_"+"b"*32,"license_id":"gm_"+"c"*32,"device_public_key":"d"*44}
+    ok=client.post("/v1/gifts/refresh/challenge",json=body);assert ok.status_code==200 and set(ok.json()["challenge"])=={"challenge_id","activation_id","nonce","license_id","device_public_key"}
+    for extra in ({"claim_key":"GMG1.portable.secret"},{"recovery_code":"portable"},{"order_id":"portable"}):
+        response=client.post("/v1/gifts/refresh/challenge",json=body|extra);assert response.status_code==404 and response.headers["cache-control"]=="no-store"

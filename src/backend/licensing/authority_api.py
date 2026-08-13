@@ -112,6 +112,18 @@ class ServiceActivationCompleteBody(StrictModel):
     challenge_id: ChallengeId
     proof: Proof
 
+class ServiceRefreshChallengeBody(StrictModel):
+    activation_id: ActivationId
+    license_id: LicenseId
+    device_public_key: DevicePublicKey
+
+class ServiceGiftRefreshChallengeBody(ServiceRefreshChallengeBody):
+    """No portable Gift secret: provenance is resolved by license_id inside Authority."""
+
+class ServiceRefreshCompleteBody(StrictModel):
+    challenge_id: Annotated[str, StringConstraints(strict=True, pattern=r"gmr_[a-f0-9]{32}")]
+    proof: Proof
+
 
 class GiftChallengeBody(StrictModel):
     claim_key: ClaimKey
@@ -188,6 +200,17 @@ class Challenge(StrictModel):
 class ChallengeResponse(StrictModel):
     state: Literal["challenge_issued"]
     challenge: Challenge
+
+class RefreshChallenge(StrictModel):
+    challenge_id: Annotated[str, StringConstraints(strict=True, pattern=r"gmr_[a-f0-9]{32}")]
+    activation_id: ActivationId
+    nonce: Nonce
+    license_id: LicenseId
+    device_public_key: DevicePublicKey
+
+class RefreshChallengeResponse(StrictModel):
+    state: Literal["challenge_issued"]
+    challenge: RefreshChallenge
 
 
 class Certificate(StrictModel):
@@ -862,6 +885,22 @@ def create_authority_app(
         except Exception:
             raise _error(404) from None
 
+    @app.post("/v1/service/activation/refresh/challenge", response_model=RefreshChallengeResponse)
+    async def service_activation_refresh_challenge(request: Request):
+        headers = _raw_headers(request); value, _, digest = await _body(request, ServiceRefreshChallengeBody, headers)
+        authenticated = service_preflight(request, value, digest, headers)
+        try:return service_execute(authenticated, lambda: {"state":"challenge_issued","challenge":authority.issue_activation_refresh_challenge(**value.model_dump(),expected_flow_kind="payment")})
+        except HTTPException:raise
+        except Exception:raise _error(404) from None
+
+    @app.post("/v1/service/activation/refresh/complete", response_model=ActivationResponse)
+    async def service_activation_refresh_complete(request: Request):
+        headers = _raw_headers(request); value, _, digest = await _body(request, ServiceRefreshCompleteBody, headers)
+        authenticated = service_preflight(request, value, digest, headers)
+        try:return service_execute(authenticated, lambda: {"state":"activated","certificate":authority.complete_activation_refresh(**value.model_dump(),expected_flow_kind="payment")})
+        except HTTPException:raise
+        except Exception:raise _error(404) from None
+
     async def service_gift(request: Request, model, operation):
         headers = _raw_headers(request); value, _, digest = await _body(request, model, headers)
         authenticated = service_preflight(request, value, digest, headers)
@@ -908,6 +947,14 @@ def create_authority_app(
     async def service_gift_claim_complete(request: Request):
         return await service_gift(request, CompleteBody, lambda value: {"state": "activated", "certificate": GiftLicenseService(authority).complete(value.challenge_id, value.proof)})
 
+    @app.post("/v1/service/gifts/refresh/challenge", response_model=RefreshChallengeResponse)
+    async def service_gift_refresh_challenge(request: Request):
+        return await service_gift(request, ServiceGiftRefreshChallengeBody, lambda value: {"state":"challenge_issued","challenge":GiftLicenseService(authority).refresh_challenge(value.activation_id,value.license_id,value.device_public_key)})
+
+    @app.post("/v1/service/gifts/refresh/complete", response_model=ActivationResponse)
+    async def service_gift_refresh_complete(request: Request):
+        return await service_gift(request, ServiceRefreshCompleteBody, lambda value: {"state":"activated","certificate":GiftLicenseService(authority).refresh_complete(value.challenge_id,value.proof)})
+
     async def deactivate(request: Request):
         headers = _raw_headers(request); value, _, digest = await _body(request, DeactivateBody, headers)
         owner_auth(request, digest, headers, value, _path(request))
@@ -926,10 +973,12 @@ def create_authority_app(
         allowed=frozenset(("/v1/authority/identity","/v1/service/entitlements",
             "/v1/service/entitlements/read","/v1/service/revocations","/v1/service/revocations/read",
             "/v1/service/activation/challenge","/v1/service/activation/complete",
+            "/v1/service/activation/refresh/challenge","/v1/service/activation/refresh/complete",
             "/v1/service/gifts/create","/v1/service/gifts/list","/v1/service/gifts/get",
             "/v1/service/gifts/recover","/v1/service/gifts/revoke","/v1/service/gifts/devices",
             "/v1/service/gifts/devices/deactivate","/v1/service/gifts/claim/challenge",
-            "/v1/service/gifts/claim/complete"))
+            "/v1/service/gifts/claim/complete","/v1/service/gifts/refresh/challenge",
+            "/v1/service/gifts/refresh/complete"))
         @app.middleware("http")
         async def closed_production_route_surface(request: Request, call_next):
             # Exact decoded and raw path agreement prevents slash/percent/normalization aliases.

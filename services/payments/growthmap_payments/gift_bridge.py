@@ -169,6 +169,9 @@ class DeviceBody(GiftIdBody):
 class ClaimBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     claim_key: StrictStr; device_public_key: StrictStr
+class RefreshBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    activation_id: StrictStr; license_id: StrictStr; device_public_key: StrictStr
 class CompleteBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     challenge_id: StrictStr; proof: StrictStr
@@ -193,7 +196,7 @@ def create_public_gift_claim_app(*, authority: SignedAuthorityHTTPAdapter) -> Fa
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
     @app.middleware("http")
     async def boundary(request, call_next):
-        if request.url.path not in {"/v1/gifts/claim/challenge", "/v1/gifts/claim/complete"}: return _security(JSONResponse({"detail":"resource unavailable"},404))
+        if request.url.path not in {"/v1/gifts/claim/challenge", "/v1/gifts/claim/complete", "/v1/gifts/refresh/challenge", "/v1/gifts/refresh/complete"}: return _security(JSONResponse({"detail":"resource unavailable"},404))
         try: response = await call_next(request)
         except Exception: response = JSONResponse({"detail":"resource unavailable"},404)
         return _security(response)
@@ -201,6 +204,18 @@ def create_public_gift_claim_app(*, authority: SignedAuthorityHTTPAdapter) -> Fa
     async def challenge(request: Request):
         value=await _body(request,ClaimBody)
         try:return {"state":"challenge_issued","challenge":authority.gift_claim_challenge(value.claim_key,value.device_public_key)}
+        except Exception:raise HTTPException(404,"resource unavailable") from None
+    @app.post("/v1/gifts/refresh/challenge")
+    async def refresh_challenge(request:Request):
+        try:
+            value=await _body(request,RefreshBody)
+            return {"state":"challenge_issued","challenge":authority.gift_refresh_challenge(value.activation_id,value.license_id,value.device_public_key)}
+        except Exception:raise HTTPException(404,"resource unavailable") from None
+    @app.post("/v1/gifts/refresh/complete")
+    async def refresh_complete(request:Request):
+        try:
+            value=await _body(request,CompleteBody)
+            return {"state":"activated","certificate":authority.gift_refresh_complete(value.challenge_id,value.proof)}
         except Exception:raise HTTPException(404,"resource unavailable") from None
     @app.post("/v1/gifts/claim/complete")
     async def complete(request: Request):
