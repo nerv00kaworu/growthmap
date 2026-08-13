@@ -38,7 +38,7 @@ from .authority_api import (MAX_BODY_BYTES, MAX_HEADER_BYTES, MAX_HEADER_COUNT,
 from .authority_service import (_absolute, _file_identity, _open_parent, _read_fixed,
     _stat_at, _validate_regular, build_production_authority, load_production_config)
 
-FIXED_CONFIG_PATH = Path("/etc/growthmap-authority-staging-r24/production-composition.json")
+FIXED_CONFIG_PATH = Path("/etc/growthmap-authority-production/production-composition.json")
 CONFIG_BASENAME = "production-composition.json"
 CONFIG_FIELDS = {"schema_version","expected_uid","deployment_config_sha256","authority_config_path",
     "edge","replay","listen"}
