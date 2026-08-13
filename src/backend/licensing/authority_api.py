@@ -103,6 +103,16 @@ class ActivationChallengeBody(StrictModel):
     device_public_key: DevicePublicKey
 
 
+class ServiceActivationChallengeBody(ActivationChallengeBody):
+    """Payments-only activation input authenticated by the signed service edge."""
+
+
+class ServiceActivationCompleteBody(StrictModel):
+    # Kept structurally separate so service routes cannot accidentally acquire public fields.
+    challenge_id: ChallengeId
+    proof: Proof
+
+
 class GiftChallengeBody(StrictModel):
     claim_key: ClaimKey
     device_public_key: DevicePublicKey
@@ -757,7 +767,8 @@ def create_authority_app(
     def service_preflight(request: Request, value, digest: str, headers: dict[bytes, bytes]):
         path = _path(request)
         current = descriptor()
-        bind_body_identity(value, current)
+        if isinstance(value, (EntitlementBody, EntitlementReadBody, RevocationBody)):
+            bind_body_identity(value, current)
         return service_auth(request, digest, headers, path)
 
     def service_execute(authenticated, operation):
@@ -813,6 +824,28 @@ def create_authority_app(
         except Exception:
             raise _error(404) from None
 
+    @app.post("/v1/service/activation/challenge", response_model=ChallengeResponse)
+    async def service_activation_challenge(request: Request):
+        headers = _raw_headers(request); value, _, digest = await _body(request, ServiceActivationChallengeBody, headers)
+        authenticated = service_preflight(request, value, digest, headers)
+        try:
+            return service_execute(authenticated, lambda: {"state": "challenge_issued", "challenge": authority.issue_activation_challenge(**value.model_dump())})
+        except HTTPException:
+            raise
+        except Exception:
+            raise _error(404) from None
+
+    @app.post("/v1/service/activation/complete", response_model=ActivationResponse)
+    async def service_activation_complete(request: Request):
+        headers = _raw_headers(request); value, _, digest = await _body(request, ServiceActivationCompleteBody, headers)
+        authenticated = service_preflight(request, value, digest, headers)
+        try:
+            return service_execute(authenticated, lambda: {"state": "activated", "certificate": authority.activate_challenge(**value.model_dump(), expected_flow_kind="payment")})
+        except HTTPException:
+            raise
+        except Exception:
+            raise _error(404) from None
+
     async def deactivate(request: Request):
         headers = _raw_headers(request); value, _, digest = await _body(request, DeactivateBody, headers)
         owner_auth(request, digest, headers, value, _path(request))
@@ -829,7 +862,8 @@ def create_authority_app(
         app.add_api_route("/v1/private/devices/deactivate", deactivate, methods=["POST"], response_model=DeactivationResponse)
     else:
         allowed=frozenset(("/v1/authority/identity","/v1/service/entitlements",
-            "/v1/service/entitlements/read","/v1/service/revocations","/v1/service/revocations/read"))
+            "/v1/service/entitlements/read","/v1/service/revocations","/v1/service/revocations/read",
+            "/v1/service/activation/challenge","/v1/service/activation/complete"))
         @app.middleware("http")
         async def closed_production_route_surface(request: Request, call_next):
             # Exact decoded and raw path agreement prevents slash/percent/normalization aliases.

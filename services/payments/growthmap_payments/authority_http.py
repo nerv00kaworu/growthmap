@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import secrets
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +28,8 @@ class SignedAuthorityHTTPAdapter:
         "read_external_entitlement_acknowledgement": "/v1/service/entitlements/read",
         "revoke_external_entitlement": "/v1/service/revocations",
         "read_external_revocation_acknowledgement": "/v1/service/revocations/read",
+        "issue_activation_challenge": "/v1/service/activation/challenge",
+        "activate_challenge": "/v1/service/activation/complete",
     }
 
     def __init__(self, *, origin: str, authority_id: str, audience: str,
@@ -111,3 +114,46 @@ class SignedAuthorityHTTPAdapter:
 
     def read_external_revocation_acknowledgement(self, **body):
         return self._post("read_external_revocation_acknowledgement", body | {"authority_id": self.authority_id})
+
+    @staticmethod
+    def _exact(value, keys):
+        if type(value) is not dict or set(value) != set(keys):
+            raise AuthorityHTTPError("authority response invalid")
+
+    def issue_activation_challenge(self, *, license_id: str, device_public_key: str):
+        result = self._post("issue_activation_challenge", {
+            "license_id": license_id, "device_public_key": device_public_key})
+        self._exact(result, ("state", "challenge"))
+        challenge = result["challenge"]
+        self._exact(challenge, ("challenge_id", "nonce", "license_id", "device_public_key"))
+        if (result["state"] != "challenge_issued" or challenge["license_id"] != license_id
+                or challenge["device_public_key"] != device_public_key
+                or type(challenge["challenge_id"]) is not str
+                or re.fullmatch(r"gmc_[a-f0-9]{32}", challenge["challenge_id"]) is None
+                or type(challenge["nonce"]) is not str
+                or re.fullmatch(r"[A-Za-z0-9_-]{16,128}", challenge["nonce"]) is None):
+            raise AuthorityHTTPError("authority response invalid")
+        return challenge
+
+    def activate_challenge(self, *, challenge_id: str, proof: str, expected_flow_kind: str = "payment"):
+        if expected_flow_kind != "payment":
+            raise AuthorityHTTPError("authority request invalid")
+        result = self._post("activate_challenge", {"challenge_id": challenge_id, "proof": proof})
+        self._exact(result, ("state", "certificate"))
+        certificate = result["certificate"]
+        required = ("schema_version", "certificate_type", "product", "edition", "license_id",
+                    "activation_id", "major_version", "device_allowance", "device_id",
+                    "device_public_key", "issued_at", "expires_at", "revoked_at",
+                    "max_active_projects", "next_check_in_at", "signature")
+        self._exact(certificate, required)
+        if (result["state"] != "activated" or certificate["schema_version"] != 2
+                or certificate["certificate_type"] != "growthmap_device_activation"
+                or certificate["product"] != "growthmap"
+                or certificate["edition"] not in {"personal", "pro", "studio"}
+                or certificate["major_version"] != 1
+                or certificate["device_allowance"] not in {1, 2}
+                or any(type(certificate[key]) is not str for key in
+                       ("license_id", "activation_id", "device_id", "device_public_key",
+                        "issued_at", "next_check_in_at", "signature"))):
+            raise AuthorityHTTPError("authority response invalid")
+        return certificate

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError
 
@@ -39,6 +39,50 @@ async def _body(request: Request, model):
         raise ValueError from None
 
 
+_PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
+
+
+def _not_found():
+    return JSONResponse({"state": "not_found_or_unavailable"}, status_code=404, headers=_PRIVATE_HEADERS)
+
+
+def create_buyer_activation_router(*, store: BuyerDeliveryStore, authority: Any) -> APIRouter:
+    """Public desktop contract; license ids cross only the signed loopback adapter."""
+    router = APIRouter()
+
+    @router.post("/v1/activation/challenge")
+    async def activation_challenge(request: Request):
+        try:
+            body = await _body(request, ActivationChallengeBody)
+            row = store.authenticated_entitlement(body.order_id, body.recovery_code)
+            if not row or type(row) is not dict or type(row.get("license_id")) is not str:
+                raise ValueError
+            challenge = authority.issue_activation_challenge(
+                license_id=row["license_id"], device_public_key=body.device_public_key)
+        except Exception:
+            return _not_found()
+        return JSONResponse({"state": "challenge_issued", "challenge": challenge}, headers=_PRIVATE_HEADERS)
+
+    @router.post("/v1/activation/complete")
+    async def activation_complete(request: Request):
+        try:
+            body = await _body(request, ActivationCompleteBody)
+            certificate = authority.activate_challenge(
+                challenge_id=body.challenge_id, proof=body.proof, expected_flow_kind="payment")
+        except Exception:
+            return _not_found()
+        return JSONResponse({"state": "activated", "certificate": certificate}, headers=_PRIVATE_HEADERS)
+
+    return router
+
+
+def create_buyer_activation_app(*, store: BuyerDeliveryStore, authority: Any) -> FastAPI:
+    """Dedicated composition suitable for a separately terminated loopback/public edge."""
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, redirect_slashes=False)
+    app.include_router(create_buyer_activation_router(store=store, authority=authority))
+    return app
+
+
 def create_whop_buyer_router(*, store: BuyerDeliveryStore, experience: VerifiedWhopExperience,
                              authority: Any) -> APIRouter:
     router = APIRouter()
@@ -55,29 +99,7 @@ def create_whop_buyer_router(*, store: BuyerDeliveryStore, experience: VerifiedW
             licenses = store.list_for_verified_user(user_id)
         except Exception:
             return JSONResponse({"state": "not_authorized"}, status_code=403)
-        return JSONResponse({"licenses": licenses}, headers={"Cache-Control": "no-store"})
+        return JSONResponse({"licenses": licenses}, headers=_PRIVATE_HEADERS)
 
-    @router.post("/v1/activation/challenge")
-    async def activation_challenge(request: Request):
-        try:
-            body = await _body(request, ActivationChallengeBody)
-            row = store.authenticated_entitlement(body.order_id, body.recovery_code)
-            if not row:
-                raise ValueError
-            challenge = authority.issue_activation_challenge(
-                license_id=row["license_id"], device_public_key=body.device_public_key)
-        except Exception:
-            return JSONResponse({"state": "not_found_or_unavailable"}, status_code=404)
-        return {"state": "challenge_issued", "challenge": challenge}
-
-    @router.post("/v1/activation/complete")
-    async def activation_complete(request: Request):
-        try:
-            body = await _body(request, ActivationCompleteBody)
-            certificate = authority.activate_challenge(
-                challenge_id=body.challenge_id, proof=body.proof, expected_flow_kind="payment")
-        except Exception:
-            return JSONResponse({"state": "not_found_or_unavailable"}, status_code=404)
-        return {"state": "activated", "certificate": certificate}
-
+    router.include_router(create_buyer_activation_router(store=store, authority=authority))
     return router
