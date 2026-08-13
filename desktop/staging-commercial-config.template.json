@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 4,
+  "productMajor": 1,
+  "licenseIssuer": "Growthmap Staging",
+  "supportEmail": "nerv00kaworu@gmail.com",
+  "supportUrl": "https://x.com/nerv00kaworu",
+  "licensePublicKeyResource": "commercial/license_public_key.pem",
+  "licensePublicKeySha256": "WITNESSED_STAGING_PUBLIC_KEY_SHA256",
+  "activationApiOrigin": "https://gift-staging.growthmap.work",
+  "purchasePortalOrigin": "",
+  "purchasePortalUrl": "",
+  "updateUrl": "",
+  "updateOrigin": "",
+  "publisher": "GrowthMap staging test package",
+  "publisherStatus": "STAGING_ONLY"
+}

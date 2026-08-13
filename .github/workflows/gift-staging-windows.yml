@@ -1,0 +1,78 @@
+name: Gift staging packaged Windows candidate
+on:
+  workflow_dispatch:
+    inputs:
+      authority_origin:
+        description: Reserved public HTTPS staging Authority origin
+        required: true
+        default: https://gift-staging.growthmap.work
+        type: string
+      public_key_url:
+        description: HTTPS URL of witnessed staging Ed25519 public PEM (public, non-secret)
+        required: true
+        type: string
+      public_key_sha256:
+        description: Witnessed lowercase SHA-256 of exact public PEM bytes
+        required: true
+        type: string
+permissions: { contents: read }
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12', cache: pip }
+      - name: Require intentionally pushed exact source and safe public inputs
+        shell: pwsh
+        env:
+          AUTHORITY_ORIGIN: ${{ inputs.authority_origin }}
+          PUBLIC_KEY_URL: ${{ inputs.public_key_url }}
+          PUBLIC_KEY_SHA256: ${{ inputs.public_key_sha256 }}
+        run: |
+          if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or $env:GITHUB_SHA -ne (git rev-parse HEAD)) { throw 'Exact pushed source required' }
+          if ($env:AUTHORITY_ORIGIN -notmatch '^https://[a-z0-9.-]*staging[a-z0-9.-]*growthmap\.work$') { throw 'Reserved HTTPS staging Authority origin required' }
+          if ($env:PUBLIC_KEY_URL -notmatch '^https://') { throw 'Public key URL must be HTTPS' }
+          if ($env:PUBLIC_KEY_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'Witnessed lowercase public-key SHA-256 required' }
+      - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt
+      - run: npm ci
+        working-directory: src/frontend
+      - run: npm run lint && npm run typecheck && npm run build
+        working-directory: src/frontend
+      - run: ./packaging/build-sidecar.ps1
+        working-directory: src/backend
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - name: Download public staging key and build exact unsigned candidate
+        shell: pwsh
+        env:
+          AUTHORITY_ORIGIN: ${{ inputs.authority_origin }}
+          PUBLIC_KEY_URL: ${{ inputs.public_key_url }}
+          PUBLIC_KEY_SHA256: ${{ inputs.public_key_sha256 }}
+        run: |
+          $key=Join-Path $env:RUNNER_TEMP 'gift-staging-public-key.pem'
+          $config=Join-Path $env:RUNNER_TEMP 'gift-staging-config/commercial-config.json'
+          Invoke-WebRequest -Uri $env:PUBLIC_KEY_URL -OutFile $key -MaximumRedirection 0
+          if ((Get-FileHash $key -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:PUBLIC_KEY_SHA256) { throw 'Downloaded staging public key differs from witnessed pin' }
+          $env:GROWTHMAP_STAGING_AUTHORITY_ORIGIN=$env:AUTHORITY_ORIGIN
+          $env:GROWTHMAP_STAGING_LICENSE_PUBLIC_KEY=$key
+          $env:GROWTHMAP_STAGING_PUBLIC_KEY_SHA256=$env:PUBLIC_KEY_SHA256
+          $env:GROWTHMAP_STAGING_PUBLIC_CONFIG=$config
+          $env:GROWTHMAP_COMMERCIAL_RELEASE=''
+          $env:WIN_CSC_LINK=''
+          $env:WIN_CSC_KEY_PASSWORD=''
+          npm run dist:win:gift-staging
+          ./.github/workflows/scripts/verify-gift-staging-package.ps1 -ExpectedOrigin $env:AUTHORITY_ORIGIN -ExpectedPin $env:PUBLIC_KEY_SHA256 -SourceSha $env:GITHUB_SHA
+      - uses: actions/upload-artifact@v4
+        with:
+          name: growthmap-gift-staging-unsigned-${{ github.sha }}
+          path: |
+            desktop/dist/GrowthMap-Setup-*.exe
+            desktop/dist/GrowthMap-Setup-*.exe.sha256
+            desktop/dist/gift-staging-artifact-manifest.json
+          if-no-files-found: error
+          retention-days: 7

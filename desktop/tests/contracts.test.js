@@ -20,7 +20,7 @@ test('entitlement changes invalidate renderer state without weakening the IPC or
  assert.match(main,/event\.sender!==expected/);assert.match(main,/origin!==baseUrl/);
  assert.match(hook,/entitlement\.onChanged/);assert.match(hook,/refreshEntitlement/);assert.match(hook,/requestSequence/);
  assert.match(api,/getEntitlement:.*cache: "no-store"/);
- assert.match(page,/entitlement === null \? "Checking entitlement…"/);assert.match(page,/mutations_allowed !== true/);
+ assert.match(page,/entitlement === null \? t\("entitlement\.checking"\)/);assert.match(page,/mutations_allowed !== true/);
 });
 
 test('entitlement preflight binds fresh existing-Free paid and extraction startup modes',()=>{assert.match(main,/entitlementStatus\(userData,trialMode\)/);assert.match(main,/trialMode==='existing'\?'free':trialMode==='fresh'\?'fresh':'extraction'/);assert.match(main,/GROWTHMAP_FRESH_INSTALL:probeMode==='fresh'\?'1':'0'/);assert.match(main,/entitlementStatus\(userData,trial\.mode\)/);});
