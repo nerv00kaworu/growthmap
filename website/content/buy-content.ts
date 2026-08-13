@@ -30,7 +30,7 @@ export const buyPlans={
     personal:{
       name:'Personal v1',badge:'v1 個人永久授權',
       summary:'包含 Free 全部功能；付費差異只在專案名額、裝置與授權更新。',
-      features:['不限同時啟用的專案數量','授權簽發對象最多可使用 2 台個人裝置','major v1 永久授權，包含同一 major 的更新'],
+      features:['不限同時啟用的專案數量','授權簽發對象最多可使用 2 台個人裝置','Personal v1 永久授權，包含後續 Personal v1 更新'],
       quota:'不改變核心功能；解鎖的是不限啟用專案與個人裝置額度。',
       price:'US$10',
       allocation:'全球前 50 個付款確認（payment-confirmed）的名額為 US$10；第 51 個起為 US$29。報價（quote）不保留名額。',
@@ -50,7 +50,7 @@ export const buyPlans={
     personal:{
       name:'Personal v1',badge:'v1 个人永久授权',
       summary:'包含 Free 全部功能；付费差异只在项目名额、设备与授权更新。',
-      features:['不限同时启用的项目数量','授权签发对象最多可使用 2 台个人设备','major v1 永久授权，包含同一 major 的更新'],
+      features:['不限同时启用的项目数量','授权签发对象最多可使用 2 台个人设备','Personal v1 永久授权，包含后续 Personal v1 更新'],
       quota:'不改变核心功能；解锁的是不限启用项目与个人设备额度。',
       price:'US$10',
       allocation:'全球前 50 个付款确认（payment-confirmed）的名额为 US$10；第 51 个起为 US$29。报价（quote）不保留名额。',
@@ -70,7 +70,7 @@ export const buyPlans={
     personal:{
       name:'Personal v1',badge:'Personal perpetual v1 license',
       summary:'Includes everything in Free; paid differences are limited to project capacity, devices, and license updates.',
-      features:['Unlimited simultaneously active projects','Up to 2 personal devices for the license’s named issuer target','Perpetual major v1 license with updates within the same major version'],
+      features:['Unlimited simultaneously active projects','Up to 2 personal devices for the license’s named issuer target','Perpetual Personal v1 license with future Personal v1 updates'],
       quota:'Core features do not change; the license unlocks unlimited active projects and the personal-device allowance.',
       price:'US$10',
       allocation:'The first 50 payment-confirmed allocations worldwide are US$10; allocation 51 onward is US$29. A quote does not reserve an allocation.',
