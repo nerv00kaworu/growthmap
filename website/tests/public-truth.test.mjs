@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const root=path.resolve(import.meta.dirname,'..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const sourceFiles=['app','components','content'].flatMap(dir=>{const out=[];const walk=p=>fs.readdirSync(p,{withFileTypes:true}).forEach(e=>e.isDirectory()?walk(path.join(p,e.name)):e.name.match(/\.(ts|tsx)$/)&&out.push(path.relative(root,path.join(p,e.name))));walk(path.join(root,dir));return out});
+const all=sourceFiles.map(read).join('\n');
+test('public purchase routes are real and ungated',async()=>{const {whopProducts}=await import(pathToFileURL(path.join(root,'content/whop-checkout.ts')));assert.equal(whopProducts.early,'https://whop.com/growthmap/growthmap-early/');assert.equal(whopProducts.standard,'https://whop.com/growthmap/growthmap/');const buy=read('app/(localized)/[locale]/buy/page.tsx');for(const value of Object.values(whopProducts))assert.ok(buy.includes(value) || read('content/whop-checkout.ts').includes(value));assert.ok(!buy.includes('disabled'));assert.ok(!buy.includes('payment-flow'))});
+test('structured data reports public Windows release and in-stock Free and Personal offers',()=>{const s=read('components/StructuredData.tsx');for(const truth of ["operatingSystem:'Windows x64'",'downloadUrl:verifiedCandidate.downloadUrl',"price:'0'","price:'10'","price:'29'",'https://schema.org/InStock'])assert.ok(s.includes(truth),truth);for(const stale of ['OutOfStock','publicRelease=false','purchase is disabled','candidate is not publicly'])assert.ok(!s.includes(stale),stale)});
+test('all public source avoids obsolete launch claims and Gift branding',()=>{for(const stale of ['Production payment is unavailable','payment service is not live','Public download: unavailable','Activation / Authority: unavailable','公開下載：未啟用','付款：未啟用','Payment, ordering, license activation, and online updates are not available','目前沒有公開購買流程','当前没有公开购买流程'])assert.ok(!all.includes(stale),stale);assert.ok(!/\bgift\b/i.test(all),'Gift must not appear in public source')});
+test('legal and status disclose live services, unsigned publisher, manual overwrite updates, and safe refund handling',()=>{const legal=read('content/legal.ts'),status=read('content/secondary.ts');for(const truth of ['Unknown Publisher','no online auto-update','install it over the existing app','policy shown by Whop at checkout','applicable law','never send account passwords','activation key','Personal activation is live','Early (US$10)','Standard (US$29)'])assert.ok((legal+'\n'+status).includes(truth),truth);assert.ok(!/\b\d+[- ]day/i.test(legal),'no invented fixed refund period')});

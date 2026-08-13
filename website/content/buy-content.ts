@@ -28,11 +28,10 @@ export const buyPlans={
       fit:'適合一次專注推進一個啟用中專案。'
     },
     personal:{
-      name:'Personal',badge:'個人永久授權',
+      name:'Personal',badge:'個人永久授權',price:'US$10 / US$29',
       summary:'包含 Free 全部功能；付費差異只在不限啟用專案與兩台個人裝置。',
       features:['不限同時啟用的專案數量','授權簽發對象最多可使用 2 台個人裝置','Personal 永久授權'],
       quota:'不改變核心功能；解鎖的是不限啟用專案與個人裝置額度。',
-      price:'US$10',
       allocation:'全球前 50 個付款確認（payment-confirmed）的名額為 US$10；第 51 個起為 US$29。報價（quote）不保留名額。',
       fit:'適合同時推進多個啟用中專案，或需要第二台個人裝置。'
     }
@@ -48,11 +47,10 @@ export const buyPlans={
       fit:'适合一次专注推进一个启用中的项目。'
     },
     personal:{
-      name:'Personal',badge:'个人永久授权',
+      name:'Personal',badge:'个人永久授权',price:'US$10 / US$29',
       summary:'包含 Free 全部功能；付费差异只在不限启用项目与两台个人设备。',
       features:['不限同时启用的项目数量','授权签发对象最多可使用 2 台个人设备','Personal 永久授权'],
       quota:'不改变核心功能；解锁的是不限启用项目与个人设备额度。',
-      price:'US$10',
       allocation:'全球前 50 个付款确认（payment-confirmed）的名额为 US$10；第 51 个起为 US$29。报价（quote）不保留名额。',
       fit:'适合同时推进多个启用中的项目，或需要第二台个人设备。'
     }
@@ -68,11 +66,10 @@ export const buyPlans={
       fit:'Best when you focus on one active project at a time.'
     },
     personal:{
-      name:'Personal',badge:'Personal perpetual license',
+      name:'Personal',badge:'Personal perpetual license',price:'US$10 / US$29',
       summary:'Includes everything in Free; paid differences are limited to unlimited active projects and two personal devices.',
       features:['Unlimited simultaneously active projects','Up to 2 personal devices for the license’s named issuer target','Perpetual Personal license'],
       quota:'Core features do not change; the license unlocks unlimited active projects and the personal-device allowance.',
-      price:'US$10',
       allocation:'The first 50 payment-confirmed allocations worldwide are US$10; allocation 51 onward is US$29. A quote does not reserve an allocation.',
       fit:'Best for running several active projects at once or using a second personal device.'
     }
