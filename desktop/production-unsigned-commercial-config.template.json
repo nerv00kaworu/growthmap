@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 4,
+  "productMajor": 1,
+  "licenseIssuer": "Growthmap",
+  "supportEmail": "nerv00kaworu@gmail.com",
+  "supportUrl": "https://x.com/nerv00kaworu",
+  "licensePublicKeyResource": "commercial/license_public_key.pem",
+  "licensePublicKeySha256": "INJECTED_G1_PUBLIC_KEY_SHA256",
+  "activationApiOrigin": "https://payments.growthmap.work",
+  "purchasePortalOrigin": "https://whop.com",
+  "purchasePortalUrl": "https://whop.com/growthmap/growthmap/",
+  "updateUrl": "",
+  "updateOrigin": "",
+  "publisher": "月影塵（nerv00kaworu）",
+  "publisherStatus": "COMMERCIAL_UNSIGNED"
+}
