@@ -14,6 +14,8 @@ from .pem_signer import canonical, require_linux_loader_primitives, _open_parent
 from .signer_ceremony import OfflineFixtureMonotonicAnchor, validate_anchor_claim
 
 CONFIG_FIELDS={"schema_version","authority_id","expected_uid","approved_directory_uids","private_key_path","database_path","reviewed_public_key_path","reviewed_public_key_sha256","descriptor_path","ceremony_record_path","authorized_reviewers","release_sha256","deployment_config_sha256","anchor","listen"}
+CEREMONY_MODE_FIELD="ceremony_mode"
+CEREMONY_MODES=frozenset({"dual-operator-v1","single-operator-v1"})
 ANCHOR_FIELDS={"provider","path","expected_uid"};LISTEN_FIELDS={"host","port"}
 _SQLITE_CONNECT=sqlite3.connect
 _LOCK_TIMEOUT_SECONDS=1.0  # Closed production constant; saturation is an operations blocker.
@@ -418,8 +420,12 @@ def load_production_config(config_path:Path|str, *, expected_uid:int):
     if type(expected_uid) is not int or expected_uid <= 0:raise RuntimeError("expected_service_uid_invalid")
     path=_absolute(str(config_path),"fixed_config")
     if path.name != "authority-production.json" or str(path)!=os.path.normpath(str(path)) or "//" in str(path):raise RuntimeError("fixed_config_path_invalid")
-    cfg=_json(_read_fixed(path,expected_uid=expected_uid,approved_directory_uids=frozenset({0,expected_uid})),CONFIG_FIELDS,"fixed_config_invalid")
+    raw=_loads(_read_fixed(path,expected_uid=expected_uid,approved_directory_uids=frozenset({0,expected_uid})),"fixed_config_invalid")
+    if type(raw) is not dict or set(raw) not in (CONFIG_FIELDS,CONFIG_FIELDS|{CEREMONY_MODE_FIELD}):raise RuntimeError("fixed_config_invalid")
+    cfg=raw
     if cfg["schema_version"]!=1 or type(cfg["expected_uid"]) is not int or cfg["expected_uid"] != expected_uid:raise RuntimeError("fixed_config_uid_binding_mismatch")
+    mode=cfg.get(CEREMONY_MODE_FIELD,"dual-operator-v1")
+    if type(mode) is not str or mode not in CEREMONY_MODES:raise RuntimeError("fixed_config_invalid")
     if type(cfg["approved_directory_uids"]) is not list or cfg["expected_uid"] not in cfg["approved_directory_uids"] or 0 not in cfg["approved_directory_uids"] or any(type(x) is not int or x<0 for x in cfg["approved_directory_uids"]):raise RuntimeError("fixed_config_invalid")
     if type(cfg["anchor"]) is not dict or set(cfg["anchor"])!=ANCHOR_FIELDS or cfg["anchor"]["provider"]!="local-v1" or cfg["anchor"]["expected_uid"]!=cfg["expected_uid"]:raise RuntimeError("fixed_config_invalid")
     if type(cfg["listen"]) is not dict or set(cfg["listen"])!=LISTEN_FIELDS or cfg["listen"]["host"] not in {"127.0.0.1","::1"} or type(cfg["listen"]["port"]) is not int or not 1024<=cfg["listen"]["port"]<=65535:raise RuntimeError("fixed_config_invalid")
@@ -430,7 +436,11 @@ def build_production_authority(config_path:Path|str,*,expected_uid:int,anchor_fa
     cfg=load_production_config(config_path,expected_uid=expected_uid);uid=cfg["expected_uid"];public=_read_fixed(Path(cfg["reviewed_public_key_path"]),expected_uid=uid)
     if hashlib.sha256(public).hexdigest()!=cfg["reviewed_public_key_sha256"]:raise RuntimeError("reviewed_public_key_digest_mismatch")
     descriptor=_loads(_read_fixed(Path(cfg["descriptor_path"]),expected_uid=uid),"descriptor_invalid");record=_loads(_read_fixed(Path(cfg["ceremony_record_path"]),expected_uid=uid),"ceremony_record_invalid")
-    if type(descriptor) is not dict or descriptor.get("release_sha256")!=cfg["release_sha256"] or descriptor.get("deployment_config_sha256")!=cfg["deployment_config_sha256"]:raise RuntimeError("fixed_config_descriptor_mismatch")
+    if (type(descriptor) is not dict or descriptor.get("release_sha256")!=cfg["release_sha256"]
+            or descriptor.get("deployment_config_sha256")!=cfg["deployment_config_sha256"]
+            or descriptor.get(CEREMONY_MODE_FIELD,"dual-operator-v1")!=cfg.get(CEREMONY_MODE_FIELD,"dual-operator-v1")
+            or (cfg.get(CEREMONY_MODE_FIELD,"dual-operator-v1")=="single-operator-v1" and descriptor.get(CEREMONY_MODE_FIELD)!="single-operator-v1")):
+        raise RuntimeError("fixed_config_descriptor_mismatch")
     anchor=(anchor_factory or (lambda a:LocalV1PersistentAnchor(Path(a["path"]),a["expected_uid"],cfg["approved_directory_uids"])))(cfg["anchor"])
     if isinstance(anchor,OfflineFixtureMonotonicAnchor) or getattr(anchor,"production_safe",False) is not True or getattr(anchor,"fixture",False) or getattr(anchor,"process_local",False):raise RuntimeError("production_anchor_unsafe")
     # Programmatic factory exists only for deterministic tests. The CLI always constructs the
@@ -438,7 +448,7 @@ def build_production_authority(config_path:Path|str,*,expected_uid:int,anchor_fa
     broker=(broker_factory or ProductionSQLiteBroker)(Path(cfg["database_path"]),uid,frozenset(cfg["approved_directory_uids"]))
     if type(broker) is not ProductionSQLiteBroker or broker.fixture or broker.identity is None:raise RuntimeError("production_database_broker_invalid")
     try:
-        authority=LicenseAuthority.from_hardened_pem(database_broker=broker,private_key_file=Path(cfg["private_key_path"]),expected_uid=uid,approved_directory_uids=frozenset(cfg["approved_directory_uids"]),signer_descriptor=descriptor,ceremony_record=record,reviewed_public_key=public,authorized_reviewers=cfg["authorized_reviewers"],generation_anchor=anchor,authority_id=cfg["authority_id"])
+        authority=LicenseAuthority.from_hardened_pem(database_broker=broker,private_key_file=Path(cfg["private_key_path"]),expected_uid=uid,approved_directory_uids=frozenset(cfg["approved_directory_uids"]),signer_descriptor=descriptor,ceremony_record=record,reviewed_public_key=public,authorized_reviewers=cfg["authorized_reviewers"],generation_anchor=anchor,authority_id=cfg["authority_id"],ceremony_mode=cfg.get(CEREMONY_MODE_FIELD,"dual-operator-v1"))
     except Exception:
         broker.close();raise
     if type(authority) is not LicenseAuthority or authority._database_broker is not broker:broker.close();raise RuntimeError("production_database_broker_binding_failed")

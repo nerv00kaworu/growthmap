@@ -152,13 +152,14 @@ class LicenseAuthority:
     @classmethod
     def from_hardened_pem(cls,database:Path|None=None,*,database_broker:AuthorityDatabaseBroker|None=None,private_key_file:Path,expected_uid:int,
                           signer_descriptor,ceremony_record,reviewed_public_key:bytes,
-                          authorized_reviewers,generation_anchor,approved_directory_uids=None,
+                          authorized_reviewers,generation_anchor,approved_directory_uids=None,ceremony_mode="dual-operator-v1",
                           now=lambda:datetime.now(timezone.utc),authority_id="growthmap-authority-primary"):
         """Hardened PEM seam. Production callers must additionally enforce a production-safe anchor."""
         loaded=load_ed25519_private_key(private_key_file,expected_uid=expected_uid,
                                         approved_directory_uids=approved_directory_uids)
         descriptor=validate_descriptor(signer_descriptor,ceremony_record,loaded,reviewed_public_key,
-                                       authority_id=authority_id,authorized_reviewers=authorized_reviewers)
+                                       authority_id=authority_id,authorized_reviewers=authorized_reviewers,
+                                       ceremony_mode=ceremony_mode)
         ceremony={"schema_version":1,"purpose":CEREMONY_PURPOSE,"domain":CEREMONY_DOMAIN,"algorithm":"Ed25519",
                   "authority_id":authority_id,"key_id":descriptor["key_id"],"generation":descriptor["generation"],
                   "activated_at":descriptor["activated_at"],"predecessor_generation":descriptor["predecessor_generation"],

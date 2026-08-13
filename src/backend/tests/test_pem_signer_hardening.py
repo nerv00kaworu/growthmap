@@ -14,12 +14,13 @@ NOW="2026-08-08T08:00:00Z"; H="1"*64
 def material(tmp_path):
  key=Ed25519PrivateKey.generate();pem=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption());public=key.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo);path=tmp_path/"signer.pem";path.write_bytes(pem);path.chmod(0o400);return key,path,pem,public
 
-def fixtures(pem,public,generation=1,predecessor=None):
+def fixtures(pem,public,generation=1,predecessor=None,ceremony_mode=None):
  reviewers={};private={}
  for rid,role in (("reviewer-one","security-reviewer"),("reviewer-two","release-reviewer")):
   k=Ed25519PrivateKey.generate();p=k.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo);d=k.public_key().public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo);private[rid]=k;reviewers[rid]={"role":role,"public_key_pem":p.decode(),"public_spki_der_sha256":hashlib.sha256(d).hexdigest()}
  pub=serialization.load_pem_public_key(public);der=pub.public_bytes(serialization.Encoding.DER,serialization.PublicFormat.SubjectPublicKeyInfo)
  body={"authority_id":"growthmap-authority-primary","key_id":"authority-key-001","generation":generation,"predecessor_generation":predecessor,"predecessor_ceremony_sha256":None if generation==1 else "2"*64,"public_pem_sha256":hashlib.sha256(public).hexdigest(),"public_spki_der_sha256":hashlib.sha256(der).hexdigest(),"private_pem_sha256":hashlib.sha256(pem).hexdigest(),"ceremony_at":NOW,"activated_at":NOW,"release_sha256":H,"deployment_config_sha256":"3"*64,"witness":{"reference":"witness-record-001","version":"version-001","digest":"4"*64},"change_id":"change-001","status":"active"}
+ if ceremony_mode is not None:body["ceremony_mode"]=ceremony_mode
  msg=b"growthmap-pem-ceremony-v2\0"+canonical(body);acks=[{"reviewer_id":rid,"signature":private[rid].sign(msg).hex()} for rid in private];record={"schema_version":1,"record":body,"acknowledgements":acks};descriptor={"schema_version":2,**body,"ceremony_record_sha256":hashlib.sha256(canonical(record)).hexdigest()};return record,descriptor,reviewers,private
 
 @pytest.mark.parametrize(("ceremony","activation","valid"),[("2026-08-08T08:00:00.999999Z","2026-08-08T08:00:00Z",False),("2026-08-08T08:00:00Z","2026-08-08T08:00:00.000001Z",True),("2026-08-08T08:00:00Z","2026-08-08T08:00:00Z",True)])
@@ -95,6 +96,29 @@ def test_authorized_reviewers_fail_closed(case,tmp_path):
  elif case=="alias_key":roster["reviewer-two"]={**roster["reviewer-one"],"role":"release-reviewer"}
  else:roster["reviewer-one"]["unexpected"]=1
  with pytest.raises(RuntimeError):validate_ceremony_record(record,roster)
+
+def test_single_operator_mode_is_explicit_bound_and_valid(tmp_path):
+ _,path,pem,public=material(tmp_path);record,d,roster,_=fixtures(pem,public,ceremony_mode="single-operator-v1")
+ roster={"reviewer-one":roster["reviewer-one"]};record["acknowledgements"]=record["acknowledgements"][:1]
+ d["ceremony_record_sha256"]=hashlib.sha256(canonical(record)).hexdigest();loaded=load_ed25519_private_key(path,expected_uid=os.getuid())
+ assert validate_descriptor(d,record,loaded,public,authority_id=d["authority_id"],authorized_reviewers=roster,ceremony_mode="single-operator-v1")==d
+
+@pytest.mark.parametrize("case",["unknown_mode","inferred_from_one_ack","record_mode_missing","descriptor_mode_missing","mixed_mode","extra_reviewer","duplicate_ack","placeholder_identity"])
+def test_single_operator_mode_rejects_ambiguity_and_reuse(case,tmp_path):
+ _,path,pem,public=material(tmp_path);record,d,roster,_=fixtures(pem,public,ceremony_mode="single-operator-v1");roster={"reviewer-one":roster["reviewer-one"]};record["acknowledgements"]=record["acknowledgements"][:1]
+ mode="single-operator-v1"
+ if case=="unknown_mode":mode="single-operator-v2"
+ elif case=="inferred_from_one_ack":record["record"].pop("ceremony_mode");d.pop("ceremony_mode")
+ elif case=="record_mode_missing":record["record"].pop("ceremony_mode")
+ elif case=="descriptor_mode_missing":d.pop("ceremony_mode")
+ elif case=="mixed_mode":record["record"]["ceremony_mode"]="dual-operator-v1"
+ elif case=="extra_reviewer":
+  _,_,other,_=fixtures(pem,public);roster["reviewer-two"]=other["reviewer-two"]
+ elif case=="duplicate_ack":record["acknowledgements"].append(dict(record["acknowledgements"][0]))
+ else:
+  roster["placeholder-reviewer"]=roster.pop("reviewer-one");record["acknowledgements"][0]["reviewer_id"]="placeholder-reviewer"
+ d["ceremony_record_sha256"]=hashlib.sha256(canonical(record)).hexdigest();loaded=load_ed25519_private_key(path,expected_uid=os.getuid())
+ with pytest.raises(RuntimeError):validate_descriptor(d,record,loaded,public,authority_id=d["authority_id"],authorized_reviewers=roster,ceremony_mode=mode)
 
 @pytest.mark.parametrize("field",["authority_id","generation","predecessor_generation","predecessor_ceremony_sha256","public_pem_sha256","public_spki_der_sha256","private_pem_sha256","ceremony_at","activated_at","release_sha256","deployment_config_sha256","witness","change_id","status","ceremony_record_sha256"])
 def test_descriptor_and_operational_binding(field,tmp_path):

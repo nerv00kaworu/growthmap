@@ -1,4 +1,4 @@
-"""Fail-closed Linux PEM custody loader and authorized two-person ceremony validation.
+"""Fail-closed Linux PEM custody loader and explicitly selected ceremony validation.
 
 The local file and manual external witness controls reduce accidental rollback; they are not
 cryptographic rollback proof. Production deployment must drill the exact filesystem, including
@@ -20,6 +20,10 @@ ID_RE=re.compile(r"[a-z0-9][a-z0-9._-]{2,63}")
 AUTH_RE=re.compile(r"[a-z0-9][a-z0-9_-]{2,63}")
 TIME_RE=re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{6})?Z")
 DESCRIPTOR_FIELDS={"schema_version","authority_id","key_id","generation","predecessor_generation","predecessor_ceremony_sha256","public_pem_sha256","public_spki_der_sha256","private_pem_sha256","ceremony_record_sha256","ceremony_at","activated_at","release_sha256","deployment_config_sha256","witness","change_id","status"}
+CEREMONY_MODE_FIELD="ceremony_mode"
+DUAL_OPERATOR_MODE="dual-operator-v1"
+SINGLE_OPERATOR_MODE="single-operator-v1"
+CEREMONY_MODES=frozenset({DUAL_OPERATOR_MODE,SINGLE_OPERATOR_MODE})
 RECORD_FIELDS={"schema_version","record","acknowledgements"}
 RECORD_BODY_FIELDS=DESCRIPTOR_FIELDS-{"schema_version","ceremony_record_sha256"}
 ACK_FIELDS={"reviewer_id","signature"}
@@ -108,12 +112,21 @@ def load_ed25519_private_key(path:Path|str,*,expected_uid:int|None=None,approved
         if file_fd>=0:os.close(file_fd)
         os.close(parent_fd)
 
-def _authorized_roster(roster:Any):
-    if type(roster) is not dict or len(roster)<2 or len(roster)>32:raise RuntimeError("ceremony_reviewer_roster_invalid")
+def _mode(value:Any,*,allow_implicit_dual:bool):
+    if value is None and allow_implicit_dual:return DUAL_OPERATOR_MODE
+    if type(value) is not str or value not in CEREMONY_MODES:raise RuntimeError("ceremony_mode_invalid")
+    return value
+
+def _placeholder(value:Any):
+    return type(value) is str and any(token in value.lower() for token in ("placeholder","example"))
+
+def _authorized_roster(roster:Any,mode:str):
+    if type(roster) is not dict or (mode==SINGLE_OPERATOR_MODE and len(roster)!=1) or (mode==DUAL_OPERATOR_MODE and not 2<=len(roster)<=32):raise RuntimeError("ceremony_reviewer_roster_invalid")
     out={};digests=set()
     for rid,entry in roster.items():
-        if type(rid) is not str or not ID_RE.fullmatch(rid) or type(entry) is not dict or set(entry)!=ROSTER_ENTRY_FIELDS or not ID_RE.fullmatch(entry.get("role","")) or not _hex(entry.get("public_spki_der_sha256")):raise RuntimeError("ceremony_reviewer_roster_invalid")
+        if type(rid) is not str or not ID_RE.fullmatch(rid) or _placeholder(rid) or type(entry) is not dict or set(entry)!=ROSTER_ENTRY_FIELDS or not ID_RE.fullmatch(entry.get("role","")) or _placeholder(entry.get("role")) or not _hex(entry.get("public_spki_der_sha256")):raise RuntimeError("ceremony_reviewer_roster_invalid")
         try:
+            if _placeholder(entry["public_key_pem"]):raise ValueError
             pem=entry["public_key_pem"].encode("ascii");key=serialization.load_pem_public_key(pem)
             if not isinstance(key,Ed25519PublicKey):raise ValueError
             canonical_pem=key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -123,8 +136,12 @@ def _authorized_roster(roster:Any):
         digests.add(digest);out[rid]=(key,digest)
     return out
 
-def _validate_body(body):
-    if type(body) is not dict or set(body)!=RECORD_BODY_FIELDS:return False
+def _validate_body(body,mode):
+    fields=RECORD_BODY_FIELDS|({CEREMONY_MODE_FIELD} if mode==SINGLE_OPERATOR_MODE or CEREMONY_MODE_FIELD in body else set())
+    if type(body) is not dict or set(body)!=fields:return False
+    try:body_mode=_mode(body.get(CEREMONY_MODE_FIELD),allow_implicit_dual=True)
+    except RuntimeError:return False
+    if body_mode!=mode or (mode==SINGLE_OPERATOR_MODE and body.get(CEREMONY_MODE_FIELD)!=SINGLE_OPERATOR_MODE):return False
     g,p=body.get("generation"),body.get("predecessor_generation")
     if type(g) is not int or not 1<=g<=2**31-1 or (g==1 and (p is not None or body.get("predecessor_ceremony_sha256") is not None)) or (g>1 and (p!=g-1 or not _hex(body.get("predecessor_ceremony_sha256")))):return False
     if not AUTH_RE.fullmatch(body.get("authority_id","")) or not ID_RE.fullmatch(body.get("key_id","")) or body.get("status")!="active":return False
@@ -134,11 +151,13 @@ def _validate_body(body):
     w=body.get("witness")
     return type(w) is dict and set(w)==WITNESS_FIELDS and ID_RE.fullmatch(w.get("reference","")) is not None and ID_RE.fullmatch(w.get("version","")) is not None and _hex(w.get("digest"))
 
-def validate_ceremony_record(record:Any,authorized_reviewers:Mapping[str,Any])->tuple[dict[str,Any],str]:
-    roster=_authorized_roster(authorized_reviewers)
+def validate_ceremony_record(record:Any,authorized_reviewers:Mapping[str,Any],*,ceremony_mode:str=DUAL_OPERATOR_MODE)->tuple[dict[str,Any],str]:
+    mode=_mode(ceremony_mode,allow_implicit_dual=False)
+    roster=_authorized_roster(authorized_reviewers,mode)
     if type(record) is not dict or set(record)!=RECORD_FIELDS or record.get("schema_version")!=1:raise RuntimeError("ceremony_record_invalid")
     body,acks=record.get("record"),record.get("acknowledgements")
-    if not _validate_body(body) or type(acks) is not list or len(acks)!=2:raise RuntimeError("ceremony_record_invalid")
+    required=1 if mode==SINGLE_OPERATOR_MODE else 2
+    if not _validate_body(body,mode) or type(acks) is not list or len(acks)!=required:raise RuntimeError("ceremony_record_invalid")
     message=b"growthmap-pem-ceremony-v2\0"+canonical(body);seen=set();keys=set()
     for ack in acks:
         if type(ack) is not dict or set(ack)!=ACK_FIELDS or ack.get("reviewer_id") not in roster:raise RuntimeError("ceremony_ack_invalid")
@@ -151,10 +170,14 @@ def validate_ceremony_record(record:Any,authorized_reviewers:Mapping[str,Any])->
         seen.add(rid);keys.add(digest)
     return dict(body),hashlib.sha256(canonical(record)).hexdigest()
 
-def validate_descriptor(descriptor,ceremony_record,loaded,reviewed_public_pem:bytes,*,authority_id:str,authorized_reviewers):
-    if type(descriptor) is not dict or set(descriptor)!=DESCRIPTOR_FIELDS or descriptor.get("schema_version")!=2:raise RuntimeError("signer_descriptor_invalid")
-    body,record_digest=validate_ceremony_record(ceremony_record,authorized_reviewers)
-    if not _validate_body({k:v for k,v in descriptor.items() if k not in {"schema_version","ceremony_record_sha256"}}):raise RuntimeError("signer_descriptor_invalid")
+def validate_descriptor(descriptor,ceremony_record,loaded,reviewed_public_pem:bytes,*,authority_id:str,authorized_reviewers,ceremony_mode:str=DUAL_OPERATOR_MODE):
+    mode=_mode(ceremony_mode,allow_implicit_dual=False)
+    fields=DESCRIPTOR_FIELDS|({CEREMONY_MODE_FIELD} if mode==SINGLE_OPERATOR_MODE or (type(descriptor) is dict and CEREMONY_MODE_FIELD in descriptor) else set())
+    if type(descriptor) is not dict or set(descriptor)!=fields or descriptor.get("schema_version")!=2:raise RuntimeError("signer_descriptor_invalid")
+    descriptor_mode=_mode(descriptor.get(CEREMONY_MODE_FIELD),allow_implicit_dual=True)
+    if descriptor_mode!=mode or (mode==SINGLE_OPERATOR_MODE and descriptor.get(CEREMONY_MODE_FIELD)!=SINGLE_OPERATOR_MODE):raise RuntimeError("signer_descriptor_invalid")
+    body,record_digest=validate_ceremony_record(ceremony_record,authorized_reviewers,ceremony_mode=mode)
+    if not _validate_body({k:v for k,v in descriptor.items() if k not in {"schema_version","ceremony_record_sha256"}},mode):raise RuntimeError("signer_descriptor_invalid")
     if descriptor["authority_id"]!=authority_id or any(body.get(k)!=descriptor.get(k) for k in RECORD_BODY_FIELDS):raise RuntimeError("signer_ceremony_descriptor_mismatch")
     if not hmac.compare_digest(record_digest,descriptor["ceremony_record_sha256"]):raise RuntimeError("signer_ceremony_digest_mismatch")
     try:

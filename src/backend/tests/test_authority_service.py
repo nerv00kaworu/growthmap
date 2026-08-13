@@ -13,6 +13,12 @@ def test_fixed_config_closed_absolute(monkeypatch,tmp_path):
  cfg["extra"]=1;p.chmod(0o600);p.write_text(json.dumps(cfg));p.chmod(0o400)
  with pytest.raises(RuntimeError):load_production_config(p,expected_uid=os.getuid())
 
+def test_fixed_config_explicit_single_operator_and_unknown_mode(monkeypatch,tmp_path):
+ p,cfg=root_config(tmp_path);cfg["ceremony_mode"]="single-operator-v1";p.chmod(0o600);p.write_text(json.dumps(cfg));p.chmod(0o400);monkeypatch.setattr("licensing.authority_service._read_fixed",lambda path,**kw:p.read_bytes())
+ assert load_production_config(p,expected_uid=os.getuid())["ceremony_mode"]=="single-operator-v1"
+ cfg["ceremony_mode"]="single-operator-v2";p.chmod(0o600);p.write_text(json.dumps(cfg));p.chmod(0o400)
+ with pytest.raises(RuntimeError,match="fixed_config_invalid"):load_production_config(p,expected_uid=os.getuid())
+
 def test_duplicate_json_rejected_recursively():
  for raw in (b'{"a":1,"a":2}',b'{"a":{"b":1,"b":2}}',b'{"record":{"witness":{"digest":"a","digest":"b"}}}',b'{"authorized_reviewers":{"r":{"role":"a","role":"b"}}}',b'{"acknowledgements":[{"reviewer_id":"a","reviewer_id":"b"}]}'):
   with pytest.raises(RuntimeError):_loads(raw,"bad")
