@@ -24,7 +24,9 @@ def jwt(key, *, issuer, audience, email=ADMIN_EMAIL, exp=None, kid="one"):
 
 def verifier(key, issuer="https://team.cloudflareaccess.com", audience="aud"):
     numbers=key.public_key().public_numbers()
-    jwks={"keys":[{"kty":"RSA","alg":"RS256","kid":"one","n":b64(numbers.n.to_bytes((numbers.n.bit_length()+7)//8,"big")),"e":b64(numbers.e.to_bytes((numbers.e.bit_length()+7)//8,"big"))}]}
+    # Match Cloudflare's live response shape: standards-based keys plus legacy
+    # certificate fields that are not verification inputs.
+    jwks={"keys":[{"kty":"RSA","alg":"RS256","kid":"one","n":b64(numbers.n.to_bytes((numbers.n.bit_length()+7)//8,"big")),"e":b64(numbers.e.to_bytes((numbers.e.bit_length()+7)//8,"big"))}],"public_cert":{"kid":"one","cert":"legacy"},"public_certs":[{"kid":"one","cert":"legacy"}]}
     return AccessJWTVerifier(issuer=issuer,audience=audience,email=ADMIN_EMAIL,jwks_url=issuer+"/cdn-cgi/access/certs",fetcher=lambda _:json.dumps(jwks).encode())
 
 

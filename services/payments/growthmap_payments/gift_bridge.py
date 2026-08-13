@@ -97,7 +97,10 @@ class AccessJWTVerifier:
 
     def _refresh(self):
         value = json.loads(self.fetcher(self.jwks_url))
-        if type(value) is not dict or set(value) != {"keys"} or type(value["keys"]) is not list: raise ValueError
+        # Cloudflare's live JWKS response includes legacy public_cert/public_certs
+        # alongside the standards-based keys array. Ignore those non-authoritative
+        # extras; only parsed RSA/RS256 JWKs participate in verification.
+        if type(value) is not dict or type(value.get("keys")) is not list: raise ValueError
         keys = {}
         for item in value["keys"]:
             if (type(item) is not dict or item.get("kty") != "RSA" or item.get("alg") != "RS256"
