@@ -1,7 +1,7 @@
 """Canonical SQLite compatibility contract shared by migration and preflight."""
 import re
 
-CURRENT_USER_VERSION = 3
+CURRENT_USER_VERSION = 4
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),

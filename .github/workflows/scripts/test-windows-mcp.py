@@ -135,19 +135,18 @@ def integration(exe):
             out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env,expected_status="available");logs += [("stdout",out),("stderr",err)]
             discovery.write_text(json.dumps(descriptor(exe,target,endpoint,nonce,pid),separators=(",",":")),encoding="utf-8")
             out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,False,"ordinary discovery",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("ordinary_discovery_and_mcp")
-            # The actual frozen executable must traverse the fixed LOCALAPPDATA descriptor symlink and fail closed.
-            ordinary=root/"ordinary-descriptor.json";discovery.replace(ordinary)
-            try:
-                os.symlink(ordinary,discovery)
-            except OSError as e:
-                if getattr(e,"winerror",None)==1314:reached.add("reparse_creation_skipped_privilege")
-                else:raise
-            else:
-                _,_,rows=mcp_exchange(exe,env)
-                assert_call_result(rows,True,"unsafe discovery descriptor",token,ports,root)
-                reached.add("reparse_rejected_by_executable")
-                discovery.unlink()
-            if not discovery.exists():ordinary.replace(discovery)
+            # A directory junction is a genuine Windows reparse point and can be
+            # created by ordinary hosted-runner users without symlink privilege.
+            real_growthmap=local/"GrowthMap-real";discovery.parent.replace(real_growthmap)
+            junction=local/"GrowthMap"
+            made=subprocess.run(["cmd.exe","/d","/c","mklink","/J",str(junction),str(real_growthmap)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            if made.returncode or not junction.exists():raise AssertionError("could not create mandatory descriptor directory junction")
+            _,_,rows=mcp_exchange(exe,env)
+            assert_call_result(rows,True,"unsafe discovery descriptor",token,ports,root)
+            reached.add("reparse_rejected_by_executable")
+            removed=subprocess.run(["cmd.exe","/d","/c","rmdir",str(junction)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+            if removed.returncode or junction.exists():raise AssertionError("could not remove descriptor directory junction")
+            real_growthmap.replace(junction)
             stop_sidecar(sidecar);sidecar=None
             nonce2=secrets.token_hex(24);write_control(control,token,nonce2);sidecar,port2,pid2=start_sidecar(script,control,ready,env);ports.append(str(port2));assert port2!=port
             endpoint2=f"http://127.0.0.1:{port2}/agent/v1"
@@ -169,7 +168,7 @@ def integration(exe):
             except Exception:pass
         required={"credential_roundtrip","ordinary_discovery_and_mcp","restart_rebind_persistence","revoke_blocks_bearer_and_mcp","credential_deleted","secret_evidence_checked"}
         assert required<=reached,reached
-        assert "reparse_rejected_by_executable" in reached or "reparse_creation_skipped_privilege" in reached
+        assert "reparse_rejected_by_executable" in reached
 
 if __name__=="__main__":
     ap=argparse.ArgumentParser();ap.add_argument("--server",nargs=2,metavar=("CONTROL","READY"));ap.add_argument("--exe")

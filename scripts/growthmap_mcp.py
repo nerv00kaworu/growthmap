@@ -10,7 +10,12 @@ def descriptor_path():
  if sys.platform!="win32":raise ValueError("packaged Agent Access requires Windows")
  root=os.getenv("LOCALAPPDATA","")
  if not root or not Path(root).is_absolute():raise ValueError("LOCALAPPDATA unavailable")
- return Path(root)/"GrowthMap"/"agent-access.json"
+ import stat
+ base=Path(root);parent=base/"GrowthMap"
+ for component in (base,parent):
+  info=component.lstat()
+  if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or getattr(info,"st_file_attributes",0)&0x400:raise ValueError("unsafe discovery descriptor")
+ return parent/"agent-access.json"
 def _pid_live(pid):
  if sys.platform!="win32":
   try:os.kill(pid,0);return True

@@ -151,6 +151,48 @@ def test_agent_grant_persistent_migration_preserves_old_rows(tmp_path):
     asyncio.run(_agent_grant_persistent_migration_preserves_old_rows(tmp_path))
 
 
+async def _baseline_v2_agent_grant_expiry_becomes_nullable_without_custody_loss(tmp_path):
+    from db.database import Base
+    from models import models  # noqa: F401
+    engine=create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'baseline-v2-agent.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(conn)
+        await conn.execute(text("""INSERT INTO projects
+          (id,name,status,created_at,updated_at,revision) VALUES ('project','kept','active','2026-01-01','2026-01-01',1)"""))
+        await conn.execute(text("""INSERT INTO agent_grants
+          (id,token_prefix,token_salt,token_hash,project_id,permission,label,agent_identity,status,expires_at,persistent)
+          VALUES ('old','prefix','salt','hash','project','read','legacy','agent','active','2030-01-02T03:04:05',0)"""))
+        await conn.execute(text("ALTER TABLE agent_grants RENAME COLUMN expires_at TO expires_nullable_v3"))
+        await conn.execute(text("ALTER TABLE agent_grants ADD COLUMN expires_at DATETIME NOT NULL DEFAULT '2030-01-02T03:04:05'"))
+        await conn.execute(text("UPDATE agent_grants SET expires_at=expires_nullable_v3"))
+        await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN expires_nullable_v3"))
+        await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN persistent"))
+        await conn.execute(text("PRAGMA user_version=2"))
+        before_indexes={(row[1],row[2]) for row in (await conn.execute(text("pragma index_list(agent_grants)"))).all()}
+        before_fks={(row[2],row[3],row[4],row[6]) for row in (await conn.execute(text("pragma foreign_key_list(agent_grants)"))).all()}
+    from desktop.database_maintenance import schema_status
+    preflight=schema_status(tmp_path/'baseline-v2-agent.db')
+    assert "incompatible_column:agent_grants.expires_at" in preflight["reasons"] and "user_version:2" in preflight["reasons"]
+    async with engine.begin() as conn:await migrate_sqlite(conn)
+    async with engine.connect() as conn:
+        columns={row[1]:row for row in (await conn.execute(text("pragma table_info(agent_grants)"))).all()}
+        assert bool(columns["expires_at"][3]) is False
+        assert (await conn.execute(text("select expires_at,persistent from agent_grants where id='old'"))).one()==("2030-01-02T03:04:05",0)
+        assert {(row[1],row[2]) for row in (await conn.execute(text("pragma index_list(agent_grants)"))).all()}==before_indexes
+        assert {(row[2],row[3],row[4],row[6]) for row in (await conn.execute(text("pragma foreign_key_list(agent_grants)"))).all()}==before_fks
+        await conn.execute(text("""INSERT INTO agent_grants
+          (id,token_prefix,token_salt,token_hash,project_id,permission,label,agent_identity,status,expires_at,persistent)
+          VALUES ('persistent','prefix2','salt','hash','project','propose','unlimited','local-mcp','active',NULL,1)"""))
+        assert (await conn.execute(text("select expires_at,persistent from agent_grants where id='persistent'"))).one()==(None,1)
+        assert (await conn.execute(text("pragma user_version"))).scalar()==CURRENT_USER_VERSION
+    await engine.dispose()
+
+
+def test_baseline_v2_agent_grant_expiry_becomes_nullable_without_custody_loss(tmp_path):
+    asyncio.run(_baseline_v2_agent_grant_expiry_becomes_nullable_without_custody_loss(tmp_path))
+
+
 async def _incompatible_agent_grant_persistent_fails_closed(tmp_path):
     from db.database import Base
     from models import models  # noqa: F401

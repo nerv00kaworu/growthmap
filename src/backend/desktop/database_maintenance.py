@@ -155,6 +155,9 @@ def schema_status(path):
     # Missing tables/columns are already reported by the strict ORM contract;
     # avoid turning a coherent rejection into an inspection exception.
     if column in present and connection.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1').fetchone():reasons.append(f"null_data:{table}.{column}")
+  if connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_grants'").fetchone():
+   expiry=next((row for row in connection.execute('PRAGMA table_info("agent_grants")') if row[1]=="expires_at"),None)
+   if expiry is not None and bool(expiry[3]):reasons.append("incompatible_column:agent_grants.expires_at")
   migration_specs=list(COLUMNS)
   migration_specs.extend(spec for spec in TABLE_CONDITIONAL_COLUMNS if connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?",(spec[0],)).fetchone())
   for spec in migration_specs:

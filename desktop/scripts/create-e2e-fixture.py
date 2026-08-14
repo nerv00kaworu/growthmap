@@ -1,6 +1,8 @@
 """Create a dependency-free canonical GrowthMap DB fixture in system temp."""
 import os, sqlite3, sys, tempfile
 from pathlib import Path
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"src/backend"))
+from db.schema_contract import CURRENT_USER_VERSION
 
 def fixture_output(argument: str) -> Path:
     output=Path(argument).resolve(); temp_root=Path(tempfile.gettempdir()).resolve()
@@ -14,7 +16,7 @@ def fixture_output(argument: str) -> Path:
 if len(sys.argv)!=2: raise SystemExit("usage: create-e2e-fixture.py TEMP_FIXTURE_PATH")
 out=fixture_output(sys.argv[1]); c=sqlite3.connect(out)
 # Canonical fixture surface required by desktop validation and schema preflight.
-c.executescript("""
+c.executescript(f"""
 CREATE TABLE projects(id TEXT PRIMARY KEY NOT NULL,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source_node_id TEXT,name TEXT NOT NULL,description TEXT,status TEXT,created_at DATETIME,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',branch_id VARCHAR(36),created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
@@ -28,7 +30,7 @@ CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.rel
 CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id,relation_type,is_mainline ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1 AND id!=OLD.id); END;
 CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
 CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight,note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;
-PRAGMA user_version=3;
+PRAGMA user_version={CURRENT_USER_VERSION};
 """)
 created_at="2026-08-03T00:00:00+00:00"
 c.execute("INSERT INTO projects(id,name,description,goal,root_node_id,status,settings,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",('fixture','Desktop Fixture','','','root','active','{}',1,created_at,created_at))

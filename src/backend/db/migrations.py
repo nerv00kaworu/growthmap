@@ -23,6 +23,19 @@ async def _validate_orm_read_contract(conn):
             problem=orm_column_problem(rows.get(name),expected)
             if problem:raise RuntimeError(f"{problem} ORM read column {table}.{name}")
 
+async def _migrate_agent_grant_expiry_nullable(conn,upgrading):
+    if not await _table_exists(conn,"agent_grants"):return
+    expiry=await _column(conn,"agent_grants","expires_at")
+    if expiry is None:raise RuntimeError("missing ORM read column agent_grants.expires_at")
+    if not bool(expiry[3]):return
+    if not upgrading:raise RuntimeError("incompatible migration column agent_grants.expires_at")
+    # SQLite cannot drop NOT NULL in place. Rename/add/copy/drop preserves expiry
+    # values without replacing the table, so inbound FKs and indexes remain intact.
+    await conn.execute(text("ALTER TABLE agent_grants RENAME COLUMN expires_at TO expires_at_legacy_v3"))
+    await conn.execute(text("ALTER TABLE agent_grants ADD COLUMN expires_at DATETIME"))
+    await conn.execute(text("UPDATE agent_grants SET expires_at=expires_at_legacy_v3"))
+    await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN expires_at_legacy_v3"))
+
 async def _validate_required_rows(conn):
     for table,columns in ROW_REQUIRED_NON_NULL.items():
         for column in columns:
@@ -51,6 +64,7 @@ async def migrate_sqlite(conn):
             if not upgrading:raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
             await conn.execute(text(spec[5]))
         if upgrading and os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER")==str(ordinal):raise RuntimeError("injected migration failure")
+    await _migrate_agent_grant_expiry_nullable(conn,upgrading)
     await _validate_objects(conn,upgrading)
     for spec in migration_specs:assert await _validate_column(conn,spec)
     # Missing non-migration-owned mapped columns are unsupported partial schemas.
