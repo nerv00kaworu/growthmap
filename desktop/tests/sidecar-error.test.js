@@ -1,0 +1,20 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict');
+const {PassThrough}=require('node:stream');
+const {MAX_ERROR_BYTES,safeEnvelope,errorFromResponse,unavailableError,readResponse}=require('../sidecar-error');
+
+function response(statusCode,body,cuts=[]){
+ const stream=new PassThrough();stream.statusCode=statusCode;const bytes=Buffer.isBuffer(body)?body:Buffer.from(body);let offset=0;
+ process.nextTick(()=>{for(const cut of cuts){stream.write(bytes.subarray(offset,offset+cut));offset+=cut;}stream.end(bytes.subarray(offset));});
+ return stream;
+}
+function paddedEnvelope(size,extra={}){const json=JSON.stringify({code:'ENTITLEMENT_READ_ONLY',reason:'update_recovery',...extra});return Buffer.concat([Buffer.from(json),Buffer.alloc(size-Buffer.byteLength(json),0x20)]);}
+
+test('allowlists top-level mutation-gate status, code, and reason only',()=>{const body=JSON.stringify({detail:'C:\\Users\\private token=secret',code:'ENTITLEMENT_READ_ONLY',reason:'prior_installation_evidence',headers:{authorization:'Bearer secret'}});assert.deepEqual(safeEnvelope(403,body),{status:403,code:'ENTITLEMENT_READ_ONLY',reason:'prior_installation_evidence',detail:null});assert.doesNotMatch(errorFromResponse(403,body).message,/Users|token|Bearer|authorization/);});
+test('supports FastAPI nested object detail while rejecting string and arbitrary values',()=>{assert.deepEqual(safeEnvelope(403,JSON.stringify({detail:{code:'ENTITLEMENT_READ_ONLY',reason:'update_recovery',path:'/secret'}})),{status:403,code:'ENTITLEMENT_READ_ONLY',reason:'update_recovery',detail:null});assert.deepEqual(safeEnvelope(422,JSON.stringify({detail:'arbitrary helper stderr token=secret'})),{status:422,code:'SIDECAR_REQUEST_FAILED',reason:null,detail:null});assert.deepEqual(safeEnvelope(418,JSON.stringify({code:'EVIL',reason:'/secret'})),{status:0,code:'SIDECAR_REQUEST_FAILED',reason:null,detail:null});});
+test('oversize and malformed responses fail safely and unavailable remains stable',()=>{assert.deepEqual(safeEnvelope(500,'x'.repeat(MAX_ERROR_BYTES+1)),{status:500,code:'SIDECAR_REQUEST_FAILED',reason:null,detail:null});assert.deepEqual(safeEnvelope(500,'{"detail":'),{status:500,code:'SIDECAR_REQUEST_FAILED',reason:null,detail:null});assert.match(unavailableError().message,/SIDECAR_UNAVAILABLE/);});
+
+test('HTTP stream accepts an exact 65,536-byte structured error across chunk layouts',async t=>{const body=paddedEnvelope(MAX_ERROR_BYTES);for(const cuts of [[],[1],[32768],[65535]])await t.test(cuts.length?cuts.join('+'):'single chunk',async()=>{await assert.rejects(readResponse(response(403,body,cuts)),error=>error.code==='ENTITLEMENT_READ_ONLY'&&error.reason==='update_recovery'&&error.statusCode===403);});});
+test('HTTP stream fails safe for a 65,537-byte error across chunk layouts',async t=>{const body=paddedEnvelope(MAX_ERROR_BYTES+1);for(const cuts of [[],[1],[32768,32768],[65536]])await t.test(cuts.length?cuts.join('+'):'single chunk',async()=>{await assert.rejects(readResponse(response(403,body,cuts)),error=>error.code==='SIDECAR_REQUEST_FAILED'&&error.reason===null&&error.statusCode===403&&!error.message.includes('ENTITLEMENT_READ_ONLY'));});});
+test('HTTP stream decodes multibyte Unicode split across chunks once',async()=>{const body=Buffer.from(JSON.stringify({note:'安全',code:'ENTITLEMENT_READ_ONLY',reason:'update_recovery'}));const marker=Buffer.from('安全'),start=body.indexOf(marker),cuts=[start+1,1,1];assert.equal(await readResponse(response(200,body,cuts)),body.toString('utf8'));await assert.rejects(readResponse(response(403,body,cuts)),error=>error.code==='ENTITLEMENT_READ_ONLY'&&error.reason==='update_recovery');});
+test('HTTP stream preserves a valid successful JSON body larger than 64 KiB',async()=>{const expected={items:['安全', 'x'.repeat(MAX_ERROR_BYTES+4096)]},body=Buffer.from(JSON.stringify(expected));const text=await readResponse(response(200,body,[17,MAX_ERROR_BYTES-3,1]));assert.ok(body.length>MAX_ERROR_BYTES);assert.deepEqual(JSON.parse(text),expected);});

@@ -45,6 +45,7 @@
       "lifecycle.js",
       "database-manager.js",
       "database-workspace.js",
+      "sidecar-error.js",
       "request-policy.js",
       "update-policy.js",
       "purchase-portal.js",

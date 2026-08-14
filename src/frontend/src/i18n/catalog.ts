@@ -88,6 +88,9 @@ const zhTW = {
   "toast.activated": "✅ 授權已啟用，此裝置可離線驗證",
   "toast.imported": "✅ 匯入成功！",
   "confirm.deleteNode": "確定刪除此節點？",
+  "agentAccess.error.readOnly": "GrowthMap 目前處於唯讀授權狀態，無法建立 Agent Access 或存取權杖。請啟用有效 License 或聯絡支援；檢視、搜尋、匯出與備份仍可使用。",
+  "agentAccess.error.unavailable": "本機 GrowthMap 服務目前無法連線。請重新啟動應用程式後再試。",
+  "agentAccess.error.generic": "無法啟用 Agent Access。請重試；若問題持續，請提供錯誤代碼給支援人員。",
 } as const;
 
 export type MessageKey = keyof typeof zhTW;
@@ -113,6 +116,7 @@ const zhCN = {
   "toast.projectArchived": "✅ 项目已归档；数据仍可读取与导出", "toast.licenseDesktopOnly": "License 导入仅在桌面版提供", "toast.licenseImported": "✅ License 已验证并导入",
   "toast.purchaseDesktopOnly": "购买页面仅在桌面版提供", "toast.activationDesktopOnly": "授权启用仅在桌面版提供", "toast.activated": "✅ 授权已启用，此设备可离线验证",
   "toast.imported": "✅ 导入成功！", "confirm.deleteNode": "确定删除此节点？",
+  "agentAccess.error.readOnly": "GrowthMap 当前处于只读授权状态，无法创建 Agent Access 或访问令牌。请激活有效 License 或联系支持；查看、搜索、导出和备份仍可使用。", "agentAccess.error.unavailable": "本地 GrowthMap 服务当前无法连接。请重启应用后重试。", "agentAccess.error.generic": "无法启用 Agent Access。请重试；若问题持续，请将错误代码提供给支持人员。",
 } as const satisfies Catalog;
 
 const en = {
@@ -134,6 +138,7 @@ const en = {
   "toast.projectRestored": "✅ Project restored", "toast.projectArchived": "✅ Project archived; data remains readable and exportable", "toast.licenseDesktopOnly": "License import is available only in the desktop app",
   "toast.licenseImported": "✅ License verified and imported", "toast.purchaseDesktopOnly": "The purchase page is available only in the desktop app", "toast.activationDesktopOnly": "Activation is available only in the desktop app",
   "toast.activated": "✅ License activated; this device can verify it offline", "toast.imported": "✅ Import complete!", "confirm.deleteNode": "Delete this node?",
+  "agentAccess.error.readOnly": "GrowthMap is in a read-only authorization state, so Agent Access and access tokens cannot be created. Activate a valid license or contact support; view, search, export, and backup remain available.", "agentAccess.error.unavailable": "The local GrowthMap service is unavailable. Restart the app and try again.", "agentAccess.error.generic": "Agent Access could not be enabled. Retry; if it continues, provide the error code to support.",
 } as const satisfies Catalog;
 
 export const catalogs: Readonly<Record<Locale, Catalog>> = { "zh-TW": zhTW, "zh-CN": zhCN, en };
