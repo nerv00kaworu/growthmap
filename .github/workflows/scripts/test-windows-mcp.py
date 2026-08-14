@@ -55,15 +55,24 @@ def mcp_exchange(exe,env,include_call=True,expect_call_error=False):
 def write_control(path,token,nonce,revoked=False):
     pathlib.Path(path).write_text(json.dumps({"token":token,"nonce":nonce,"revoked":revoked},separators=(",",":")),encoding="utf-8")
 
+def _sidecar_failure(p,reason,root):
+    if p.poll() is None:p.kill()
+    out,err=p.communicate(timeout=5)
+    if len(out)+len(err)>MAX_OUTPUT:raise AssertionError(reason+"; diagnostic output exceeded bound")
+    # This fixture receives no bearer in argv/env. Redact transient paths while
+    # preserving the Python exception needed to diagnose Windows startup.
+    detail=(out+err).decode("utf-8","replace").replace(str(root),"<temp>").strip()
+    raise AssertionError(f"{reason}; status={p.returncode}; diagnostic={detail[:4096]}")
+
 def start_sidecar(script,control,ready,base_env):
     pathlib.Path(ready).unlink(missing_ok=True)
     command=[sys.executable,str(script),"--server",str(control),str(ready)];INVOCATIONS.append(command)
     p=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=base_env,text=False,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
     deadline=time.time()+10
     while time.time()<deadline and not pathlib.Path(ready).exists():
-        if p.poll() is not None:raise AssertionError("fake sidecar exited before ready")
+        if p.poll() is not None:_sidecar_failure(p,"fake sidecar exited before ready",pathlib.Path(control).parent)
         time.sleep(.05)
-    if not pathlib.Path(ready).exists():p.kill();raise AssertionError("fake sidecar readiness timed out")
+    if not pathlib.Path(ready).exists():_sidecar_failure(p,"fake sidecar readiness timed out",pathlib.Path(control).parent)
     state=json.loads(pathlib.Path(ready).read_text(encoding="utf-8"));return p,state["port"],state["pid"]
 
 def stop_sidecar(p):
@@ -99,7 +108,11 @@ def integration(exe):
         root=pathlib.Path(raw);local=root/"local";discovery=local/"GrowthMap"/"agent-access.json";discovery.parent.mkdir(parents=True)
         control=root/"sidecar-control.json";ready=root/"sidecar-ready.json"
         token="gm1."+secrets.token_hex(6)+"."+secrets.token_urlsafe(32);target=f"GrowthMap/AgentPort/v1/product-1/installation-{secrets.token_hex(16)}/primary"
-        env={k:v for k,v in os.environ.items() if k in {"SystemRoot","WINDIR","PATH","PATHEXT","TEMP","TMP"}};env["LOCALAPPDATA"]=str(local)
+        # Preserve Windows' original environment-key casing (`Path` is common)
+        # while exposing only the runtime variables required by frozen/Python
+        # children. Exact-case filtering silently removed Path on hosted runners.
+        runtime_keys={"systemroot","windir","path","pathext","temp","tmp","comspec","systemdrive","userprofile","homedrive","homepath"}
+        env={k:v for k,v in os.environ.items() if k.casefold() in runtime_keys};env["LOCALAPPDATA"]=str(local)
         generic={"mcpServers":{"growthmap":{"command":str(exe)}}};logs=[];ports=[];sidecar=None
         try:
             nonce=secrets.token_hex(24);write_control(control,token,nonce);sidecar,port,pid=start_sidecar(script,control,ready,env);ports.append(str(port));endpoint=f"http://127.0.0.1:{port}/agent/v1"
