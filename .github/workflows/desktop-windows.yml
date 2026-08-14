@@ -41,8 +41,25 @@ jobs:
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing Linux production sidecar source: $path" }
           }
           if (-not (Select-String -Path services/payments/tests/test_sidecar_server.py -Pattern 'AF_UNIX/SO_PEERCRED' -Quiet)) { throw 'Windows skip must document Linux AF_UNIX/SO_PEERCRED boundary' }
-      - run: python -m pytest -q
+      # Production Authority custody and deployment rails require fcntl, dirfd,
+      # /proc, Unix ownership/modes, bash and systemd. Ubuntu CI runs the full
+      # unfiltered backend suite; Windows keeps every cross-platform sidecar test.
+      - name: Cross-platform backend contracts (exclude POSIX custody and deployment rails)
+        run: python -m pytest -q --ignore=tests/test_authority_composition.py --ignore=tests/test_authority_service.py --ignore=tests/test_pem_signer_hardening.py --ignore=tests/test_r14_deployment_contract.py --ignore=tests/test_r15_deployment_contract.py --ignore=tests/test_r16_deployment_contract.py --ignore=tests/test_r17_deployment_contract.py --ignore=tests/test_r18_deployment_contract.py --ignore=tests/test_r19_deployment_contract.py --ignore=tests/test_r20_deployment_contract.py --ignore=tests/test_r21_deployment_contract.py --ignore=tests/test_r22_deployment_contract.py --ignore=tests/test_r23_deployment_contract.py --ignore=tests/test_r24_deployment_contract.py --ignore=tests/test_security_remediation.py
         working-directory: src/backend
+        env:
+          PYTHONPATH: ../..
+          DATABASE_URL: sqlite+aiosqlite:///./windows-ci-test.db
+      - name: POSIX backend rails remain covered by the Linux full-suite gate
+        shell: pwsh
+        run: |
+          $ci = Get-Content .github/workflows/ci.yml -Raw
+          if ($ci -notmatch 'runs-on: ubuntu-latest' -or $ci -notmatch 'working-directory: src/backend' -or $ci -notmatch 'python -m pytest -q') { throw 'Linux full backend gate is missing' }
+          if ($ci -notmatch 'DATABASE_URL: "sqlite\+aiosqlite:///\./ci-test\.db"') { throw 'Linux backend database contract is missing' }
+          foreach ($path in @('src/backend/tests/test_authority_composition.py','src/backend/tests/test_authority_service.py','src/backend/tests/test_pem_signer_hardening.py','src/backend/tests/test_r14_deployment_contract.py','src/backend/tests/test_r24_deployment_contract.py','src/backend/tests/test_security_remediation.py')) {
+            if (-not (Test-Path $path -PathType Leaf)) { throw "Linux-routed backend test source is missing: $path" }
+          }
+          if (-not (Select-String -Path src/backend/licensing/authority_service.py -Pattern '^import fcntl' -Quiet)) { throw 'POSIX Authority custody marker is missing' }
       - run: npm ci
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build

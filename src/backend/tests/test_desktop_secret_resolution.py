@@ -12,7 +12,9 @@ class CapturingProvider(LLMProvider):
  def name(self): return 'fixture'
  async def complete(self,system,user,model=None,temperature=.7,max_tokens=2000):
   assert self.api_key=='memory-key'
-  if 'project context' in user.lower() or '專案上下文' in user:
+  try: payload=__import__('json').loads(user)
+  except (TypeError,ValueError): payload=None
+  if isinstance(payload,dict) and 'context' in payload and 'mode' in payload:
    return '[{"title":"fixture child","summary":"fixture summary","node_type":"idea"}]'
   return 'OK'
 def fake_provider(config):
