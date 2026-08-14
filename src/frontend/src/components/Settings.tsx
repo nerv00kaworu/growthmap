@@ -108,13 +108,13 @@ export function Settings({ onClose }: SettingsProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
-      <div className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
+      <div data-testid="llm-provider-settings" role="dialog" aria-modal="true" className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-gray-100">{u('⚙️ LLM Provider 設定','⚙️ LLM Provider 设置','⚙️ LLM provider settings')}</h2>
             <p className="mt-1 text-xs text-gray-500">{u('設定檔存本機資料庫；桌面密鑰由作業系統安全儲存保護。','配置保存在本地数据库；桌面密钥由操作系统安全存储保护。','Profiles are stored in the local database; desktop secrets are protected by secure operating-system storage.')}</p>
           </div>
-          <button type="button" onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
+          <button data-testid="llm-provider-settings-close" type="button" aria-label={u('關閉 LLM Provider 設定','关闭 LLM Provider 设置','Close LLM provider settings')} onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
         </div>
 
         <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">

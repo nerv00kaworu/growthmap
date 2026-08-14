@@ -48,9 +48,9 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   await stageWait(run,'fresh-free',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';let entitlement;try{const response=await fetch('/api/desktop/entitlement');entitlement=response.ok?await response.json():{http_status:response.status};}catch(error){return {error:`entitlement request failed: ${error?.name||'Error'}`};}if(status.startsWith('Free ·')&&entitlement.state==='free'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;if(status.includes('Read-only')||entitlement.state==='extraction')return {error:`unexpected entitlement: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`};return false;},30000);
   for(const name of ['trial-marker.bin','installation-identity.bin','trial-state.json']){const target=path.join(userData,name);if(!fs.existsSync(target)||fs.statSync(target).size===0)throw Error(`fresh-free: missing initialized Free artifact ${name}`);}
   await run.page.getByTestId('desktop-settings-button').click();
-  await run.page.getByText('LLM Provider 設定').waitFor();
+  await run.page.getByTestId('llm-provider-settings').waitFor();
   if(await run.page.getByTestId('database-workspace').count()||await run.page.getByTestId('database-management').count())throw Error('database controls leaked into LLM Provider settings');
-  await run.page.getByRole('button',{name:'×'}).click();
+  await run.page.getByTestId('llm-provider-settings-close').click();
   await run.page.getByTestId('database-workspace-button').click();
   await run.page.getByTestId('database-workspace').waitFor();
   const initialPath=await run.page.getByTestId('database-path').textContent();
