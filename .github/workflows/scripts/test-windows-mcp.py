@@ -41,7 +41,7 @@ def bounded_run(exe,args,stdin,env,expect=0,timeout=12):
     if (p.returncode==expect) is False:raise AssertionError(f"MCP child status {p.returncode}, expected {expect}")
     return out,err
 
-def mcp_exchange(exe,env,include_call=True,expect_call_error=False):
+def mcp_exchange(exe,env,include_call=True):
     frames=[{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"windows-fixture","version":"1"}}},{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}]
     if include_call:frames.append({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_project","arguments":{}}})
     out,err=bounded_run(exe,[],"".join(json.dumps(x,separators=(",",":"))+"\n" for x in frames),env)
@@ -49,8 +49,18 @@ def mcp_exchange(exe,env,include_call=True,expect_call_error=False):
     by={x.get("id"):x for x in rows}
     assert by[1]["result"]["protocolVersion"]=="2025-11-25"
     assert len(by[2]["result"]["tools"])>=2
-    if include_call:assert by[3]["result"]["isError"] is expect_call_error
     return out,err,by
+
+def assert_call_result(by,expected_error,marker,secret,ports,temp_root):
+    result=by[3]["result"]
+    if result.get("isError") is not expected_error:
+        detail=json.dumps(result,separators=(",",":"),ensure_ascii=False)
+        detail=detail.replace(secret,"<redacted-secret>").replace(str(temp_root),"<temp>")
+        for port in ports:detail=detail.replace(port,"<port>")
+        raise AssertionError(f"{marker}: unexpected MCP result {detail[:4096]}")
+    if marker and expected_error:
+        text=json.dumps(result,separators=(",",":"),ensure_ascii=False)
+        if marker not in text:raise AssertionError(f"expected sanitized MCP error marker {marker!r}")
 
 def write_control(path,token,nonce,revoked=False):
     pathlib.Path(path).write_text(json.dumps({"token":token,"nonce":nonce,"revoked":revoked},separators=(",",":")),encoding="utf-8")
@@ -120,7 +130,7 @@ def integration(exe):
             out,err=bounded_run(exe,["provision"],provision,env);logs += [("stdout",out),("stderr",err)];reached.add("credential_roundtrip")
             out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env);logs += [("stdout",out),("stderr",err)]
             discovery.write_text(json.dumps(descriptor(exe,target,endpoint,nonce,pid),separators=(",",":")),encoding="utf-8")
-            out,err,_=mcp_exchange(exe,env);logs += [("stdout",out),("stderr",err)];reached.add("ordinary_discovery_and_mcp")
+            out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,False,"ordinary discovery",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("ordinary_discovery_and_mcp")
             # The actual frozen executable must traverse the fixed LOCALAPPDATA descriptor symlink and fail closed.
             ordinary=root/"ordinary-descriptor.json";discovery.replace(ordinary)
             try:
@@ -129,7 +139,8 @@ def integration(exe):
                 if getattr(e,"winerror",None)==1314:reached.add("reparse_creation_skipped_privilege")
                 else:raise
             else:
-                _,_,rows=mcp_exchange(exe,env,expect_call_error=True)
+                _,_,rows=mcp_exchange(exe,env)
+                assert_call_result(rows,True,"unsafe discovery descriptor",token,ports,root)
                 reached.add("reparse_rejected_by_executable")
                 discovery.unlink()
             if not discovery.exists():ordinary.replace(discovery)
@@ -139,9 +150,9 @@ def integration(exe):
             rebind=json.dumps({"target":target,"endpoint":endpoint2,"instance_nonce":nonce2,"product_major":1,"persist":"session"},separators=(",",":"))
             out,err=bounded_run(exe,["rebind"],rebind,env);logs += [("stdout",out),("stderr",err)]
             discovery.write_text(json.dumps(descriptor(exe,target,endpoint2,nonce2,pid2),separators=(",",":")),encoding="utf-8")
-            out,err,_=mcp_exchange(exe,env);logs += [("stdout",out),("stderr",err)];reached.add("restart_rebind_persistence")
+            out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,False,"restart rebind",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("restart_rebind_persistence")
             direct_project(endpoint2,token,200);write_control(control,token,nonce2,True);direct_project(endpoint2,token,401)
-            out,err,rows=mcp_exchange(exe,env,expect_call_error=True);logs += [("stdout",out),("stderr",err)];reached.add("revoke_blocks_bearer_and_mcp")
+            out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,True,"GRANT_INACTIVE",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("revoke_blocks_bearer_and_mcp")
             out,err=bounded_run(exe,["delete"],json.dumps({"target":target}),env);logs += [("stdout",out),("stderr",err)]
             out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env,expect=1);logs += [("stdout",out),("stderr",err)];reached.add("credential_deleted")
             desc=json.loads(discovery.read_text(encoding="utf-8"));assert token not in json.dumps(desc)
