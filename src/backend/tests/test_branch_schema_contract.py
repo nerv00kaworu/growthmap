@@ -115,7 +115,7 @@ def test_expected_legacy_branch_schema_upgrades_idempotently_and_preserves_data(
         async with engine.connect() as connection:
             row = (await connection.exec_driver_sql("SELECT id,project_id,name,description,source_node_id,status,created_at,revision FROM branches WHERE id='b'")).one()
             assert tuple(row) == ("b","fixture","legacy","kept","root","active","2026-08-03T00:00:00+00:00",1 if version == 1 else 7)
-            assert (await connection.exec_driver_sql("PRAGMA user_version")).scalar() == 2
+            assert (await connection.exec_driver_sql("PRAGMA user_version")).scalar() == dm.CURRENT_USER_VERSION
         await engine.dispose()
     asyncio.run(run())
 

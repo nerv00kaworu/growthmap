@@ -12,8 +12,12 @@ COLUMNS = (
     ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("content_blocks", "revision", "INTEGER", True, "1", "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
-    ("agent_grants", "persistent", "BOOLEAN", True, "0", "ALTER TABLE agent_grants ADD COLUMN persistent BOOLEAN NOT NULL DEFAULT 0"),
     ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
+)
+# Optional feature tables are not part of every supported authoring-only legacy
+# database.  Their additive columns are enforced only when the table exists.
+TABLE_CONDITIONAL_COLUMNS = (
+    ("agent_grants", "persistent", "BOOLEAN", True, "0", "ALTER TABLE agent_grants ADD COLUMN persistent BOOLEAN NOT NULL DEFAULT 0"),
 )
 INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"
 TRIGGERS = {

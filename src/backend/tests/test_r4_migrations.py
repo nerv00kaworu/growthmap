@@ -127,17 +127,46 @@ def test_partial_orm_schema_actual_migration_fails_closed(tmp_path,version,table
     asyncio.run(_partial_orm_schema_fails_before_version_advance(tmp_path,version,table,column,replacement))
 
 
+async def _agent_grant_persistent_migration_preserves_old_rows(tmp_path):
+    from db.database import Base
+    from models import models  # noqa: F401
+    engine=create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'legacy-agent.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(conn)
+        await conn.execute(text("""INSERT INTO agent_grants
+          (id,token_prefix,token_salt,token_hash,project_id,permission,label,agent_identity,status)
+          VALUES ('old','prefix','salt','hash','project','read','legacy','agent','active')"""))
+        await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN persistent"))
+        await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION-1}"))
+    async with engine.begin() as conn:
+        await migrate_sqlite(conn)
+    async with engine.connect() as conn:
+        assert (await conn.execute(text("select persistent from agent_grants where id='old'"))).one()==(0,)
+        assert (await conn.execute(text("pragma user_version"))).scalar()==CURRENT_USER_VERSION
+    await engine.dispose()
+
+
 def test_agent_grant_persistent_migration_preserves_old_rows(tmp_path):
-    import asyncio,sqlite3
-    from sqlalchemy.ext.asyncio import create_async_engine
-    from db.migrations import run_migrations
-    db=tmp_path/'legacy-agent.db'; c=sqlite3.connect(db)
-    c.executescript("CREATE TABLE agent_grants(id TEXT PRIMARY KEY,expires_at DATETIME); INSERT INTO agent_grants VALUES('old','2026-01-01'); PRAGMA user_version=2;")
-    # Other contract tables are intentionally absent: migration must fail closed rather than advance.
-    c.close(); engine=create_async_engine('sqlite+aiosqlite:///'+str(db))
-    try:
-      try: asyncio.run(run_migrations(engine))
-      except RuntimeError: pass
-    finally: asyncio.run(engine.dispose())
-    c=sqlite3.connect(db); row=c.execute("select persistent from agent_grants where id='old'").fetchone(); version=c.execute('pragma user_version').fetchone()[0];c.close()
-    assert row==(0,) and version==2
+    asyncio.run(_agent_grant_persistent_migration_preserves_old_rows(tmp_path))
+
+
+async def _incompatible_agent_grant_persistent_fails_closed(tmp_path):
+    from db.database import Base
+    from models import models  # noqa: F401
+    engine=create_async_engine(f"sqlite+aiosqlite:///{tmp_path/'bad-agent.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await migrate_sqlite(conn)
+        await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN persistent"))
+        await conn.execute(text("ALTER TABLE agent_grants ADD COLUMN persistent TEXT DEFAULT 'false'"))
+    with pytest.raises(RuntimeError,match="incompatible migration column agent_grants.persistent"):
+        async with engine.begin() as conn:
+            await migrate_sqlite(conn)
+    async with engine.connect() as conn:
+        assert (await conn.execute(text("pragma user_version"))).scalar()==CURRENT_USER_VERSION
+    await engine.dispose()
+
+
+def test_incompatible_agent_grant_persistent_fails_closed(tmp_path):
+    asyncio.run(_incompatible_agent_grant_persistent_fails_closed(tmp_path))

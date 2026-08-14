@@ -122,7 +122,7 @@ def test_nullable_required_declaration_fails_preflight_and_migration(tmp_path, t
 
 
 def test_canonical_declarations_are_not_null_but_value_fields_remain_nullable(tmp_path):
-    path = fixture(tmp_path, 2)
+    path = fixture(tmp_path, dm.CURRENT_USER_VERSION)
     status = dm.schema_status(path)
     assert status["compatible"] and not status["migrationNeeded"], status
     connection = sqlite3.connect(path)

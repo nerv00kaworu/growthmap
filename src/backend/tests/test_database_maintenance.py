@@ -122,7 +122,7 @@ def test_schema_status_shape_for_compatible_migration_needed_and_newer(tmp_path)
  status=dm.schema_status(p)
  assert status['exists'] is True and status['compatible'] is False
  assert status['migrationNeeded'] is True and 'user_version:1' in status['reasons']
- c=sqlite3.connect(p);c.execute('pragma user_version=3');c.close()
+ c=sqlite3.connect(p);c.execute(f'pragma user_version={dm.CURRENT_USER_VERSION+1}');c.close()
  with pytest.raises(ValueError,match='newer'):dm.schema_status(p)
 
 
@@ -153,6 +153,6 @@ def test_wrong_nullability_or_default_is_preflighted_and_migration_fails_closed(
   engine=create_async_engine(f'sqlite+aiosqlite:///{p}')
   with pytest.raises(RuntimeError,match='incompatible'):
    async with engine.begin() as connection:await migrate_sqlite(connection)
-  async with engine.connect() as connection:assert (await connection.exec_driver_sql('pragma user_version')).scalar()==2
+  async with engine.connect() as connection:assert (await connection.exec_driver_sql('pragma user_version')).scalar()==dm.CURRENT_USER_VERSION
   await engine.dispose()
  asyncio.run(run())

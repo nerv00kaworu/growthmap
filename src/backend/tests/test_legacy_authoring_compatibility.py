@@ -1,4 +1,5 @@
 import os, sqlite3, subprocess, sys
+from db.schema_contract import CURRENT_USER_VERSION
 from pathlib import Path
 
 
@@ -28,7 +29,7 @@ def test_version_one_legacy_db_upgrades_then_project_node_reads_and_markdown_exp
         result=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).parents[1],env=env,text=True,capture_output=True)
         assert result.returncode==0,result.stdout+result.stderr
     with sqlite3.connect(db) as connection:
-        assert connection.execute('PRAGMA user_version').fetchone()==(2,)
+        assert connection.execute('PRAGMA user_version').fetchone()==(CURRENT_USER_VERSION,)
         assert {row[1] for row in connection.execute('PRAGMA table_info(projects)')} >= {'revision'}
         assert {row[1] for row in connection.execute('PRAGMA table_info(nodes)')} >= {'revision'}
         assert connection.execute('SELECT count(*) FROM projects').fetchone()==(1,)

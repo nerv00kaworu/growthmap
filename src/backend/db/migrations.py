@@ -1,7 +1,10 @@
 """Ordered fail-closed SQLite schema migrations."""
 import os
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
+
+async def _table_exists(conn, table):
+    return (await conn.execute(text("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=:name"), {"name":table})).first() is not None
 
 async def _column(conn, table, name):
     rows=(await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()
@@ -39,14 +42,17 @@ async def migrate_sqlite(conn):
     version=int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
     if version>CURRENT_USER_VERSION:raise RuntimeError("database schema is newer than this application")
     upgrading=version<CURRENT_USER_VERSION
-    for ordinal,spec in enumerate(COLUMNS,1):
+    migration_specs=list(COLUMNS)
+    for spec in TABLE_CONDITIONAL_COLUMNS:
+        if await _table_exists(conn,spec[0]):migration_specs.append(spec)
+    for ordinal,spec in enumerate(migration_specs,1):
         present=await _validate_column(conn,spec)
         if not present:
             if not upgrading:raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
             await conn.execute(text(spec[5]))
         if upgrading and os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER")==str(ordinal):raise RuntimeError("injected migration failure")
     await _validate_objects(conn,upgrading)
-    for spec in COLUMNS:assert await _validate_column(conn,spec)
+    for spec in migration_specs:assert await _validate_column(conn,spec)
     # Missing non-migration-owned mapped columns are unsupported partial schemas.
     # Fail before advancing user_version rather than inventing data/defaults.
     await _validate_orm_read_contract(conn)
