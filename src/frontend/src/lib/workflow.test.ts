@@ -37,7 +37,7 @@ test("409 is not replayed, refreshes once, exposes conflict, and preserves draft
   assert.equal(mutations, 1);
   assert.equal(refreshes, 1);
   assert.equal(result.conflict?.visible, true);
-  assert.match(result.conflict?.message ?? "", /最新版本/);
+  assert.match(result.conflict?.message ?? "", /latest version/);
   assert.equal(result.conflict?.nodeDraft, "unsaved node text");
   assert.equal(result.conflict?.suggestionInput, "keep this instruction");
 });

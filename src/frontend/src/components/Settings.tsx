@@ -1,6 +1,8 @@
 "use client";
+import { useI18n } from "@/i18n/provider";
+import { msg } from "@/i18n/ui";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DEFAULT_MODELS, loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
 import type { ProviderConfig } from "@/lib/types";
@@ -20,6 +22,8 @@ const PROVIDER_LABELS: Record<LLMProviderType, string> = {
 };
 
 export function Settings({ onClose }: SettingsProps) {
+  const { locale } = useI18n();
+  const u = useCallback((tw: string, cn: string, en: string) => msg(locale, {"zh-TW":tw,"zh-CN":cn,en}), [locale]);
   const [profiles, setProfiles] = useState<ProviderConfig[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [name, setName] = useState("");
@@ -40,8 +44,8 @@ export function Settings({ onClose }: SettingsProps) {
   };
 
   useEffect(() => {
-    loadProfiles().catch((error: unknown) => setMessage(`讀取設定失敗：${(error as Error).message}`));
-  }, []);
+    loadProfiles().catch((error: unknown) => setMessage(u(`讀取設定失敗：${(error as Error).message}`,`读取设置失败：${(error as Error).message}`,`Failed to load settings: ${(error as Error).message}`)));
+  }, [u]);
 
   const selectProfile = (id: string) => {
     setSelectedId(id);
@@ -83,9 +87,9 @@ export function Settings({ onClose }: SettingsProps) {
       setProfiles(nextProfiles);
       setSelectedId(saved.id);
       saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name });
-      setMessage(window.growthmapDesktop ? "✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。" : "✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。");
+      setMessage(window.growthmapDesktop ? u('✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。','✅ 已保存。API key 由系统安全存储保护，不会写入数据库、.env 或浏览器。','✅ Saved. The API key is protected by secure system storage and never written to the database, .env, or browser.') : u('✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。','✅ 已保存。Authoring 模式从本地 .env/环境变量读取，不会写入数据库或浏览器。','✅ Saved. Authoring mode reads local .env/environment variables and never writes them to the database or browser.'));
     } catch (error: unknown) {
-      setMessage(`儲存失敗：${(error as Error).message}`);
+      setMessage(u(`儲存失敗：${(error as Error).message}`,`保存失败：${(error as Error).message}`,`Save failed: ${(error as Error).message}`));
     } finally {
       setSaving(false);
     }
@@ -107,53 +111,53 @@ export function Settings({ onClose }: SettingsProps) {
       <div className="max-h-[90vh] w-full max-w-2xl space-y-4 overflow-y-auto rounded-xl border border-gray-700 bg-gray-900 p-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-gray-100">⚙️ LLM Provider 設定</h2>
-            <p className="mt-1 text-xs text-gray-500">設定檔存本機資料庫；桌面密鑰由作業系統安全儲存保護。</p>
+            <h2 className="text-sm font-semibold text-gray-100">{u('⚙️ LLM Provider 設定','⚙️ LLM Provider 设置','⚙️ LLM provider settings')}</h2>
+            <p className="mt-1 text-xs text-gray-500">{u('設定檔存本機資料庫；桌面密鑰由作業系統安全儲存保護。','配置保存在本地数据库；桌面密钥由操作系统安全存储保护。','Profiles are stored in the local database; desktop secrets are protected by secure operating-system storage.')}</p>
           </div>
           <button type="button" onClick={onClose} className="text-lg text-gray-500 hover:text-gray-300">×</button>
         </div>
 
         <div className="rounded-lg border border-emerald-800/40 bg-emerald-950/20 px-3 py-2 text-xs leading-5 text-emerald-200/80">
-          API key 不會出現在這個畫面、localStorage 或 SQLite。桌面版使用 Windows DPAPI／macOS Keychain；安全儲存不可用時會拒絕儲存。
+          {u('API key 不會出現在這個畫面、localStorage 或 SQLite。桌面版使用 Windows DPAPI／macOS Keychain；安全儲存不可用時會拒絕儲存。','API key 不会出现在此页面、localStorage 或 SQLite 中。桌面版使用 Windows DPAPI/macOS Keychain；安全存储不可用时将拒绝保存。','API keys never appear on this screen or in localStorage or SQLite. Desktop uses Windows DPAPI/macOS Keychain and refuses to save when secure storage is unavailable.')}
         </div>
 
         {profiles.length > 0 && (
           <label className="block text-xs text-gray-400">
-            已儲存 Provider
+            {u('已儲存 Provider','已保存 Provider','Saved providers')}
             <select value={selectedId} onChange={(event) => selectProfile(event.target.value)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100">
-              <option value="">建立新的 Provider…</option>
+              <option value="">{u('建立新的 Provider…','创建新的 Provider…','Create a new provider…')}</option>
               {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.enabled ? "●" : "○"} {profile.name} · {profile.model_name || profile.provider_type}</option>)}
             </select>
           </label>
         )}
 
         <div className="space-y-3">
-          <label className="block text-xs text-gray-400">顯示名稱
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="例：OpenAI 主要模型" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          <label className="block text-xs text-gray-400">{u('顯示名稱','显示名称','Display name')}
+            <input value={name} onChange={(event) => setName(event.target.value)} placeholder={u("例：OpenAI 主要模型", "例：OpenAI 主模型", "e.g. Primary OpenAI model")} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>
           <label className="block text-xs text-gray-400">Provider
             <select value={provider} onChange={(event) => setProvider(event.target.value as LLMProviderType)} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100">
               {(Object.keys(PROVIDER_LABELS) as LLMProviderType[]).map((value) => <option key={value} value={value}>{PROVIDER_LABELS[value]}</option>)}
             </select>
           </label>
-          <label className="block text-xs text-gray-400">Base URL（Mock 可留空）
+          <label className="block text-xs text-gray-400">{u('Base URL（Mock 可留空）','Base URL（Mock 可留空）','Base URL (optional for Mock)')}
             <input value={endpoint} onChange={(event) => setEndpoint(event.target.value)} placeholder="https://api.openai.com/v1" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>
-          <label className="block text-xs text-gray-400">API key 的環境變數名稱
+          <label className="block text-xs text-gray-400">{u('API key 的環境變數名稱','API key 环境变量名','API key environment-variable name')}
             <input value={envKey} onChange={(event) => setEnvKey(event.target.value)} placeholder="GROWTHMAP_LLM_KEY_DEFAULT" className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 font-mono text-sm text-gray-100" />
           </label>
-          {provider !== "mock" && <label className="block text-xs text-gray-400">API Key（桌面版使用系統安全儲存）
-            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selectedId ? "留空則維持現有 key" : "sk-..."} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          {provider !== "mock" && <label className="block text-xs text-gray-400">{u('API Key（桌面版使用系統安全儲存）','API Key（桌面版使用系统安全存储）','API key (desktop uses secure system storage)')}
+            <input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={selectedId ? u("留空則維持現有 key", "留空则保留现有 key", "Leave blank to keep the existing key") : "sk-..."} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>}
-          <label className="block text-xs text-gray-400">模型
-            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={DEFAULT_MODELS[provider] || "例：gpt-4o-mini"} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
+          <label className="block text-xs text-gray-400">{u('模型','模型','Model')}
+            <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={DEFAULT_MODELS[provider] || u('例：gpt-4o-mini','例：gpt-4o-mini','e.g. gpt-4o-mini')} className="mt-1 w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100" />
           </label>
         </div>
 
         {message && <div className="rounded border border-gray-700 bg-gray-800/70 px-3 py-2 text-xs text-gray-300">{message}</div>}
         <div className="flex gap-2">
-          <button type="button" onClick={createNew} className="rounded-lg border border-gray-600 px-3 py-2 text-xs text-gray-300 hover:text-white">新增</button>
-          <button type="button" onClick={saveProfile} disabled={saving || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? "儲存中…" : "儲存並使用"}</button>
+          <button type="button" onClick={createNew} className="rounded-lg border border-gray-600 px-3 py-2 text-xs text-gray-300 hover:text-white">{u('新增','新增','New')}</button>
+          <button type="button" onClick={saveProfile} disabled={saving || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? u("儲存中…", "保存中…", "Saving…") : u("儲存並使用", "保存并使用", "Save and use")}</button>
         </div>
       </div>
     </div>

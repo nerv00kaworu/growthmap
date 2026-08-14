@@ -1248,62 +1248,37 @@ async def get_node_history(node_id: str, limit: int = 20, db: AsyncSession = Dep
 
 from fastapi.responses import PlainTextResponse
 
+EXPORT_LABELS = {
+    "en": {"blocks":"Content blocks","docs":"Attached documents","untitled":"Untitled document","spec":"Specification","description":"Description","goal":"Goal","date":"Export date","toc":"Table of contents","developing":"Developing"},
+    "zh-CN": {"blocks":"内容区块","docs":"绑定文件","untitled":"未命名文件","spec":"规格文档","description":"描述","goal":"目标","date":"导出日期","toc":"目录","developing":"开发中"},
+    "zh-TW": {"blocks":"內容區塊","docs":"綁定文件","untitled":"未命名文件","spec":"規格文件","description":"描述","goal":"目標","date":"匯出日期","toc":"目錄","developing":"開發中"},
+}
 CONTENT_BLOCK_LABELS = {
-    "note": "筆記",
-    "spec": "規格",
-    "decision": "決策",
-    "todo": "待辦",
-    "risk": "風險",
-    "paragraph": "段落",
-    "resource": "文件",
-    "document": "文件",
-    "file": "文件",
+ "en":{"note":"Note","spec":"Specification","decision":"Decision","todo":"To do","risk":"Risk","paragraph":"Paragraph","resource":"Document","document":"Document","file":"Document"},
+ "zh-CN":{"note":"笔记","spec":"规格","decision":"决策","todo":"待办","risk":"风险","paragraph":"段落","resource":"文件","document":"文件","file":"文件"},
+ "zh-TW":{"note":"筆記","spec":"規格","decision":"決策","todo":"待辦","risk":"風險","paragraph":"段落","resource":"文件","document":"文件","file":"文件"},
 }
 DOC_BLOCK_TYPES = {"resource", "document", "file"}
 
+def _block_content(block): return block.content if isinstance(block.content, dict) else {}
+def _render_content_blocks(blocks:list,heading_level:str="###",locale:str="en")->list[str]:
+ lines=[]; content_blocks=[b for b in blocks if b.block_type not in DOC_BLOCK_TYPES]
+ if not content_blocks:return lines
+ labels=EXPORT_LABELS[locale];types=CONTENT_BLOCK_LABELS[locale];lines.append(f"{heading_level} {labels['blocks']}")
+ for b in content_blocks:
+  content=_block_content(b);label=types.get(b.block_type,b.block_type);title=content.get("title") or label;body=content.get("body") or content.get("summary") or "";lines.append(f"- **{label}｜{title}**")
+  if body:
+   for line in str(body).splitlines():lines.append(f"  {line}" if line else "")
+ lines.append("");return lines
 
-def _block_content(block):
-    return block.content if isinstance(block.content, dict) else {}
-
-
-def _render_content_blocks(blocks: list, heading_level: str = "###") -> list[str]:
-    lines: list[str] = []
-    content_blocks = [b for b in blocks if b.block_type not in DOC_BLOCK_TYPES]
-    if not content_blocks:
-        return lines
-    lines.append(f"{heading_level} 內容區塊")
-    for b in content_blocks:
-        content = _block_content(b)
-        label = CONTENT_BLOCK_LABELS.get(b.block_type, b.block_type)
-        title = content.get("title") or label
-        body = content.get("body") or content.get("summary") or ""
-        lines.append(f"- **{label}｜{title}**")
-        if body:
-            for line in str(body).splitlines():
-                lines.append(f"  {line}" if line else "")
-    lines.append("")
-    return lines
-
-
-def _render_bound_docs(blocks: list, heading_level: str = "###") -> list[str]:
-    lines: list[str] = []
-    docs = [b for b in blocks if b.block_type in DOC_BLOCK_TYPES]
-    if not docs:
-        return lines
-    lines.append(f"{heading_level} 綁定文件")
-    for b in docs:
-        content = _block_content(b)
-        title = content.get("title") or content.get("name") or content.get("filename") or content.get("url") or content.get("path") or "未命名文件"
-        href = content.get("url") or content.get("path") or ""
-        summary = content.get("summary") or content.get("body") or ""
-        if href:
-            lines.append(f"- [{title}]({href})")
-        else:
-            lines.append(f"- {title}")
-        if summary:
-            lines.append(f"  - {summary}")
-    lines.append("")
-    return lines
+def _render_bound_docs(blocks:list,heading_level:str="###",locale:str="en")->list[str]:
+ lines=[];docs=[b for b in blocks if b.block_type in DOC_BLOCK_TYPES]
+ if not docs:return lines
+ labels=EXPORT_LABELS[locale];lines.append(f"{heading_level} {labels['docs']}")
+ for b in docs:
+  content=_block_content(b);title=content.get("title") or content.get("name") or content.get("filename") or content.get("url") or content.get("path") or labels["untitled"];href=content.get("url") or content.get("path") or "";summary=content.get("summary") or content.get("body") or "";lines.append(f"- [{title}]({href})" if href else f"- {title}")
+  if summary:lines.append(f"  - {summary}")
+ lines.append("");return lines
 
 class ExportContentCompatibilityError(ValueError):
     """Stored content cannot be represented by the Markdown exporter."""
@@ -1336,7 +1311,7 @@ def _is_json_deserialization_error(error: Exception) -> bool:
 
 
 @router.get("/projects/{project_id}/export", response_class=PlainTextResponse)
-async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
+async def export_project(project_id: str, locale: str = "zh-TW", db: AsyncSession = Depends(get_db)):
     """Export entire project tree as Markdown document (bulk-loaded)."""
     if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
         project_row, node_rows, edge_rows, block_rows = await _query_only_export_rows(db, project_id)
@@ -1370,11 +1345,13 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
     child_map: dict[str, list[str]] = {}
     for from_id, to_id in edge_rows: child_map.setdefault(str(from_id), []).append(str(to_id))
 
+    language = locale if locale in EXPORT_LABELS else "zh-TW"
+    labels = {**EXPORT_LABELS[language], "pending": {"en":"Pending expansion", "zh-CN":"待展开", "zh-TW":"待展開"}[language]}
     lines = [f"# {project.name}\n"]
     if project.description:
         lines.append(f"_{project.description}_\n")
     if project.goal:
-        lines.append(f"**目標**: {project.goal}\n")
+        lines.append(f"**{labels['goal']}**: {project.goal}\n")
     lines.append("---\n")
 
     visited: set[str] = set()
@@ -1391,11 +1368,11 @@ async def export_project(project_id: str, db: AsyncSession = Depends(get_db)):
             lines.append(f"{n.summary}\n")
 
         node_blocks = blocks_by_node.get(nid, [])
-        lines.extend(_render_content_blocks(node_blocks, heading_level="#" * min(depth + 3, 6)))
-        lines.extend(_render_bound_docs(node_blocks, heading_level="#" * min(depth + 3, 6)))
+        lines.extend(_render_content_blocks(node_blocks, heading_level="#" * min(depth + 3, 6), locale=language))
+        lines.extend(_render_bound_docs(node_blocks, heading_level="#" * min(depth + 3, 6), locale=language))
 
         if n.maturity == "seed":
-            lines.append("_⏳ 待展開_\n")
+            lines.append(f"_⏳ {labels['pending']}_\n")
 
         for cid in child_map.get(nid, []):
             render_node(cid, depth + 1)
@@ -1624,7 +1601,7 @@ async def _import_project_json_committed(data: dict, db: AsyncSession):
 
     # Create new project
     new_project = Project(
-        name=proj_data.get("name", "匯入的專案"),
+        name=proj_data.get("name", "Imported project"),
         description=proj_data.get("description"),
         goal=proj_data.get("goal"),
         status=proj_data.get("status", "active"),
@@ -1719,7 +1696,7 @@ async def _import_project_json_committed(data: dict, db: AsyncSession):
 # ─── Spec Export ───
 
 @router.get("/projects/{project_id}/export-spec", response_class=PlainTextResponse)
-async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
+async def export_spec(project_id: str, locale: str = "zh-TW", db: AsyncSession = Depends(get_db)):
     """Export project as a structured spec Markdown document."""
     project = await db.get(Project, project_id)
     if not project:
@@ -1749,6 +1726,9 @@ async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
         for b in blocks_result.scalars().all():
             blocks_by_node.setdefault(str(b.node_id), []).append(b)
 
+    language = locale if locale in EXPORT_LABELS else "zh-TW"
+    labels = EXPORT_LABELS[language]
+
     # Build TOC and content
     toc_lines: list[str] = []
     content_lines: list[str] = []
@@ -1769,15 +1749,15 @@ async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
             if n.summary:
                 content_lines.append(f"\n{n.summary}\n")
             node_blocks = blocks_by_node.get(nid, [])
-            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###"))
-            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###"))
+            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###", locale=language))
+            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###", locale=language))
         else:
-            content_lines.append(f"{prefix} {n.title} （🚧 開發中）")
+            content_lines.append(f"{prefix} {n.title} (🚧 {labels['developing']})")
             if n.summary:
                 content_lines.append(f"\n{n.summary}\n")
             node_blocks = blocks_by_node.get(nid, [])
-            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###"))
-            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###"))
+            content_lines.extend(_render_content_blocks(node_blocks, heading_level="###", locale=language))
+            content_lines.extend(_render_bound_docs(node_blocks, heading_level="###", locale=language))
 
         for cid in child_map.get(nid, []):
             render_spec_node(cid, depth + 1)
@@ -1785,15 +1765,15 @@ async def export_spec(project_id: str, db: AsyncSession = Depends(get_db)):
     render_spec_node(str(project.root_node_id))
 
     header = [
-        f"# {project.name} — 規格文件",
+        f"# {project.name} — {labels['spec']}",
         "",
-        f"**描述**：{project.description}" if project.description else "",
-        f"**目標**：{project.goal}" if project.goal else "",
-        f"**匯出日期**：{date.today().isoformat()}",
+        f"**{labels['description']}**: {project.description}" if project.description else "",
+        f"**{labels['goal']}**: {project.goal}" if project.goal else "",
+        f"**{labels['date']}**: {date.today().isoformat()}",
         "",
         "---",
         "",
-        "## 目錄",
+        f"## {labels['toc']}",
         "",
         *toc_lines,
         "",

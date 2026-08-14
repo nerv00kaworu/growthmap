@@ -8,6 +8,8 @@ import { NodeAI } from "./NodePanel/NodeAI";
 import { NodeHistorySection } from "./NodePanel/NodeHistory";
 import { NodeChat } from "./NodePanel/NodeChat";
 import type { GNode, GrowthMode, Maturity, NodeEditDraft } from "@/lib/types";
+import { useI18n } from "@/i18n/provider";
+import { msg } from "@/i18n/ui";
 
 interface SectionProps {
   title: string;
@@ -37,6 +39,8 @@ const Section = ({ title, subtitle, tone = "neutral", children }: SectionProps) 
 type Tab = "content" | "ai" | "chat" | "history";
 
 export function NodePanel() {
+  const { locale, t } = useI18n();
+  const m = (tw: string, cn: string, en: string) => msg(locale, {"zh-TW":tw,"zh-CN":cn,en});
   const selectedNode = useStore((s) => s.selectedNode);
   const rootNode = useStore((s) => s.rootNode);
   const addChildNode = useStore((s) => s.addChildNode);
@@ -76,7 +80,7 @@ export function NodePanel() {
       <div className="h-full flex items-center justify-center text-[var(--text-faint)] text-sm p-6">
         <div className="text-center">
           <div className="text-4xl mb-3">🌳</div>
-          <div>點擊節點查看詳情</div>
+          <div>{m("點擊節點查看詳情", "点击节点查看详情", "Click a node to view details")}</div>
         </div>
       </div>
     );
@@ -117,10 +121,10 @@ export function NodePanel() {
   };
 
   const TABS: { key: Tab; label: string }[] = [
-    { key: "content", label: "內容" },
+    { key: "content", label: m("內容", "内容", "Content") },
     { key: "ai", label: "AI" },
-    { key: "chat", label: "對話" },
-    { key: "history", label: "歷史" },
+    { key: "chat", label: m("對話", "对话", "Chat") },
+    { key: "history", label: m("歷史", "历史", "History") },
   ];
 
   return (
@@ -196,7 +200,7 @@ export function NodePanel() {
         )}
 
         {activeTab === "chat" && (
-          <Section title="節點對話" subtitle="與 AI 顧問討論此節點的設計與方向。" tone="ai">
+          <Section title={m("節點對話", "节点对话", "Node chat")} subtitle={m("與 AI 顧問討論此節點的設計與方向。", "与 AI 顾问讨论此节点的设计与方向。", "Discuss this node’s design and direction with the AI advisor.")} tone="ai">
             <NodeChat selectedNode={selectedNode as GNode} />
           </Section>
         )}
@@ -210,20 +214,20 @@ export function NodePanel() {
         {editing ? (
           <>
             <button type="button" onClick={saveEdit} className="flex-1 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded-md">
-              儲存
+              {m("儲存", "保存", "Save")}
             </button>
             <button type="button" onClick={() => setEditing(false)} className="px-3 py-1.5 surface-subtle text-[var(--text-muted)] text-sm rounded-md hover:text-[var(--text-primary)]">
-              取消
+              {m("取消", "取消", "Cancel")}
             </button>
           </>
         ) : (
           <>
             <button type="button" onClick={startEdit} className="flex-1 px-3 py-1.5 surface-subtle text-[var(--text-primary)] text-sm rounded-md hover:border-blue-500/40 hover:text-blue-100">
-              ✏️ 編輯
+              ✏️ {m("編輯", "编辑", "Edit")}
             </button>
             <button
               type="button"
-              onClick={() => { if (confirm("確定刪除此節點？")) deleteNode(selectedNode.id); }}
+              onClick={() => { if (confirm(t("confirm.deleteNode"))) deleteNode(selectedNode.id); }}
               className="px-3 py-1.5 rounded-md border border-red-900/40 bg-red-950/30 hover:bg-red-900/40 text-red-300 text-sm"
             >
               🗑️

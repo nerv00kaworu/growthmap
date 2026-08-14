@@ -186,18 +186,6 @@ export type Maturity = "seed" | "rough" | "developing" | "stable" | "finalized";
 
 export type GrowthMode = "focused" | "explore" | "challenge";
 
-export const GROWTH_MODE_LABELS: Record<GrowthMode, string> = {
-  focused: "聚焦主線",
-  explore: "探索延伸",
-  challenge: "挑戰假設",
-};
-
-export const GROWTH_MODE_HELP: Record<GrowthMode, string> = {
-  focused: "補齊當前主線缺口，避免一次跳太遠。",
-  explore: "沿著主題向相鄰空間擴張，減少結果過早定型。",
-  challenge: "主動提出反例、風險與替代方向，打破僵硬分支。",
-};
-
 export const MATURITY_COLORS: Record<Maturity, string> = {
   seed: "#a78bfa",
   rough: "#f59e0b",
@@ -206,13 +194,8 @@ export const MATURITY_COLORS: Record<Maturity, string> = {
   finalized: "#6366f1",
 };
 
-export const MATURITY_LABELS: Record<Maturity, string> = {
-  seed: "🌱 種子",
-  rough: "🪨 粗胚",
-  developing: "🔧 發展中",
-  stable: "✅ 穩定",
-  finalized: "🔒 定稿",
-};
+/** @deprecated UI should select localized maturity labels. */
+export const MATURITY_LABELS: Record<Maturity, string> = { seed:"Seed", rough:"Rough", developing:"Developing", stable:"Stable", finalized:"Finalized" };
 
 export const NODE_TYPE_ICONS: Record<string, string> = {
   idea: "💡",

@@ -15,7 +15,7 @@ import { useAgentPortDesktopControl } from "@/lib/agent-port-control";
 import { LocaleSelector, useI18n } from "@/i18n/provider";
 
 export default function HomePage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const agentPortDesktopControl = useAgentPortDesktopControl();
   const loadProjects = useStore((s) => s.loadProjects);
   const projects = useStore((s) => s.projects);
@@ -130,7 +130,7 @@ export default function HomePage() {
   const handleExport = async () => {
     if (!currentProject) return;
     try {
-      const res = await fetch(`/api/projects/${currentProject.id}/export`);
+      const res = await fetch(`/api/projects/${currentProject.id}/export?locale=${encodeURIComponent(locale)}`);
       if (!res.ok) throw new Error(t("error.export"));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);

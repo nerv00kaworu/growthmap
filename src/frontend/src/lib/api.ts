@@ -91,6 +91,11 @@ import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConf
 import type { Entitlement } from "./entitlement";
 import { loadLLMConfig } from "./llm-provider";
 
+function activeLocale(): "zh-TW" | "zh-CN" | "en" {
+  if (typeof window === "undefined") return "en";
+  try { const value=window.localStorage.getItem("growthmap.locale"); return value === "zh-TW" || value === "zh-CN" ? value : "en"; } catch { return "en"; }
+}
+
 function getProviderId(): string | undefined {
   return loadLLMConfig()?.providerId || undefined;
 }
@@ -229,7 +234,7 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: getProviderId() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: getProviderId(), locale: activeLocale() }),
     }),
 
   deepen: (nodeId: string, instruction?: string) =>
@@ -239,13 +244,13 @@ export const api = {
       context_used: Record<string, unknown>;
     }>("/ai/deepen", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: getProviderId() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: getProviderId(), locale: activeLocale() }),
     }),
 
   chat: (nodeId: string, message: string, history: { role: string; content: string }[]) =>
     request<{ reply: string; context_used: Record<string, unknown> }>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: getProviderId() }),
+      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: getProviderId(), locale: activeLocale() }),
     }),
 
   // Test LLM connection
@@ -257,7 +262,7 @@ export const api = {
 
   // Spec export (returns text)
   exportSpec: async (projectId: string): Promise<string> => {
-    const res = await fetch(`${BASE}/projects/${projectId}/export-spec`);
+    const res = await fetch(`${BASE}/projects/${projectId}/export-spec?locale=${encodeURIComponent(activeLocale())}`);
     if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
     return res.text();
   },

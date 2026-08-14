@@ -1,6 +1,6 @@
 export const SUPPORTED_LOCALES = ["zh-TW", "zh-CN", "en"] as const;
 export type Locale = (typeof SUPPORTED_LOCALES)[number];
-export const DEFAULT_LOCALE: Locale = "zh-TW";
+export const DEFAULT_LOCALE: Locale = "en";
 
 export function resolveLocale(value: unknown): Locale {
   return typeof value === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(value)
@@ -95,7 +95,7 @@ type Catalog = { readonly [K in MessageKey]: string };
 
 const zhCN = {
   ...zhTW,
-  "locale.label": "语言", "project.selectLabel": "选择项目", "project.selectPlaceholder": "选择项目...", "branch.selectLabel": "选择分支",
+  "locale.label": "语言", "llm.tooltip": "LLM Provider 设置", "llm.settings": "⚙️ LLM 设置", "license.import": "🔑 导入 License", "activation.title": "启用 GrowthMap", "activation.boundary": "桌面应用不包含钱包、付款 SDK、Base RPC、收款地址或价格设置。", "project.selectLabel": "选择项目", "project.selectPlaceholder": "选择项目...", "branch.selectLabel": "选择分支",
   "branch.main": "🌿 主线（main）", "branch.option": "🔀 方案线：{name}", "project.new": "+ 新项目", "more.tooltip": "更多操作",
   "search.placeholder": "🔍 搜索节点...", "search.results": "{count} 个结果", "database.tooltip": "数据库工作区", "shortcuts.tooltip": "键盘快捷键",
   "more.currentBranch": "当前方案线：{name}", "more.summary": "导入导出、撤销与方案线管理", "export.spec": "📋 导出规格",
@@ -138,6 +138,10 @@ const en = {
 
 export const catalogs: Readonly<Record<Locale, Catalog>> = { "zh-TW": zhTW, "zh-CN": zhCN, en };
 export type Translate = (key: MessageKey, values?: Readonly<Record<string, string | number>>) => string;
+/** Locale-select a colocated message at boundaries where a stable catalog key would add no reuse. */
+export function localize(locale: Locale, messages: Readonly<{ "zh-TW": string; "zh-CN": string; en: string }>): string {
+  return messages[locale];
+}
 export function translate(locale: unknown, key: MessageKey, values: Readonly<Record<string, string | number>> = {}): string {
   return catalogs[resolveLocale(locale)][key].replace(/\{(\w+)\}/g, (token, name: string) => name in values ? String(values[name]) : token);
 }

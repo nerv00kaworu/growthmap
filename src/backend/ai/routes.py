@@ -27,12 +27,14 @@ class ExpandRequest(StrictRequest):
     count: int = 3  # how many suggestions
     mode: Literal["focused", "explore", "challenge"] = "explore"
     provider_id: str
+    locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
 class DeepenRequest(StrictRequest):
     node_id: str
     instruction: Optional[str] = None
     provider_id: str
+    locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
 class TestConnectionRequest(StrictRequest):
@@ -63,58 +65,42 @@ class DeepenResponse(BaseModel):
     context_used: dict
 
 
-EXPAND_SYSTEM = """你是一個專案結構分析師。根據提供的上下文，為指定節點生成子節點建議。
+AI_FRAMEWORK = {
+    "en": {
+        "expand_system": "You are a project-structure analyst. Use the complete ancestor path, existing children, siblings, summaries, and content blocks. Suggest distinct, concrete child nodes within the current node's scope. Never duplicate existing or semantically equivalent nodes. Return only a JSON array of objects with title, summary, and node_type (idea, concept, task, question, decision, risk, resource, note, or module). Each summary must contain actionable detail; use a question when facts are uncertain. Write all generated text in English.",
+        "deepen_system": "You are a knowledge-development analyst. Use the complete ancestor path, operation history, and existing content. Preserve the node's direction and produce a stronger enriched_summary plus 2–4 new, non-duplicative content_blocks. Return only JSON with enriched_summary and content_blocks containing title, body, and block_type. Be concrete and testable; use questions rather than inventing uncertain facts. Write all generated text in English.",
+        "chat_system": "You are a project advisor. Use the complete ancestor context and existing content. Be concrete and constructive; identify issues, alternatives, and clarifications. Write all generated text in English.",
+        "modes": {"focused":"Focused: fill essential structural gaps without drifting from the main line.","explore":"Explore: examine strongly related adjacent space and uncovered dimensions.","challenge":"Challenge: surface alternatives, counterexamples, risks, constraints, and opposing views."},
+        "children":"Existing child titles; do not duplicate", "siblings":"Existing sibling titles; do not duplicate",
+        "instruction":"User instruction", "question":"Current user question", "history":"Conversation history", "user":"User", "assistant":"Advisor",
+    },
+    "zh-CN": {
+        "expand_system": "你是项目结构分析师。请结合完整祖先路径、现有子节点、兄弟节点、摘要和内容区块，在当前节点范围内提出互不重复、具体可执行的子节点。不得与已有节点重复或语义相同。仅返回 JSON 数组，每项包含 title、summary、node_type；node_type 只能是 idea、concept、task、question、decision、risk、resource、note 或 module。不确定时请提出具体问题。所有生成内容必须使用简体中文。",
+        "deepen_system": "你是知识深化分析师。请结合完整祖先路径、操作历史和现有内容，在不改变节点核心方向的前提下完善 enriched_summary，并新增 2 至 4 个不重复的 content_blocks。仅返回 JSON；每个区块包含 title、body、block_type。内容必须具体且可验证；不确定时提出问题，不得编造。所有生成内容必须使用简体中文。",
+        "chat_system": "你是项目顾问。请结合完整祖先上下文和现有内容，提供具体、有建设性的回答，并指出问题、替代方案和需要澄清之处。所有生成内容必须使用简体中文。",
+        "modes": {"focused":"聚焦主线：补齐必要结构、步骤和基础组件，不要偏离主题。","explore":"探索延伸：探索紧密相关的相邻方向和未覆盖方面。","challenge":"挑战假设：提出替代方案、反例、风险、限制和对立观点。"},
+        "children":"已有子节点标题；禁止重复", "siblings":"已有兄弟节点标题；禁止重复",
+        "instruction":"用户指示", "question":"用户当前问题", "history":"对话历史", "user":"用户", "assistant":"顾问",
+    },
+    "zh-TW": {
+        "expand_system": "你是專案結構分析師。請結合完整祖先路徑、現有子節點、兄弟節點、摘要和內容區塊，在目前節點範圍內提出互不重複、具體可執行的子節點。不得與已有節點重複或語義相同。只回傳 JSON 陣列，每項包含 title、summary、node_type；node_type 只能是 idea、concept、task、question、decision、risk、resource、note 或 module。不確定時請提出具體問題。所有生成內容必須使用繁體中文。",
+        "deepen_system": "你是知識深化分析師。請結合完整祖先路徑、操作歷史和現有內容，在不改變節點核心方向的前提下完善 enriched_summary，並新增 2 至 4 個不重複的 content_blocks。只回傳 JSON；每個區塊包含 title、body、block_type。內容必須具體且可驗證；不確定時提出問題，不得捏造。所有生成內容必須使用繁體中文。",
+        "chat_system": "你是專案顧問。請結合完整祖先上下文和現有內容，提供具體、有建設性的回答，並指出問題、替代方案和需要釐清之處。所有生成內容必須使用繁體中文。",
+        "modes": {"focused":"聚焦主線：補齊必要結構、步驟和基礎元件，不要偏離主題。","explore":"探索延伸：探索緊密相關的相鄰方向和未覆蓋面向。","challenge":"挑戰假設：提出替代方案、反例、風險、限制和對立觀點。"},
+        "children":"已有子節點標題；禁止重複", "siblings":"已有兄弟節點標題；禁止重複",
+        "instruction":"使用者指示", "question":"使用者目前問題", "history":"對話歷史", "user":"使用者", "assistant":"顧問",
+    },
+}
 
-重要：上下文中包含「祖先路徑」（ancestor_path），其中有從根節點到當前節點的完整脈絡（含每個祖先的 summary 和 content_blocks）。你必須閱讀並理解這條脈絡，確保建議與整個知識鏈一致。
+def _framework(locale: str) -> dict:
+    return AI_FRAMEWORK[locale]
 
-規則：
-1. 只基於當前節點的範圍延伸，不要跳出主題
-2. **嚴禁重複**：下方會列出「已有子節點」與「兄弟節點」的標題清單，你的建議不得與它們重複或語義相同
-3. 每個建議要有明確的標題和簡短摘要
-4. node_type 從以下選擇：idea, concept, task, question, decision, risk, resource, note, module
-5. 建議應該互相互補，覆蓋不同面向
-6. 每個建議的標題必須彼此不同，禁止生成多個相同或近似的建議
-7. **具體性要求**：
-   - summary 必須包含可操作的細節，禁止只寫「定義X的規則」「處理Y的邏輯」這種空殼
-   - 好的 summary 範例：「使用 RFC 7807 格式回傳錯誤，status + type + detail 三欄必填，前端統一用 ErrorBoundary 攔截」
-   - 壞的 summary 範例：「定義錯誤處理的相關規則和邏輯」
-   - 如果你對某個領域的細節不確定，用 question 類型提出具體的待決問題，而非捏造模糊內容
+def _prompt_payload(context: dict, **fields) -> str:
+    # User/model data is isolated as JSON instead of interpolated into framework prose.
+    return json.dumps({"context": context, **fields}, ensure_ascii=False, indent=2)
 
-回傳格式（純 JSON，不要 markdown）：
-[
-  {"title": "...", "summary": "...", "node_type": "..."},
-  ...
-]"""
-
-DEEPEN_SYSTEM = """你是一個知識深化分析師。根據提供的上下文，對指定節點進行內容深化。
-
-重要：上下文中包含「祖先路徑」（ancestor_path），其中有從根節點到當前節點的完整脈絡（含每個祖先的 summary 和 content_blocks）。你必須閱讀並理解這條脈絡，確保深化內容與整個知識鏈一致，不要重複��先已涵蓋的內容。
-
-規則：
-1. 不要改變節點的核心方向，而是充實其內容
-2. 提供更完善的摘要（在現有摘要的基礎上擴充，不要丟棄已有的好內容）
-3. 生成 2-4 個**新的**內容塊（content blocks），每個塊有明確主題
-4. **累積而非覆蓋**：上下文中會包含已有的 content_blocks，你的新建議應該補充尚未涵蓋的面向，不要重複已有的區塊
-5. block_type 從以下選擇：definition, rules, examples, constraints, decisions, notes, references, questions
-6. **具體性要求**：
-   - 每個 content block 的 body 必須包含可以直接使用的具體內容
-   - **definition 類型**：必須給出精確定義，含邊界條件（什麼算、什麼不算）
-   - **rules 類型**：每條規則必須可驗證（能判斷「做到了」或「沒做到」）
-   - **examples 類型**：必須是完整的具體案例，含輸入 → 輸出 → 為什麼
-   - **constraints 類型**：必須標明約束來源（技術限制/商業決策/法規）和違反後果
-   - **decisions 類型**：必須包含「選了什麼 + 放棄了什麼 + 為什麼」
-   - 禁止：「需要考慮X」「應該注意Y」「可以使用Z」— 這些是空話，不是內容
-   - 如果你對細節不確定，改用 questions 類型提出具體的待決問題
-7. 參考此節點的操作歷史（recent_history），了解它經歷過什麼演化
-
-回傳格式（純 JSON，不要 markdown）：
-{
-  "enriched_summary": "更完整的摘要（在原有基礎上擴充）...",
-  "content_blocks": [
-    {"title": "...", "body": "...", "block_type": "..."},
-    ...
-  ]
-}"""
+def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"], locale: str = "zh-TW") -> str:
+    return _framework(locale)["modes"][mode]
 
 
 async def _to_llm_config(provider_id: str, db: AsyncSession) -> tuple[LLMConfig, str]:
@@ -135,15 +121,6 @@ async def _to_llm_config(provider_id: str, db: AsyncSession) -> tuple[LLMConfig,
         base_url=provider_config.endpoint or None,
         model=provider_config.model_name or None,
     ), provider_config.id
-
-def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"]) -> str:
-    prompts = {
-        "focused": "模式：focused（聚焦主線）。請優先補齊當前節點缺失的核心結構、必要步驟與基礎元件，避免跳到太遠的主題。",
-        "explore": "模式：explore（探索延伸）。請保持與主題強關聯，但主動探索相鄰空間、未覆蓋面向與可擴張支線，避免結果過早定型。",
-        "challenge": "模式：challenge（挑戰假設）。請優先提出會打破僵化的替代方向、反例、風險、限制與對立觀點，至少有一個建議應直接質疑當前思路。",
-    }
-    return prompts[mode]
-
 
 @router.post("/test-connection", response_model=TestConnectionResponse)
 async def test_connection(req: TestConnectionRequest, db: AsyncSession = Depends(get_db)):
@@ -166,25 +143,20 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 
     existing_children = [c["title"] for c in ctx["children"]]
     existing_siblings = [s["title"] for s in ctx["siblings"]]
-    dedup_block = ""
-    if existing_children:
-        dedup_block += f"\n已有子節點（禁止重複）：{', '.join(existing_children)}"
-    if existing_siblings:
-        dedup_block += f"\n已有兄弟節點（禁止重複）：{', '.join(existing_siblings)}"
-
-    user_prompt = f"""專案上下文：
-{json.dumps(ctx, ensure_ascii=False, indent=2)}
-{dedup_block}
-
-{get_expand_mode_prompt(req.mode)}
-
-請為節點「{ctx['current_node']['title']}」生成 {req.count} 個**不重複**的子節點建議。
-{"使用者指示：" + req.instruction if req.instruction else ""}"""
+    frame = _framework(req.locale)
+    user_prompt = _prompt_payload(
+        ctx,
+        mode=get_expand_mode_prompt(req.mode, req.locale),
+        requested_count=req.count,
+        existing_children={"label": frame["children"], "titles": existing_children},
+        existing_siblings={"label": frame["siblings"], "titles": existing_siblings},
+        instruction={"label": frame["instruction"], "value": req.instruction},
+    )
 
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, db)
         provider = get_provider(llm_cfg)
-        raw = await provider.complete(EXPAND_SYSTEM, user_prompt, model=llm_cfg.model)
+        raw = await provider.complete(frame["expand_system"], user_prompt, model=llm_cfg.model)
             
         suggestions = parse_json_response(raw)
         if not isinstance(suggestions, list):
@@ -237,16 +209,16 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(404, str(e))
 
-    user_prompt = f"""專案上下文：
-{json.dumps(ctx, ensure_ascii=False, indent=2)}
-
-請深化節點「{ctx['current_node']['title']}」的內容。
-{"使用者指示：" + req.instruction if req.instruction else ""}"""
+    frame = _framework(req.locale)
+    user_prompt = _prompt_payload(
+        ctx,
+        instruction={"label": frame["instruction"], "value": req.instruction},
+    )
 
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, db)
         provider = get_provider(llm_cfg)
-        raw = await provider.complete(DEEPEN_SYSTEM, user_prompt, model=llm_cfg.model)
+        raw = await provider.complete(frame["deepen_system"], user_prompt, model=llm_cfg.model)
             
         result = parse_json_response(raw)
         if not isinstance(result, dict):
@@ -298,6 +270,7 @@ class ChatRequest(StrictRequest):
     message: str
     history: list[dict] = []
     provider_id: str
+    locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
 class ChatResponse(BaseModel):
@@ -313,18 +286,17 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(404, str(e))
 
-    title = ctx["current_node"]["title"]
-    system_prompt = f"你是一個專案顧問。你正在協助使用者思考節點「{title}」的設計。上下文包含完整的祖先脈絡和現有內容。回答要具體、有建設性，可以指出問題、提出替代方案、或釐清概念。避免空泛的建議。"
-
-    # Build a combined user message with context + history + current question
-    context_summary = f"節點上下文：\n{json.dumps(ctx, ensure_ascii=False, indent=2)}\n\n"
-    if req.history:
-        history_lines = []
-        for h in req.history:
-            role_label = "使用者" if h.get("role") == "user" else "顧問"
-            history_lines.append(f"{role_label}：{h.get('content', '')}")
-        context_summary += "對話歷史：\n" + "\n".join(history_lines) + "\n\n"
-    context_summary += f"使用者的最新問題：{req.message}"
+    frame = _framework(req.locale)
+    system_prompt = frame["chat_system"]
+    history = [
+        {"role": frame["user"] if h.get("role") == "user" else frame["assistant"], "content": h.get("content", "")}
+        for h in req.history
+    ]
+    context_summary = _prompt_payload(
+        ctx,
+        history={"label": frame["history"], "messages": history},
+        question={"label": frame["question"], "value": req.message},
+    )
 
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, db)
@@ -344,7 +316,7 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
 
         return ChatResponse(
             reply=reply,
-            context_used={"ancestor_path": ctx["ancestor_path"], "node_title": title},
+            context_used={"ancestor_path": ctx["ancestor_path"], "node_title": ctx["current_node"]["title"]},
         )
     except Exception as e:
         raise HTTPException(500, f"Chat error: {str(e)}")

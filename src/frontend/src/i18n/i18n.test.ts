@@ -11,10 +11,19 @@ test("all locale catalogs have exact deep-key parity", () => {
   for (const locale of SUPPORTED_LOCALES) assert.deepEqual(Object.keys(catalogs[locale]).sort(), expected, locale);
 });
 
-test("locale resolution accepts exact supported values and otherwise falls back to zh-TW", () => {
+test("locale resolution accepts exact supported values and otherwise falls back to English", () => {
   for (const locale of SUPPORTED_LOCALES) assert.equal(resolveLocale(locale), locale);
   for (const value of [undefined, null, "", "zh", "zh-tw", "en-US", "fr", 7]) assert.equal(resolveLocale(value), DEFAULT_LOCALE);
   assert.equal(translate("unknown", "common.cancel"), catalogs[DEFAULT_LOCALE]["common.cancel"]);
+});
+
+test("English and Simplified Chinese catalogs do not inherit known Traditional-Chinese chrome", () => {
+  assert.equal(DEFAULT_LOCALE, "en");
+  const traditionalChrome = /專案|選擇|節點|資料庫|匯入|匯出|復原|啟用|授權|封存|歷史|建立|刪除|儲存|設定|內容|對話|主線|搜尋/;
+  for (const locale of ["en", "zh-CN"] as const) {
+    const leaks = Object.entries(catalogs[locale]).filter(([, value]) => traditionalChrome.test(value));
+    assert.deepEqual(leaks, [], `${locale} inherited zh-TW chrome: ${JSON.stringify(leaks)}`);
+  }
 });
 
 test("storage reads, writes, and fails safely when unavailable or corrupt", () => {
@@ -186,4 +195,134 @@ test("scanner rejects English and CJK conditional leaves in props and user-facin
     "call:confirm:English confirmation", "call:confirm:中文確認", "call:setToast:English toast", "call:setToast:中文提示",
     "new Error:English ", "new Error:中文 ",
   ]) assert.ok(violations.includes(expected), `missing scanner violation: ${expected}\n${violations.join("\n")}`);
+});
+
+function scanProductionHan(sourceText: string, file: string): string[] {
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const violations: string[] = [];
+  const approvedModule = "@/i18n/ui";
+  const scopes = new Map<ts.Node, Map<string, ts.Declaration>>();
+  const scopeOf = (node: ts.Node): ts.Node => {
+    let current: ts.Node | undefined = node.parent;
+    while (current && !ts.isSourceFile(current) && !ts.isBlock(current) && !ts.isFunctionLike(current)) current = current.parent;
+    return current ?? source;
+  };
+  const bind = (scope: ts.Node, name: string, declaration: ts.Declaration) => {
+    const bindings = scopes.get(scope) ?? new Map<string, ts.Declaration>();
+    bindings.set(name, declaration); scopes.set(scope, bindings);
+  };
+  const collectBindings = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings)) {
+      for (const specifier of node.importClause.namedBindings.elements) bind(source, specifier.name.text, specifier);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) bind(scopeOf(node), node.name.text, node);
+    else if (ts.isParameter(node) && ts.isIdentifier(node.name)) bind(scopeOf(node), node.name.text, node);
+    else if (ts.isFunctionDeclaration(node) && node.name) bind(scopeOf(node), node.name.text, node);
+    ts.forEachChild(node, collectBindings);
+  };
+  collectBindings(source);
+  const resolve = (identifier: ts.Identifier): ts.Declaration | undefined => {
+    let current: ts.Node | undefined = identifier;
+    while (current) {
+      if (ts.isSourceFile(current) || ts.isBlock(current) || ts.isFunctionLike(current)) {
+        const declaration = scopes.get(current)?.get(identifier.text);
+        if (declaration) return declaration;
+      }
+      current = current.parent;
+    }
+    return undefined;
+  };
+  const importedExport = (declaration: ts.Declaration | undefined, exportName: string): boolean => {
+    if (!declaration || !ts.isImportSpecifier(declaration)) return false;
+    const imported = declaration.propertyName?.text ?? declaration.name.text;
+    const importDeclaration = declaration.parent.parent.parent;
+    return imported === exportName && ts.isImportDeclaration(importDeclaration) && ts.isStringLiteral(importDeclaration.moduleSpecifier)
+      && importDeclaration.moduleSpecifier.text === approvedModule;
+  };
+  const unwrap = (expression: ts.Expression): ts.Expression => {
+    while (ts.isParenthesizedExpression(expression)) expression = expression.expression;
+    return expression;
+  };
+  const propertyName = (name: ts.PropertyName): string | null => {
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name)) return name.text;
+    return null;
+  };
+  const exactLocaleObject = (expression: ts.Expression, values?: readonly string[]): boolean => {
+    expression = unwrap(expression);
+    if (!ts.isObjectLiteralExpression(expression) || expression.properties.length !== 3) return false;
+    const expected = ["zh-TW", "zh-CN", "en"];
+    return expression.properties.every((property, index) => {
+      if (ts.isSpreadAssignment(property) || !ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return false;
+      if (propertyName(property.name) !== expected[index]) return false;
+      if (!values) return ts.isPropertyAssignment(property) && isLocalizationExpression(property.initializer);
+      const value = ts.isShorthandPropertyAssignment(property) ? property.name : unwrap(property.initializer);
+      return ts.isIdentifier(value) && value.text === values[index];
+    });
+  };
+  const isLocalizationExpression = (expression: ts.Expression): boolean => {
+    expression = unwrap(expression);
+    return ts.isStringLiteralLike(expression) || ts.isTemplateExpression(expression);
+  };
+  const approvedTripletWrapper = (declaration: ts.Declaration | undefined): boolean => {
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name) || !["u", "m", "ui"].includes(declaration.name.text) || !declaration.initializer) return false;
+    let initializer = unwrap(declaration.initializer);
+    if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression) && initializer.expression.text === "useCallback" && initializer.arguments.length >= 1)
+      initializer = unwrap(initializer.arguments[0]);
+    if (!ts.isArrowFunction(initializer) && !ts.isFunctionExpression(initializer) || initializer.parameters.length !== 3 || initializer.parameters.some(parameter => !ts.isIdentifier(parameter.name))) return false;
+    const body = ts.isBlock(initializer.body) ? initializer.body.statements.length === 1 && ts.isReturnStatement(initializer.body.statements[0]) ? initializer.body.statements[0].expression : undefined : initializer.body;
+    if (!body) return false;
+    const call = unwrap(body);
+    if (!ts.isCallExpression(call) || !ts.isIdentifier(call.expression)) return false;
+    const values = initializer.parameters.map(parameter => (parameter.name as ts.Identifier).text);
+    if (importedExport(resolve(call.expression), "msg")) return call.arguments.length === 2 && exactLocaleObject(call.arguments[1], values);
+    return importedExport(resolve(call.expression), "activeMsg") && call.arguments.length === 1 && exactLocaleObject(call.arguments[0], values);
+  };
+  const approvedLocalizedCall = (node: ts.CallExpression): boolean => {
+    if (!ts.isIdentifier(node.expression)) return false;
+    const declaration = resolve(node.expression);
+    if (importedExport(declaration, "activeMsg")) return node.arguments.length === 1 && exactLocaleObject(node.arguments[0]);
+    return approvedTripletWrapper(declaration) && node.arguments.length === 3 && node.arguments.every(isLocalizationExpression);
+  };
+  const visit = (node: ts.Node, localized = false) => {
+    const inside = localized || (ts.isCallExpression(node) && approvedLocalizedCall(node));
+    if (!inside && (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) && /[\u3400-\u9fff]/u.test(node.text)) violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}:${node.text}`);
+    if (!inside && ts.isJsxText(node) && /[\u3400-\u9fff]/u.test(node.text)) violations.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1}:${node.text.trim()}`);
+    ts.forEachChild(node, child => visit(child, inside));
+  }; visit(source); return violations;
+}
+test("production components, stores, and libraries have no unlocalized Han UI literals", () => {
+  const roots = ["../components", "../stores", "../lib"].map(dir => path.resolve(__dirname, dir)); const files: string[] = [];
+  const walk = (dir: string) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory()) walk(full); else if (/\.(tsx?|jsx?)$/.test(entry.name) && !/\.test\./.test(entry.name)) files.push(full); } }; roots.forEach(walk);
+  assert.deepEqual(files.flatMap(file => scanProductionHan(fs.readFileSync(file, "utf8"), file)), []);
+});
+test("broad Han guard catches JSX, templates, and conditional UI leakage", () => {
+  const fixture = 'const x=<div>繁體外洩</div>; const y=`錯誤：${code}`; const z=ok ? "設定" : "內容";';
+  assert.equal(scanProductionHan(fixture, "negative.tsx").length, 4);
+});
+
+test("production Han guard resolves approved helper bindings and requires exact call shapes", () => {
+  const valid = `
+    import { msg, activeMsg } from "@/i18n/ui";
+    const locale = "en";
+    const u = (tw: string, cn: string, en: string) => msg(locale, {"zh-TW": tw, "zh-CN": cn, en});
+    const m = (tw: string, cn: string, en: string) => msg(locale, {"zh-TW": tw, "zh-CN": cn, en});
+    const ui = (tw: string, cn: string, en: string) => activeMsg({"zh-TW": tw, "zh-CN": cn, en});
+    export const view = <>{u("設定", "设置", "Settings")}{m("錯誤", "错误", "Error")}{ui("內容", "内容", "Content")}{activeMsg({"zh-TW":"儲存","zh-CN":"保存",en:"Save"})}</>;
+  `;
+  assert.deepEqual(scanProductionHan(valid, "valid.tsx"), []);
+
+  const negatives = [
+    `const u=(x:string)=>x; export const x=<button>{u("只剩繁體")}</button>`,
+    'const msg=(x:string)=>x; const u=msg; export const x=<div>{u(`錯誤：${code}`)}</div>',
+    `const activeMsg=(x:unknown)=>String(x); export const x=<div>{activeMsg({"zh-TW":"設定","zh-CN":"设置"})}</div>`,
+    `import { activeMsg } from "@/i18n/ui"; export const x=activeMsg({"zh-TW":"設定",en:"Settings"})`,
+    `import { activeMsg } from "@/i18n/ui"; export const x=activeMsg({"zh-TW":"設定","zh-CN":"设置",en:"Settings",ja:"設定"})`,
+    `import { msg } from "@/i18n/ui"; const u=(tw:string,cn:string,en:string)=>msg("en",{"zh-TW":tw,"zh-CN":cn,en}); export const x=u("設定","设置")`,
+    'const u=(x:string)=>x; export const x=ok ? u(`設定`) : <span>{u("內容")}</span>',
+    `import { msg } from "not-approved"; const u=(tw:string,cn:string,en:string)=>msg("en",{"zh-TW":tw,"zh-CN":cn,en}); export const x=u("設定","设置","Settings")`,
+    `import { msg } from "@/i18n/ui"; const u=(tw:string,cn:string,en:string)=>msg("en",{"zh-TW":tw,"zh-CN":cn,en}); { const u=(x:string)=>x; export const x=u("內容"); }`,
+    `import { activeMsg } from "@/i18n/ui"; export const x=activeMsg({"zh-TW":"設定",[key]:"设置",en:"Settings"})`,
+    `import { activeMsg } from "@/i18n/ui"; export const x=activeMsg({...base,"zh-TW":"設定","zh-CN":"设置",en:"Settings"})`,
+    `import { msg } from "@/i18n/ui"; const u=(tw:string,cn:string,en:string)=>msg("en",{"zh-TW":tw,"zh-CN":cn,en}); export const x=u(ok ? "設定" : "內容","设置","Settings")`,
+  ];
+  negatives.forEach((fixture, index) => assert.ok(scanProductionHan(fixture, `negative-${index}.tsx`).length > 0, `fixture ${index} bypassed the guard`));
 });

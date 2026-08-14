@@ -1,4 +1,6 @@
 import { create } from "zustand";
+import { activeMsg } from "@/i18n/ui";
+const ui=(tw:string,cn:string,en:string)=>activeMsg({"zh-TW":tw,"zh-CN":cn,en});
 import type { GNode, GrowthMode, Project, Branch, BranchComparison } from "@/lib/types";
 import { api } from "@/lib/api";
 import { runMutationWithConflict, type ConflictState } from "@/lib/conflict";
@@ -151,7 +153,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { currentProject, rootNode } = get();
     if (!currentProject || !rootNode) return;
     const { undoStack } = get();
-    const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`);
+    const newUndoStack = pushUndo(undoStack, rootNode, ui(`新增子節點: ${title}`,`新增子节点: ${title}`,`Add child node: ${title}`));
     const outcome = await runMutationWithConflict(
       () => api.createNode(currentProject.id, {
         title,
@@ -207,7 +209,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const existing = rootNode ? findNode(rootNode, nodeId) : null;
     if (!currentProject || !existing) return;
     if (rootNode) {
-      const newUndoStack = pushUndo(undoStack, rootNode, `更新節點`);
+      const newUndoStack = pushUndo(undoStack, rootNode, ui('更新節點','更新节点','Update node'));
       set({ undoStack: newUndoStack });
     }
     const saved = await api.updateNode(nodeId, { ...data, expected_project_revision: currentProject.revision, expected_revision: existing.revision });
@@ -227,7 +229,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (!currentProject || !existing) return;
     if (rootNode) {
       const node = findNode(rootNode, nodeId);
-      const newUndoStack = pushUndo(undoStack, rootNode, `刪除節點: ${node?.title || nodeId}`);
+      const newUndoStack = pushUndo(undoStack, rootNode, ui(`刪除節點: ${node?.title || nodeId}`,`删除节点: ${node?.title || nodeId}`,`Delete node: ${node?.title || nodeId}`));
       set({ undoStack: newUndoStack });
     }
     await api.deleteNode(nodeId, currentProject.revision, existing.revision);
@@ -275,7 +277,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { rootNode, undoStack } = get();
     if (!rootNode) return;
     const node = findNode(rootNode, nodeId);
-    const newUndoStack = pushUndo(undoStack, rootNode, `移動節點: ${node?.title || nodeId}`);
+    const newUndoStack = pushUndo(undoStack, rootNode, ui(`移動節點: ${node?.title || nodeId}`,`移动节点: ${node?.title || nodeId}`,`Move node: ${node?.title || nodeId}`));
     set({ undoStack: newUndoStack });
     try {
       const currentProject = get().currentProject;
@@ -305,7 +307,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { undoStack } = get();
     if (undoStack.length === 0) return;
     const [entry, ...rest] = undoStack;
-    set({ rootNode: entry.rootNode, undoStack: rest, toast: `已復原: ${entry.description}` });
+    set({ rootNode: entry.rootNode, undoStack: rest, toast: ui(`已復原: ${entry.description}`,`已恢复: ${entry.description}`,`Restored: ${entry.description}`) });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(entry.rootNode, selectedNodeId) });
@@ -337,7 +339,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       const branch = await api.createBranch(currentProject.id, { expected_project_revision: currentProject.revision, source_node_id: sourceNodeId, name, description });
       advanceProjectRevision(set, currentProject);
       const { branches } = get();
-      set({ branches: [...branches, branch], toast: `✅ 方案線「${name}」已建立` });
+      set({ branches: [...branches, branch], toast: ui(`✅ 方案線「${name}」已建立`,`✅ 方案线“${name}”已创建`,`✅ Scenario “${name}” created`) });
       await get().selectBranch(branch);
     } catch (e: unknown) {
       set({ error: (e as Error).message });
@@ -355,7 +357,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         return;
       }
       const result = await api.getBranchSubtree(branch.id);
-      if (!result.tree) throw new Error("方案線沒有可顯示的根節點");
+      if (!result.tree) throw new Error(ui('方案線沒有可顯示的根節點','方案线没有可显示的根节点','This scenario has no displayable root node.'));
       set({ currentBranch: branch, rootNode: result.tree, loading: false, branchLoading: false });
     } catch (e: unknown) {
       set({ error: (e as Error).message, loading: false, branchLoading: false });
@@ -382,7 +384,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       await api.archiveBranch(branchId, currentProject.revision, branch.revision);
       advanceProjectRevision(set, currentProject);
       const remaining = branches.filter((branch) => branch.id !== branchId);
-      set({ branches: remaining, branchComparison: null, toast: "🗃️ 方案線已封存" });
+      set({ branches: remaining, branchComparison: null, toast: ui('🗃️ 方案線已封存','🗃️ 方案线已归档','🗃️ Scenario archived') });
       if (currentBranch?.id === branchId && currentProject) {
         await get().selectBranch(null);
       }
@@ -406,7 +408,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         branchComparison: null,
         selectedNodeId: null,
         selectedNode: null,
-        toast: "✅ 方案線已合併回主線",
+        toast: ui('✅ 方案線已合併回主線','✅ 方案线已合并回主线','✅ Scenario merged into main line'),
       });
       if (currentProject) {
         const rootNode = await api.getSubtree(currentProject.root_node_id);
@@ -442,7 +444,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   acceptSuggestion: async (index) => {
     const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 建議`);
+    const newUndoStack = pushUndo(undoStack, rootNode, ui('接受 AI 建議','接受 AI 建议','Accept AI suggestion'));
     set({ undoStack: newUndoStack });
     const s = expandSuggestions[index];
     const outcome = await runMutationWithConflict(
@@ -475,7 +477,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     set({
       rootNode: updated,
       expandSuggestions: remaining.length > 0 ? remaining : null,
-      toast: `✅ 已建立 AI 建議節點「${s.title}」`,
+      toast: ui(`✅ 已建立 AI 建議節點「${s.title}」`,`✅ 已创建 AI 建议节点“${s.title}”`,`✅ Created AI-suggested node “${s.title}”`),
     });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
@@ -489,15 +491,15 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const remaining = expandSuggestions.filter((_, i) => i !== index);
     set({
       expandSuggestions: remaining.length > 0 ? remaining : null,
-      toast: "已忽略一個 AI 分支建議",
+      toast: ui('已忽略一個 AI 分支建議','已忽略一个 AI 分支建议','Ignored one AI branch suggestion'),
     });
   },
 
   acceptAllSuggestions: async () => {
     const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
-    if (!confirm(`確定採用全部 ${expandSuggestions.length} 個 AI 分支建議？`)) return;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受全部 AI 建議`);
+    if (!confirm(ui(`確定採用全部 ${expandSuggestions.length} 個 AI 分支建議？`,`确定采用全部 ${expandSuggestions.length} 个 AI 分支建议吗？`,`Accept all ${expandSuggestions.length} AI branch suggestions?`))) return;
+    const newUndoStack = pushUndo(undoStack, rootNode, ui('接受全部 AI 建議','接受全部 AI 建议','Accept all AI suggestions'));
     set({ undoStack: newUndoStack });
     let tree = rootNode;
     for (const s of expandSuggestions) {
@@ -533,7 +535,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       tree = insertChild(tree, expandTargetNodeId, child);
     }
     await get().refreshTree();
-    set({ expandSuggestions: null, toast: `✅ 已建立 ${expandSuggestions.length} 個 AI 建議節點` });
+    set({ expandSuggestions: null, toast: ui(`✅ 已建立 ${expandSuggestions.length} 個 AI 建議節點`,`✅ 已创建 ${expandSuggestions.length} 个 AI 建议节点`,`✅ Created ${expandSuggestions.length} AI-suggested nodes`) });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(tree, selectedNodeId) });
@@ -556,7 +558,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const { deepenResult, rootNode, undoStack } = get();
     if (!deepenResult || !rootNode) return;
     const targetId = deepenResult.target_node_id;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 摘要建議`);
+    const newUndoStack = pushUndo(undoStack, rootNode, ui('接受 AI 摘要建議','接受 AI 摘要建议','Accept AI summary suggestion'));
     set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>),
@@ -565,7 +567,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     );
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return; }
     const updated = patchNode(rootNode, targetId, outcome.value!);
-    set({ rootNode: updated, toast: "✅ 已套用 AI 摘要建議" });
+    set({ rootNode: updated, toast: ui('✅ 已套用 AI 摘要建議','✅ 已应用 AI 摘要建议','✅ Applied AI summary suggestion') });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -578,7 +580,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const block = deepenResult.content_blocks[index];
     if (!block) return;
     const targetId = deepenResult.target_node_id;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 內容區塊: ${block.title}`);
+    const newUndoStack = pushUndo(undoStack, rootNode, ui(`接受 AI 內容區塊: ${block.title}`,`接受 AI 内容区块: ${block.title}`,`Accept AI content block: ${block.title}`));
     set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.createBlock(targetId, {
@@ -599,7 +601,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     set({
       rootNode: updated,
       deepenResult: remainingBlocks.length > 0 ? { ...deepenResult, content_blocks: remainingBlocks } : null,
-      toast: "✅ 已寫入 AI 內容區塊",
+      toast: ui('✅ 已寫入 AI 內容區塊','✅ 已写入 AI 内容区块','✅ Added AI content block'),
     });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
@@ -613,7 +615,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const remainingBlocks = deepenResult.content_blocks.filter((_, i) => i !== index);
     set({
       deepenResult: remainingBlocks.length > 0 ? { ...deepenResult, content_blocks: remainingBlocks } : null,
-      toast: "已忽略一個 AI 內容區塊",
+      toast: ui('已忽略一個 AI 內容區塊','已忽略一个 AI 内容区块','Ignored one AI content block'),
     });
   },
 

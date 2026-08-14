@@ -3,7 +3,7 @@ const crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:pat
 const {listManagedBackups}=require('./managed-backup');
 const EXTENSIONS=new Set(['.db','.sqlite','.sqlite3']),UUID='[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}',OWNED_OLD=new RegExp(`^growthmap\\.db\\.gm-old-${UUID}$`,'i'),OWNED_NEW=new RegExp(`^growthmap\\.db\\.gm-new-${UUID}$`,'i'),OWNED_BACKUP=new RegExp(`^(backup|rollback)-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z-${UUID}\\.db$`,'i');
 class RecoveryRequiredError extends Error{constructor(cause,stage){super('database recovery required',{cause});this.name='RecoveryRequiredError';this.recoveryRequired=true;this.stage=stage||null;}}
-function safeMessage(error){return error?.recoveryRequired?'資料庫需要復原；請重新啟動應用程式。':'資料庫操作失敗；目前資料已保留。';}
+function safeMessage(error){return error?.recoveryRequired?'The database needs recovery; restart the app.':'Database operation failed; your current data was preserved.';}
 function replacementQuota({entitlement,recoveryEntitlement,updateRecovery=false}){const source=updateRecovery?recoveryEntitlement:entitlement;return Number.isInteger(source?.max_active_projects)?source.max_active_projects:null;}
 function decimalIdentity(value){try{return BigInt(value).toString();}catch{return null;}}
 function sameMaintenanceIdentity(actual,expected){return !expected?.meaningful||(decimalIdentity(actual?.device)===decimalIdentity(expected.device)&&decimalIdentity(actual?.inode)===decimalIdentity(expected.inode));}

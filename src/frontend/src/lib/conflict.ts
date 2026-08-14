@@ -1,3 +1,4 @@
+import { activeMsg } from "@/i18n/ui";
 export type ConflictDraft = {
   nodeDraft?: string;
   suggestionInput?: string;
@@ -25,7 +26,7 @@ export async function runMutationWithConflict<T>(
     return {
       conflict: {
         visible: true,
-        message: "資料已在其他地方更新。已載入最新版本；你的未儲存內容仍保留，請確認後再送出。",
+        message: activeMsg({'zh-TW':'資料已在其他地方更新。已載入最新版本；你的未儲存內容仍保留，請確認後再送出。','zh-CN':'数据已在其他地方更新。已加载最新版本；你的未保存内容仍保留，请确认后再次提交。',en:'This data was updated elsewhere. The latest version is loaded; your unsaved work was preserved. Review it and submit again.'}),
         ...draft,
       },
     };

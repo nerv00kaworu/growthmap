@@ -1,4 +1,6 @@
 "use client";
+import { useI18n } from "@/i18n/provider";
+import { msg } from "@/i18n/ui";
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
@@ -19,6 +21,8 @@ interface GrowthNodeData {
 }
 
 function GrowthNodeComponent({ data }: NodeProps) {
+  const { locale } = useI18n();
+  const u = (tw: string, cn: string, en: string) => msg(locale, {"zh-TW":tw,"zh-CN":cn,en});
   const d = data as unknown as GrowthNodeData;
   const maturityColor = MATURITY_COLORS[d.maturity] || "#666";
   const icon = NODE_TYPE_ICONS[d.nodeType] || "📌";
@@ -69,7 +73,7 @@ function GrowthNodeComponent({ data }: NodeProps) {
       {/* Branch badge */}
       {d.isBranch && (
         <div className="absolute top-2 left-2 text-[9px] text-purple-300 border border-purple-700/50 rounded-full px-1.5 bg-purple-950/60">
-          分支
+          {u('分支','分支','Branch')}
         </div>
       )}
 

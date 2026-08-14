@@ -23,7 +23,7 @@ test("every state has deterministic title and guidance in all three locales", ()
   assert.deepEqual(stateMessageKeys("refunded"), ["refundedTitle", "refundedBody"]);
   assert.deepEqual(stateMessageKeys("disputed"), ["disputedTitle", "disputedBody"]);
 });
-test("unknown locale falls back to zh-TW", () => assert.equal(postPurchaseTranslate("fr", "title"), postPurchaseTranslate("zh-TW", "title")));
+test("unknown locale falls back to English", () => assert.equal(postPurchaseTranslate("fr", "title"), postPurchaseTranslate("en", "title")));
 
 test("pre-boundary projected props omit plaintext and loader is not invoked by rendering", () => {
   let loads = 0;
@@ -136,12 +136,12 @@ test("all states render only permitted entries and absent handlers are disabled 
   for (const state of POST_PURCHASE_STATES) {
     const html = renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(PostPurchasePanel, { snapshot: projectPublicPostPurchaseSnapshot({ state, keyAvailable: false }) })));
     for (const kind of ENTRY_ORDER) {
-      const label = postPurchaseTranslate("zh-TW", kind);
+      const label = postPurchaseTranslate("en", kind);
       assert.equal(html.includes(label), ALLOWED_ENTRIES[state].includes(kind), `${state}/${kind}`);
     }
     const disabledCount = (html.match(/disabled=""/g) ?? []).length;
     assert.equal(disabledCount, ALLOWED_ENTRIES[state].length + 1, state); // entries + unavailable correlation copy
-    assert.equal((html.match(new RegExp(postPurchaseTranslate("zh-TW", "unavailable"), "g")) ?? []).length, ALLOWED_ENTRIES[state].length);
+    assert.equal((html.match(new RegExp(postPurchaseTranslate("en", "unavailable"), "g")) ?? []).length, ALLOWED_ENTRIES[state].length);
   }
 });
 

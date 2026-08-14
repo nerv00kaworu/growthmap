@@ -4,12 +4,12 @@ import { I18nProvider } from "@/i18n/provider";
 
 export const metadata: Metadata = {
   title: "GrowthMap",
-  description: "專案思維生長系統",
+  description: "A project-thinking growth system",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-TW">
+    <html lang="en">
       <body><I18nProvider>{children}</I18nProvider></body>
     </html>
   );
