@@ -151,7 +151,7 @@ def test_gmg1_desktop_http_challenge_persisted_certificate_offline_reread_rotati
 
     second = response_json(desktop_activate(rotated["claim_key"], base))
     seat_full = desktop_activate(rotated["claim_key"], base)
-    assert seat_full.returncode == 23 and "授權碼無效或尚未付款" in seat_full.stderr
+    assert seat_full.returncode == 23 and "The activation key is invalid or payment is pending" in seat_full.stderr
     devices = authority.list_gift_devices(gift_id)
     assert {row["device_id"] for row in devices} == {first["certificate"]["device_id"], second["certificate"]["device_id"]}
     released = {"deactivated": authority.deactivate_gift_device(gift_id, first["certificate"]["device_id"])}
@@ -164,7 +164,7 @@ def test_gmg1_desktop_http_challenge_persisted_certificate_offline_reread_rotati
 
     assert authority.revoke_gift(gift_id)["status"] == "revoked"
     revoked = desktop_activate(rotated["claim_key"], base)
-    assert revoked.returncode == 23 and "授權碼無效或尚未付款" in revoked.stderr
+    assert revoked.returncode == 23 and "The activation key is invalid or payment is pending" in revoked.stderr
 
     # Mechanically prove persisted-certificate verification is offline: stop the
     # only HTTP fixture and confirm its thread is gone before reading the file.

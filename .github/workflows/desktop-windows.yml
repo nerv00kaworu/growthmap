@@ -21,9 +21,19 @@ jobs:
       - run: python -m pip install -r services/payments/requirements.lock
       - run: python tools/generate-public-config.py --check
       - run: python -m compileall -q services/payments/growthmap_payments tools
-      - run: python -m pytest -q services/payments/tests
+      # The ops harness intentionally depends on POSIX dirfd/O_NOFOLLOW semantics
+      # and is exercised in full by ci.yml on Linux. Windows still runs every
+      # cross-platform payment/desktop contract, including Gift HTTP E2E.
+      - name: Cross-platform payment contracts (exclude POSIX-only ops harness)
+        run: python -m pytest -q services/payments/tests --ignore=services/payments/tests/test_ops_harness.py
         env:
           PYTHONPATH: services/payments;src/backend
+      - name: POSIX ops harness remains covered by the Linux CI gate
+        shell: pwsh
+        run: |
+          if (-not (Select-String -Path .github/workflows/ci.yml -Pattern 'python3 -m pytest -q services/payments/tests' -Quiet)) { throw 'Linux full payment gate is missing' }
+          if (-not (Test-Path services/payments/tests/test_ops_harness.py -PathType Leaf)) { throw 'POSIX ops harness source is missing' }
+          if (-not (Select-String -Path services/payments/growthmap_payments/ops.py -Pattern 'O_DIRECTORY' -Quiet)) { throw 'POSIX ops boundary marker is missing' }
       - name: Linux-only production sidecar source contract remains present
         shell: pwsh
         run: |
