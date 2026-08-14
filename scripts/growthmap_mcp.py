@@ -71,28 +71,38 @@ def credential_command(command):
   if len(raw)>8192:raise SystemExit("provision input too large")
   q=json.loads(raw);expected={"target","persist","credential"}
   if set(q)!=expected or q["persist"] not in {"session","finite","unlimited"}:raise SystemExit("invalid provision request")
-  from growthmap_credential import write;write(q["target"],q["credential"],q["persist"]);return
+  from growthmap_credential import write;write(q["target"],q["credential"],q["persist"]);return {"status":"provisioned"}
  if command=="read":
   raw=sys.stdin.buffer.read(2049)
   if len(raw)>2048:raise SystemExit("read input too large")
   q=json.loads(raw)
   if set(q)!={"target"}:raise SystemExit("invalid read request")
   from growthmap_credential import read
-  read(q["target"]);return
+  read(q["target"]);return {"status":"available"}
  if command=="delete":
   raw=sys.stdin.buffer.read(2049)
   if len(raw)>2048:raise SystemExit("delete input too large")
   q=json.loads(raw)
   if set(q)!={"target"}:raise SystemExit("invalid delete request")
-  from growthmap_credential import delete;delete(q["target"]);return
+  from growthmap_credential import delete;delete(q["target"]);return {"status":"deleted"}
  if command=="rebind":
   raw=sys.stdin.buffer.read(4097)
   if len(raw)>4096:raise SystemExit("rebind input too large")
   q=json.loads(raw)
   if set(q)!={"target","endpoint","instance_nonce","product_major","persist"}:raise SystemExit("invalid rebind request")
   from growthmap_credential import read,write
-  c=read(q["target"]);c.update(endpoint=q["endpoint"],instance_nonce=q["instance_nonce"],product_major=q["product_major"]);write(q["target"],c,q["persist"]);return
+  c=read(q["target"]);c.update(endpoint=q["endpoint"],instance_nonce=q["instance_nonce"],product_major=q["product_major"]);write(q["target"],c,q["persist"]);return {"status":"rebound"}
  raise SystemExit("unknown command")
+
+def dispatch_credential_argv():
+ if len(sys.argv)==1:return False
+ if len(sys.argv)!=2 or sys.argv[1] not in {"provision","read","delete","rebind"}:raise SystemExit("usage: growthmap-mcp [provision|read|delete|rebind]")
+ result=credential_command(sys.argv[1])
+ sys.stdout.write(json.dumps(result,separators=(",",":"))+"\n");sys.stdout.flush()
+ return True
+
+if dispatch_credential_argv():raise SystemExit(0)
+
 TOOLS={
  "capabilities":("GET","/capabilities",{"type":"object","additionalProperties":False}),
  "read_project":("GET","/project",{"type":"object","additionalProperties":False}),

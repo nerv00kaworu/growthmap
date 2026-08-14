@@ -31,7 +31,7 @@ def server_mode(control, ready):
     pathlib.Path(ready).write_text(json.dumps({"port":server.server_address[1],"pid":os.getpid()}),encoding="utf-8")
     server.serve_forever()
 
-def bounded_run(exe,args,stdin,env,expect=0,timeout=12):
+def bounded_run(exe,args,stdin,env,expect=0,timeout=12,expected_status=None):
     INVOCATIONS.append([str(exe),*args])
     p=subprocess.Popen([str(exe),*args],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env,text=False,creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
     try: out,err=p.communicate(stdin.encode(),timeout=timeout)
@@ -39,6 +39,10 @@ def bounded_run(exe,args,stdin,env,expect=0,timeout=12):
         p.kill();out,err=p.communicate();raise AssertionError("MCP child timed out")
     if len(out)+len(err)>MAX_OUTPUT:raise AssertionError("MCP child output exceeded bound")
     if (p.returncode==expect) is False:raise AssertionError(f"MCP child status {p.returncode}, expected {expect}")
+    if expected_status is not None:
+        try:value=json.loads(out.decode("utf-8"))
+        except Exception:raise AssertionError("credential command returned invalid status")
+        if value!={"status":expected_status} or err:raise AssertionError("credential command returned unexpected status")
     return out,err
 
 def mcp_exchange(exe,env,include_call=True):
@@ -127,8 +131,8 @@ def integration(exe):
         try:
             nonce=secrets.token_hex(24);write_control(control,token,nonce);sidecar,port,pid=start_sidecar(script,control,ready,env);ports.append(str(port));endpoint=f"http://127.0.0.1:{port}/agent/v1"
             provision=json.dumps({"target":target,"persist":"session","credential":{"schema":"growthmap.agent-credential.v1","endpoint":endpoint,"token":token,"instance_nonce":nonce,"product_major":1}},separators=(",",":"))
-            out,err=bounded_run(exe,["provision"],provision,env);logs += [("stdout",out),("stderr",err)];reached.add("credential_roundtrip")
-            out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env);logs += [("stdout",out),("stderr",err)]
+            out,err=bounded_run(exe,["provision"],provision,env,expected_status="provisioned");logs += [("stdout",out),("stderr",err)];reached.add("credential_roundtrip")
+            out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env,expected_status="available");logs += [("stdout",out),("stderr",err)]
             discovery.write_text(json.dumps(descriptor(exe,target,endpoint,nonce,pid),separators=(",",":")),encoding="utf-8")
             out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,False,"ordinary discovery",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("ordinary_discovery_and_mcp")
             # The actual frozen executable must traverse the fixed LOCALAPPDATA descriptor symlink and fail closed.
@@ -148,12 +152,12 @@ def integration(exe):
             nonce2=secrets.token_hex(24);write_control(control,token,nonce2);sidecar,port2,pid2=start_sidecar(script,control,ready,env);ports.append(str(port2));assert port2!=port
             endpoint2=f"http://127.0.0.1:{port2}/agent/v1"
             rebind=json.dumps({"target":target,"endpoint":endpoint2,"instance_nonce":nonce2,"product_major":1,"persist":"session"},separators=(",",":"))
-            out,err=bounded_run(exe,["rebind"],rebind,env);logs += [("stdout",out),("stderr",err)]
+            out,err=bounded_run(exe,["rebind"],rebind,env,expected_status="rebound");logs += [("stdout",out),("stderr",err)]
             discovery.write_text(json.dumps(descriptor(exe,target,endpoint2,nonce2,pid2),separators=(",",":")),encoding="utf-8")
             out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,False,"restart rebind",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("restart_rebind_persistence")
             direct_project(endpoint2,token,200);write_control(control,token,nonce2,True);direct_project(endpoint2,token,401)
             out,err,rows=mcp_exchange(exe,env);assert_call_result(rows,True,"GRANT_INACTIVE",token,ports,root);logs += [("stdout",out),("stderr",err)];reached.add("revoke_blocks_bearer_and_mcp")
-            out,err=bounded_run(exe,["delete"],json.dumps({"target":target}),env);logs += [("stdout",out),("stderr",err)]
+            out,err=bounded_run(exe,["delete"],json.dumps({"target":target}),env,expected_status="deleted");logs += [("stdout",out),("stderr",err)]
             out,err=bounded_run(exe,["read"],json.dumps({"target":target}),env,expect=1);logs += [("stdout",out),("stderr",err)];reached.add("credential_deleted")
             desc=json.loads(discovery.read_text(encoding="utf-8"));assert token not in json.dumps(desc)
             evidence={"argv":INVOCATIONS,"env":env,"generic":generic,"descriptor":desc}
