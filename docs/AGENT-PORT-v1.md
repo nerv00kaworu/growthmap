@@ -74,3 +74,18 @@ Focused audit progress and unresolved gaps are recorded in [`docs/R4-BLOCKERS-3-
 Implemented on branch `agent-port-v1-20260729` from reviewed baseline `5c34233ddce4302ce12997ef20134757767259ee`; master was not merged or modified. Closure includes strict discriminated operation schemas; all-reference/same-batch/scope/branch validation; atomic proposal review with grant revalidation; bounded graph/context; separate fail-closed human capability; hardened redirect-free loopback CLI/MCP transports; MCP initialize/tool/error semantics; receipt uniqueness/concurrency handling; prefix and rate-table bounds; and detached desktop interpreter dependency probing.
 
 Verified locally: backend `60 passed`; Agent Port focused `4 passed`; frontend typecheck/lint/build; deterministic CSP generation; desktop `96 passed`; Python compileall and `git diff --check`. Remaining architectural work: migrating every legacy GUI canonical mutation route to mandatory shared optimistic-revision request fields is deliberately not represented as complete by this patch; those routes predate Agent Port and require a coordinated API/frontend contract migration. Agent Port itself remains fail-closed and revision-safe.
+
+## Packaged universal MCP access
+
+Windows packages include `resources/growthmap-mcp.exe`. Agent Access authorizes
+MCP-compatible processes running as the same Windows user; it does not claim to
+protect against malware or full compromise of that user. Windows Credential
+Manager isolates the generic credential from different Windows users.
+
+Generic configuration contains only the installed absolute command:
+`{"mcpServers":{"growthmap":{"command":"C:\\Program Files\\GrowthMap\\resources\\growthmap-mcp.exe"}}}`.
+No bearer, environment secret, or random port is required. Session lifetime uses
+Credential Manager `CRED_PERSIST_SESSION`; finite 24-hour, 7-day, and 30-day
+grants expire authoritatively in the backend; unlimited-until-disabled uses the
+per-user `CRED_PERSIST_LOCAL_MACHINE` persistence value and an explicitly
+persistent backend grant that remains active only until revocation.

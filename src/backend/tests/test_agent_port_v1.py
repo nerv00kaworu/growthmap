@@ -70,3 +70,9 @@ class AgentPortV1(unittest.TestCase):
   a=self.grant().json();b=self.grant().json();p=self.client.get("/agent/v1/project",headers=self.auth(a["token"])).json();n=self.client.get(f"/api/nodes/{self.root}").json();statuses=[]
   for i,g in enumerate((a,b)):statuses.append(self.client.post("/agent/v1/batch",headers=self.auth(g["token"]),json={"expected_project_revision":p["revision"],"idempotency_key":f"writer-{i}","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":str(i)}}]}).status_code)
   self.assertEqual(sorted(statuses),[200,409])
+ def test_persistent_grant_has_no_public_expiry(self):
+  body={"project_id":self.pid,"permission":"propose","persistent":True,"expires_at":None,"label":"persistent","agent_identity":"local-mcp"}
+  made=self.client.post("/api/agent-port/grants",json=body,headers=self.human);self.assertEqual(made.status_code,201,made.text)
+  row=made.json();self.assertTrue(row["persistent"]);self.assertIsNone(row["expires_at"])
+  self.assertEqual(self.client.get("/agent/v1/project",headers=self.auth(row["token"])).status_code,200)
+  self.assertEqual(self.client.post("/api/agent-port/grants",json={**body,"persistent":False},headers=self.human).status_code,422)

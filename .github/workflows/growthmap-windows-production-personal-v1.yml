@@ -43,6 +43,8 @@ jobs:
         working-directory: src/frontend
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
+      - run: ./packaging/build-mcp.ps1
+        working-directory: src/backend
       - run: npm ci
         working-directory: desktop
       - run: npm test

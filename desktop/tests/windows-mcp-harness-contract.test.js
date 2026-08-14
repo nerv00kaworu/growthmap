@@ -1,0 +1,10 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const root=path.resolve(__dirname,'../..'),script=fs.readFileSync(path.join(root,'.github/workflows/scripts/test-windows-mcp.py'),'utf8'),workflow=fs.readFileSync(path.join(root,'.github/workflows/desktop-windows.yml'),'utf8');
+test('Windows MCP harness executes every required integration transition, not keyword placeholders',()=>{
+ for(const call of ['bounded_run(exe,["provision"]','bounded_run(exe,["read"]','mcp_exchange(exe,env)','os.symlink(ordinary,discovery)','bounded_run(exe,["rebind"]','direct_project(endpoint2,token,401)','bounded_run(exe,["delete"]','assert_no_leak(evidence,token,ports,root)'])assert.match(script,new RegExp(call.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+ for(const reached of ['ordinary_discovery_and_mcp','reparse_rejected_by_executable','restart_rebind_persistence','revoke_blocks_bearer_and_mcp','credential_deleted','secret_evidence_checked'])assert.match(script,new RegExp(`reached\\.add\\(["']${reached}["']\\)`));
+ assert.match(script,/required<=reached/);assert.match(script,/if os\.name!="nt":raise SystemExit\("genuine Windows required"\)/);
+});
+test('workflow runs exact harness after MCP build and before package build',()=>{const build=workflow.indexOf('./packaging/build-mcp.ps1'),harness=workflow.indexOf('./.github/workflows/scripts/test-windows-mcp.ps1'),pack=workflow.indexOf('npm run dist:win:e2e');assert(build>=0&&harness>build&&pack>harness)});
+test('read check is status-only and harness forbids secret and endpoint ports in captured process evidence',()=>{const adapter=fs.readFileSync(path.join(root,'scripts/growthmap_mcp.py'),'utf8');assert.match(adapter,/read\(q\["target"\]\);return/);assert.match(script,/"argv":INVOCATIONS/);assert.match(script,/"env":env/);assert.match(script,/"stdout"/);assert.match(script,/"stderr"/);assert.match(script,/for port in port_strings/)});

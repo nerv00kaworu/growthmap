@@ -1,7 +1,7 @@
 """Canonical SQLite compatibility contract shared by migration and preflight."""
 import re
 
-CURRENT_USER_VERSION = 2
+CURRENT_USER_VERSION = 3
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
@@ -12,6 +12,7 @@ COLUMNS = (
     ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("content_blocks", "revision", "INTEGER", True, "1", "ALTER TABLE content_blocks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
+    ("agent_grants", "persistent", "BOOLEAN", True, "0", "ALTER TABLE agent_grants ADD COLUMN persistent BOOLEAN NOT NULL DEFAULT 0"),
     ("branches", "revision", "INTEGER", True, "1", "ALTER TABLE branches ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
 )
 INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"

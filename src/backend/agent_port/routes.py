@@ -31,18 +31,20 @@ def iso(value): return value.isoformat() if value else None
 def uuid_value(value,name="id"):
     try: return str(uuid.UUID(value))
     except Exception: raise HTTPException(422,f"Invalid {name}")
-def public_grant(g): return {"id":g.id,"token_prefix":g.token_prefix,"project_id":g.project_id,"permission":g.permission,"node_scope_id":g.node_scope_id,"branch_root_id":g.branch_root_id,"label":g.label,"agent_identity":g.agent_identity,"status":g.status,"expires_at":iso(g.expires_at),"revoked_at":iso(g.revoked_at),"last_used_at":iso(g.last_used_at),"created_at":iso(g.created_at)}
+def public_grant(g): return {"id":g.id,"token_prefix":g.token_prefix,"project_id":g.project_id,"permission":g.permission,"node_scope_id":g.node_scope_id,"branch_root_id":g.branch_root_id,"label":g.label,"agent_identity":g.agent_identity,"status":g.status,"expires_at":None if g.persistent else iso(g.expires_at),"persistent":g.persistent,"revoked_at":iso(g.revoked_at),"last_used_at":iso(g.last_used_at),"created_at":iso(g.created_at)}
 def public_readback(x,grant=None): return {"id":x.id,"target_node_id":x.target_node_id,**({"source":grant.label,"agent":grant.agent_identity} if grant else {}),"summary":x.summary,"commit_refs":x.commit_refs,"files":x.files,"tests":x.tests,"decisions":x.decisions,"risks":x.risks,"todos":x.todos,"evidence":x.evidence,"created_at":iso(x.created_at)}
 def hash_secret(secret,salt): return hashlib.scrypt(secret.encode(),salt=bytes.fromhex(salt),n=2**14,r=8,p=1,dklen=32).hex()
 
 class Strict(BaseModel): model_config=ConfigDict(extra="forbid")
 class GrantCreate(Strict):
     project_id:str; permission:Literal["read","propose","write"]; node_scope_id:str|None=None; branch_root_id:str|None=None
-    expires_at:datetime; label:str=Field(min_length=1,max_length=120); agent_identity:str=Field(min_length=1,max_length=120)
+    expires_at:datetime|None; persistent:bool=False; label:str=Field(min_length=1,max_length=120); agent_identity:str=Field(min_length=1,max_length=120)
     @model_validator(mode="after")
     def scope(self):
         if self.node_scope_id and self.branch_root_id: raise ValueError("Choose node or branch scope, not both")
-        if self.expires_at <= now()+timedelta(minutes=1) or self.expires_at > now()+timedelta(days=90): raise ValueError("Expiry must be finite, 1 minute to 90 days")
+        if self.persistent:
+            if self.expires_at is not None: raise ValueError("Persistent grants must not have an expiry")
+        elif self.expires_at is None or self.expires_at <= now()+timedelta(minutes=1) or self.expires_at > now()+timedelta(days=90): raise ValueError("Expiry must be finite, 1 minute to 90 days")
         return self
 
 async def local_limit(request:Request):
@@ -62,8 +64,8 @@ async def auth(request:Request,authorization:str|None=Header(None),db:AsyncSessi
     grant=(await db.execute(select(AgentGrant).where(AgentGrant.token_prefix==prefix))).scalar_one_or_none()
     dummy_salt="00"*16; supplied=hash_secret(secret,grant.token_salt if grant else dummy_salt); expected=grant.token_hash if grant else "00"*32
     if not hmac.compare_digest(supplied,expected): raise HTTPException(401,{"code":"INVALID_TOKEN","message":"Invalid token"})
-    expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant.expires_at.tzinfo is None else grant.expires_at
-    if grant.status!="active" or grant.revoked_at or expires<=now(): raise HTTPException(401,{"code":"GRANT_INACTIVE","message":"Grant is revoked or expired"})
+    expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant.expires_at and grant.expires_at.tzinfo is None else grant.expires_at
+    if grant.status!="active" or grant.revoked_at or (not grant.persistent and (expires is None or expires<=now())): raise HTTPException(401,{"code":"GRANT_INACTIVE","message":"Grant is revoked or expired"})
     instant=time.monotonic()
     if len(_hits)>10000:
         for gid in list(_hits)[:1000]:
@@ -77,7 +79,7 @@ def require(grant,permission):
     if PERMISSIONS[grant.permission]<PERMISSIONS[permission]: raise HTTPException(403,{"code":"PERMISSION_DENIED","message":f"{permission} permission required"})
 
 @router.get("/capabilities",dependencies=[Depends(local_limit)])
-async def capabilities(): return {"protocol":"growthmap-agent-port","version":"1.0","auth":"bearer","provider_neutral":True,"limits":{"request_bytes":1048576,"operations_per_batch":50,"requests_per_minute":120},"permissions":["read","propose","write"],"operations":["create_node","update_node","create_edge","create_content_block","create_branch"],"endpoints":["project","graph","context","proposals","batch","events","readbacks"]}
+async def capabilities(): return {"instance_nonce":os.getenv("GROWTHMAP_AGENT_INSTANCE_NONCE",""),"product_major":int(os.getenv("GROWTHMAP_PRODUCT_MAJOR","0")),"protocol":"growthmap-agent-port","version":"1.0","auth":"bearer","provider_neutral":True,"limits":{"request_bytes":1048576,"operations_per_batch":50,"requests_per_minute":120},"permissions":["read","propose","write"],"operations":["create_node","update_node","create_edge","create_content_block","create_branch"],"endpoints":["project","graph","context","proposals","batch","events","readbacks"]}
 
 @router.get("/project")
 async def project_read(grant=Depends(auth),db:AsyncSession=Depends(get_db)):
@@ -168,7 +170,7 @@ async def create_grant(data:GrantCreate,db:AsyncSession=Depends(get_db)):
         if not (await db.execute(select(AgentGrant.id).where(AgentGrant.token_prefix==candidate))).scalar_one_or_none(): prefix=candidate;break
     if not prefix: raise HTTPException(503,"Unable to allocate token prefix")
     secret=secrets.token_urlsafe(32);salt=secrets.token_hex(16);raw=f"gm1.{prefix}.{secret}"
-    g=AgentGrant(token_prefix=prefix,token_salt=salt,token_hash=hash_secret(secret,salt),project_id=p.id,permission=data.permission,node_scope_id=data.node_scope_id,branch_root_id=data.branch_root_id,label=data.label,agent_identity=data.agent_identity,expires_at=data.expires_at);db.add(g);await db.commit();await db.refresh(g)
+    g=AgentGrant(token_prefix=prefix,token_salt=salt,token_hash=hash_secret(secret,salt),project_id=p.id,permission=data.permission,node_scope_id=data.node_scope_id,branch_root_id=data.branch_root_id,label=data.label,agent_identity=data.agent_identity,expires_at=data.expires_at,persistent=data.persistent);db.add(g);await db.commit();await db.refresh(g)
     return {**public_grant(g),"token":raw,"warning":"Copy now. GrowthMap stores only a strong hash and cannot show this token again."}
 @human_router.get("/agent-port/grants")
 async def grants(project_id:str,db:AsyncSession=Depends(get_db)):
@@ -212,7 +214,7 @@ async def review(proposal_id:str,decision:Literal["approve","reject"],body:Revie
     if decision=="reject": row.status="rejected";row.review_note=note;row.reviewed_at=now();await db.commit();return {"proposal_id":row.id,"status":row.status}
     grant=await db.get(AgentGrant,row.grant_id)
     expires=grant.expires_at.replace(tzinfo=timezone.utc) if grant and grant.expires_at.tzinfo is None else (grant.expires_at if grant else None)
-    if not grant or grant.status!="active" or grant.revoked_at or expires<=now() or PERMISSIONS.get(grant.permission,-1)<PERMISSIONS["propose"]: raise HTTPException(409,{"code":"GRANT_INACTIVE","message":"Revocation/expiry invalidates pending proposals"})
+    if not grant or grant.status!="active" or grant.revoked_at or (not grant.persistent and (expires is None or expires<=now())) or PERMISSIONS.get(grant.permission,-1)<PERMISSIONS["propose"]: raise HTTPException(409,{"code":"GRANT_INACTIVE","message":"Revocation/expiry invalidates pending proposals"})
     row.review_note=note
     # Snapshot all wire primitives before apply_batch commits and expires row.
     proposal_id, expected_revision, operations = row.id, row.expected_project_revision, row.operations

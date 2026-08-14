@@ -31,11 +31,15 @@ function resolvePython(options={}){
  for(const value of pythonCandidates(options)){const probe=probePython(value,options);if(probe.ok)return value;failures.push(describeSpawn(probe.result,value));}
  throw Error(`No supported Python interpreter was found. Probes: ${failures.join(' | ')}`);
 }
+function probeBackendPython(value,{spawnSync=childProcess.spawnSync}={}){
+ const result=spawnSync(value.executable,[...value.prefixArgs,'-c','import fastapi,sqlite3,sys; assert sys.version_info >= (3, 10)'],{encoding:'utf8',windowsHide:true});
+ return {ok:result.status===0,result};
+}
 function resolveBackendPython(defaultPython,{env=process.env,...options}={}){
- if(!env.GROWTHMAP_TEST_BACKEND_PYTHON)return defaultPython;
- const value=candidate(env.GROWTHMAP_TEST_BACKEND_PYTHON,[],'GROWTHMAP_TEST_BACKEND_PYTHON'),probe=probePython(value,options);
- if(probe.ok)return value;
- throw Error(`GROWTHMAP_TEST_BACKEND_PYTHON is unavailable or unsupported: ${describeSpawn(probe.result,value)}`);
+ if(env.GROWTHMAP_TEST_BACKEND_PYTHON){const value=candidate(env.GROWTHMAP_TEST_BACKEND_PYTHON,[],'GROWTHMAP_TEST_BACKEND_PYTHON'),probe=probeBackendPython(value,options);if(probe.ok)return value;throw Error(`GROWTHMAP_TEST_BACKEND_PYTHON is unavailable or unsupported: ${describeSpawn(probe.result,value)}`);}
+ const failures=[];
+ for(const value of [defaultPython,...pythonCandidates({env,...options})]){const probe=probeBackendPython(value,options);if(probe.ok)return value;failures.push(describeSpawn(probe.result,value));}
+ throw Error(`No backend Python interpreter with FastAPI was found. Probes: ${failures.join(' | ')}`);
 }
 function runPython(spawnSync,value,args,options){return spawnSync(value.executable,[...value.prefixArgs,...args],options);}
 module.exports={pythonCandidates,probePython,resolvePython,resolveBackendPython,runPython,describeSpawn};

@@ -125,3 +125,19 @@ async def _partial_orm_schema_fails_before_version_advance(tmp_path, version, ta
 ])
 def test_partial_orm_schema_actual_migration_fails_closed(tmp_path,version,table,column,replacement):
     asyncio.run(_partial_orm_schema_fails_before_version_advance(tmp_path,version,table,column,replacement))
+
+
+def test_agent_grant_persistent_migration_preserves_old_rows(tmp_path):
+    import asyncio,sqlite3
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from db.migrations import run_migrations
+    db=tmp_path/'legacy-agent.db'; c=sqlite3.connect(db)
+    c.executescript("CREATE TABLE agent_grants(id TEXT PRIMARY KEY,expires_at DATETIME); INSERT INTO agent_grants VALUES('old','2026-01-01'); PRAGMA user_version=2;")
+    # Other contract tables are intentionally absent: migration must fail closed rather than advance.
+    c.close(); engine=create_async_engine('sqlite+aiosqlite:///'+str(db))
+    try:
+      try: asyncio.run(run_migrations(engine))
+      except RuntimeError: pass
+    finally: asyncio.run(engine.dispose())
+    c=sqlite3.connect(db); row=c.execute("select persistent from agent_grants where id='old'").fetchone(); version=c.execute('pragma user_version').fetchone()[0];c.close()
+    assert row==(0,) and version==2

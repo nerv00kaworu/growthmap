@@ -78,6 +78,11 @@ jobs:
           exit 0
       - run: ./packaging/build-sidecar.ps1
         working-directory: src/backend
+      - run: ./packaging/build-mcp.ps1
+        working-directory: src/backend
+      - name: Genuine Windows MCP discovery, Credential Manager, restart, revoke, reparse and leak integration
+        shell: pwsh
+        run: ./.github/workflows/scripts/test-windows-mcp.ps1 -McpExe src/backend/dist/growthmap-mcp.exe
       - run: npm ci
         working-directory: desktop
       - name: Freeze clean desktop dependency provenance before scripts/build

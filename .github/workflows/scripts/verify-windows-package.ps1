@@ -2,9 +2,11 @@ $ErrorActionPreference = 'Stop'
 
 $resources = 'desktop/dist/win-unpacked/resources'
 $sidecar = Join-Path $resources 'sidecar/growthmap-sidecar.exe'
+$mcp = Join-Path $resources 'growthmap-mcp.exe'
 $frontend = Join-Path $resources 'frontend'
 $required = @(
   $sidecar,
+  $mcp,
   (Join-Path $frontend 'index.html'),
   (Join-Path $resources 'legal/LICENSE'),
   (Join-Path $resources 'legal/EULA.md'),
