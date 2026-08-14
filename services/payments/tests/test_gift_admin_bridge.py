@@ -1,6 +1,9 @@
 import base64
 import json
 import logging
+import re
+import subprocess
+import tempfile
 import time
 
 from cryptography.hazmat.primitives import serialization
@@ -77,6 +80,12 @@ def test_csrf_origin_batch_and_one_time_secret_not_in_list_or_logs(caplog):
     page=login(client,key);assert page.status_code==200
     assert "可直接交給親友的 GMG1 授權碼" in page.text
     assert "複製授權碼" in page.text and "下載 TXT" in page.text
+    script=re.search(r"<script>([\s\S]*)</script>",page.text)
+    assert script is not None
+    with tempfile.NamedTemporaryFile("w",suffix=".js",encoding="utf-8") as rendered:
+        rendered.write(script.group(1));rendered.flush()
+        syntax=subprocess.run(["node","--check",rendered.name],capture_output=True,text=True)
+    assert syntax.returncode==0,syntax.stderr
     csrf=page.text.split("name=csrf content='")[1].split("'")[0]
     body={"count":2,"edition":"personal","major_version":1,"seat_limit":2,"expires_at":None,"check_in_days":30}
     assert client.post("/v1/admin/gifts/create",json=body).status_code==403
