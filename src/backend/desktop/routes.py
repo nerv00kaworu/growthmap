@@ -69,7 +69,7 @@ async def import_license(request: Request):
     parent=LICENSE_PATH.parent
     try:
         parent.mkdir(parents=True,exist_ok=True,mode=0o700);pst=parent.lstat()
-        if not pst.is_dir() or parent.is_symlink(): raise ValueError("unsafe")
+        if not __import__("stat").S_ISDIR(pst.st_mode) or parent.is_symlink(): raise ValueError("unsafe")
         os.chmod(parent,0o700)
         if LICENSE_PATH.exists() and (LICENSE_PATH.is_symlink() or not LICENSE_PATH.is_file()): raise ValueError("unsafe")
     except Exception: raise HTTPException(400,"Unsafe license destination")

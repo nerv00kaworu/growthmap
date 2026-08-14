@@ -60,6 +60,29 @@ with TestClient(app) as c:
     env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'00ea2c7a12956fa4fff2f382fa32b3bafd333082d7f6765f1ad6edb5741b9218','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'paid.db'}",'GROWTHMAP_LICENSE_FILE':str(license_file),'GROWTHMAP_LICENSE_PUBLIC_KEY':str(pub),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True);assert result.returncode==0,result.stdout+result.stderr
 
+def test_signed_activation_certificate_import_lands_atomically(tmp_path):
+    authority=Ed25519PrivateKey.generate();device=Ed25519PrivateKey.generate()
+    public=tmp_path/'authority.pem';public.write_bytes(authority.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+    device_public=base64.b64encode(device.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw)).decode()
+    device_id='gmdev_'+__import__('hashlib').sha256(base64.b64decode(device_public)).hexdigest()
+    certificate={'schema_version':2,'certificate_type':'growthmap_device_activation','product':'growthmap','edition':'personal','license_id':'GIFT-IMPORT-1','activation_id':'gma_'+'1'*32,'major_version':1,'device_allowance':2,'device_id':device_id,'device_public_key':device_public,'issued_at':'2026-08-14T00:00:00Z','expires_at':None,'revoked_at':None,'max_active_projects':None,'next_check_in_at':'2099-08-14T00:00:00Z'}
+    certificate['signature']=base64.b64encode(authority.sign(b'growthmap-activation-certificate-v2\0'+canonical_payload(certificate))).decode()
+    document=tmp_path/'certificate.json';document.write_text(json.dumps(certificate));license_file=tmp_path/'state'/'license.json'
+    code=r'''import json,os
+from pathlib import Path
+from fastapi.testclient import TestClient
+from main import app
+certificate=json.load(open(os.environ['CERTIFICATE']))
+with TestClient(app) as client:
+ response=client.post('/api/desktop/license/import',headers={'Authorization':'Bearer t'},json={'document':certificate})
+ assert response.status_code==200,response.text
+ assert response.json()['state']=='paid' and response.json()['valid'] is True
+ assert json.loads(Path(os.environ['GROWTHMAP_LICENSE_FILE']).read_text())==certificate
+'''
+    env={**os.environ,'CERTIFICATE':str(document),'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'0','GROWTHMAP_DB_QUERY_ONLY':'1','GROWTHMAP_SESSION_TOKEN':'t','GROWTHMAP_STARTUP_VERDICT_MODE':'extraction','GROWTHMAP_DEVICE_PUBLIC_KEY':device_public,'GROWTHMAP_BUNDLED_LICENSE_PUBLIC_KEY':str(public),'GROWTHMAP_PACKAGED_MODE':'1','GROWTHMAP_LICENSE_FILE':str(license_file),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json'),'GROWTHMAP_REVOCATION_FILE':str(tmp_path/'revocation.json'),'DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'desktop.db'}"}
+    result=subprocess.run([sys.executable,'-c',code],env=env,cwd=Path(__file__).parents[1],text=True,capture_output=True)
+    assert result.returncode==0,result.stdout+result.stderr
+
 def test_expired_route_matrix_and_authoring_unaffected(tmp_path):
     code=r'''from fastapi.testclient import TestClient
 from main import app

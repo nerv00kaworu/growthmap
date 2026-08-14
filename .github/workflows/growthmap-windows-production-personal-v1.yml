@@ -33,6 +33,10 @@ jobs:
           if ($env:G1_PIN -cnotmatch '^[0-9a-f]{64}$') { throw 'Witnessed lowercase G1 SHA-256 is required' }
           if ([string]::IsNullOrWhiteSpace($env:G1_PEM_BASE64)) { throw 'GROWTHMAP_G1_PUBLIC_KEY_PEM_BASE64 secret is required' }
       - run: python -m pip install -r src/backend/packaging/requirements-desktop.txt -r src/backend/packaging/requirements-test.txt
+      - name: Verify signed activation certificate imports into Windows desktop state
+        run: python -m pytest -q src/backend/tests/test_commercial_entitlements.py
+        env:
+          PYTHONPATH: src/backend
       - run: npm ci
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
