@@ -57,12 +57,12 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   if(!initialPath||!initialPath.toLowerCase().endsWith('growthmap.db'))throw Error(`database workspace did not expose canonical path: ${initialPath}`);
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-import').click();
-  await stageWait(run,'import',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture'))return true;const e=[...document.querySelectorAll('div')].map(x=>x.textContent||'').find(x=>x.includes('資料庫操作失敗')||x.includes('原有資料未變更'));return e?{error:e.slice(0,300)}:false;},90000);
+  await stageWait(run,'import',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture'))return true;const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return e?{error:e.slice(0,300)}:false;},90000);
   await assertCanonicalFixture(run,'import-canonical-api','Desktop Fixture');
   await run.page.getByTestId('database-workspace-button').click();
   await run.page.getByTestId('database-workspace').waitFor();
   await run.page.getByTestId('database-backup').click();
-  await stageWait(run,'backup',()=>{const t=document.body.innerText;if(t.includes('備份完成'))return true;return t.includes('資料庫操作失敗')?{error:'database operation failed'}:false;},90000);
+  await stageWait(run,'backup',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';if(e.startsWith('✅'))return true;return e?{error:e.slice(0,300)}:false;},90000);
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
   made=runPython(['-c',`import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("update projects set name='Mutated Fixture'");c.commit();c.close()`,path.join(userData,'growthmap.db')],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
@@ -74,7 +74,7 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   await run.page.getByTestId('database-workspace').waitFor();
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-restore').first().click();
-  await stageWait(run,'restore',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture')&&!t.includes('Mutated Fixture'))return true;return t.includes('資料庫操作失敗')?{error:'database operation failed'}:false;},90000);
+  await stageWait(run,'restore',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture')&&!t.includes('Mutated Fixture'))return true;const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return e&&!e.startsWith('✅')?{error:e.slice(0,300)}:false;},90000);
   await assertCanonicalFixture(run,'restore-canonical-api','Desktop Fixture');
   await close(run);
   console.log(`Packaged database roundtrip/lifecycle E2E passed; screenshot=${screenshot}`);
