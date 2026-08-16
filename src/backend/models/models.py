@@ -239,8 +239,12 @@ class AgentGrant(Base):
     token_prefix = Column(String(20), nullable=False, unique=True, index=True)
     token_salt = Column(String(64), nullable=False)
     token_hash = Column(String(128), nullable=False)
-    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    # NULL project_id + workspace_scope=workspace is the R18 installation-wide
+    # capability. Non-NULL rows remain legacy project-bound audit records.
+    project_id = Column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
     permission = Column(String(10), nullable=False)
+    workspace_scope = Column(String(20), nullable=False, default="legacy_project", server_default="legacy_project")
+    mode = Column(String(32), nullable=True)
     node_scope_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True)
     branch_root_id = Column(String(36), ForeignKey("nodes.id", ondelete="CASCADE"), nullable=True)
     label = Column(String(120), nullable=False)

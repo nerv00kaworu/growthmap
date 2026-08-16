@@ -1,0 +1,3 @@
+import test from "node:test";import assert from "node:assert/strict";import {owns,releaseOwned,visibleFor} from "./agent-port-project-state";
+test("project transition hides all old sensitive state and is not locked by old pending",()=>{const old={project:"old",ticket:1};assert.equal(owns(old,"new",2),false);for(const value of ["token",[{id:"grant"}],{events:[1]},"message",{state:"enabled"}])assert.deepEqual(visibleFor({project:"old",value},"new",null),null)});
+test("old finally cannot release a newer project owner",()=>{const newer={project:"new",ticket:2};assert.equal(releaseOwned(newer,{project:"old",ticket:1}),newer);assert.equal(releaseOwned(newer,newer),null)});

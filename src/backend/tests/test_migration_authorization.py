@@ -64,6 +64,26 @@ def test_valid_exact_marker_succeeds_consumes_and_replay_fails(tmp_path):
     assert run(tmp_path, env).returncode != 0
 
 
+def test_stable_backup_read_requests_binary_mode_when_platform_exposes_it(tmp_path, monkeypatch):
+    import desktop.migration_auth as auth
+    evidence = tmp_path / "evidence.db"
+    # 0x1a is SQLite-valid binary content but is interpreted as EOF by the
+    # Windows CRT when a low-level descriptor is accidentally opened as text.
+    evidence.write_bytes(b"SQLite format 3\0" + b"x" * 100 + b"\x1a" + b"tail")
+    binary = getattr(os, "O_BINARY", 0)
+    monkeypatch.setattr(auth.os, "O_BINARY", binary or 0x8000, raising=False)
+    real_open = auth.os.open
+    observed = []
+    def recording_open(path, flags, *args, **kwargs):
+        observed.append(flags)
+        # O_BINARY is zero off Windows; strip the synthetic bit before opening.
+        return real_open(path, flags & ~0x8000 if not binary else flags, *args, **kwargs)
+    monkeypatch.setattr(auth.os, "open", recording_open)
+    raw, _ = auth._stable_bytes(evidence)
+    assert raw == evidence.read_bytes()
+    assert observed[0] & (binary or 0x8000)
+
+
 def test_mutated_marker_timestamp_durability_and_manifest_shape_fail(tmp_path):
     for mutation in ("marker", "timestamp", "durability", "extra", "missing"):
         case = tmp_path / mutation

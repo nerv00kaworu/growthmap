@@ -2,7 +2,7 @@
 import os, sqlite3, sys, tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"src/backend"))
-from db.schema_contract import CURRENT_USER_VERSION
+from db.schema_contract import CURRENT_USER_VERSION, WORKSPACE_GRANT_INDEX_SQL
 
 def fixture_output(argument: str) -> Path:
     output=Path(argument).resolve(); temp_root=Path(tempfile.gettempdir()).resolve()
@@ -22,10 +22,11 @@ CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,source_node_i
 CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',branch_id VARCHAR(36),created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE edges(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT,is_mainline BOOLEAN NOT NULL,created_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY NOT NULL,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
-CREATE TABLE agent_grants(id TEXT PRIMARY KEY,token_prefix TEXT NOT NULL,token_salt TEXT NOT NULL,token_hash TEXT NOT NULL,project_id TEXT NOT NULL,permission TEXT NOT NULL,node_scope_id TEXT,branch_root_id TEXT,label TEXT NOT NULL,agent_identity TEXT NOT NULL,status TEXT NOT NULL,expires_at DATETIME,persistent BOOLEAN NOT NULL DEFAULT 0,revoked_at DATETIME,last_used_at DATETIME,created_at DATETIME);
+CREATE TABLE agent_grants(id TEXT PRIMARY KEY,token_prefix TEXT NOT NULL,token_salt TEXT NOT NULL,token_hash TEXT NOT NULL,project_id TEXT,permission TEXT NOT NULL,workspace_scope VARCHAR(20) NOT NULL DEFAULT 'legacy_project',mode VARCHAR(32),node_scope_id TEXT,branch_root_id TEXT,label TEXT NOT NULL,agent_identity TEXT NOT NULL,status TEXT NOT NULL,expires_at DATETIME,persistent BOOLEAN NOT NULL DEFAULT 0,revoked_at DATETIME,last_used_at DATETIME,created_at DATETIME);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '');
 CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of' AND is_mainline=1;
+{WORKSPACE_GRANT_INDEX_SQL};
 CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1); END;
 CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id,relation_type,is_mainline ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1 AND id!=OLD.id); END;
 CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight=COALESCE(weight,1.0),note=COALESCE(note,'') WHERE id=NEW.id; END;

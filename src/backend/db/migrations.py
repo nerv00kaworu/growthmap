@@ -1,7 +1,8 @@
 """Ordered fail-closed SQLite schema migrations."""
 import os
+import re
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEX_SQL, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEXES, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
 
 async def _table_exists(conn, table):
     return (await conn.execute(text("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=:name"), {"name":table})).first() is not None
@@ -36,40 +37,197 @@ async def _migrate_agent_grant_expiry_nullable(conn,upgrading):
     await conn.execute(text("UPDATE agent_grants SET expires_at=expires_at_legacy_v3"))
     await conn.execute(text("ALTER TABLE agent_grants DROP COLUMN expires_at_legacy_v3"))
 
+async def _migrate_agent_grant_project_nullable(conn,upgrading):
+    if not await _table_exists(conn,"agent_grants"):return
+    project=await _column(conn,"agent_grants","project_id")
+    if project is None:raise RuntimeError("missing ORM read column agent_grants.project_id")
+    if not bool(project[3]):return
+    if not upgrading:raise RuntimeError("incompatible migration column agent_grants.project_id")
+    # Removing NOT NULL changes only SQLite schema metadata, not the record
+    # format. Rebuilding/renaming this parent table is unsafe because SQLite
+    # rewrites both its own FK and inbound proposal/event/readback FKs. Keep the
+    # exact table and every row/index/FK identity, changing only the declaration.
+    sql=(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name='agent_grants'"))).scalar()
+    # Historical databases used both TEXT and VARCHAR(36) declarations.
+    # Accept exactly those two compatible spellings and remove only NOT NULL.
+    rewritten,count=re.subn(r'(?i)(\bproject_id\b\s+(?:TEXT|VARCHAR\s*\(\s*36\s*\)))\s+NOT\s+NULL',r'\1',sql,count=1)
+    if count!=1:raise RuntimeError("unsupported legacy declaration agent_grants.project_id")
+    await conn.execute(text("PRAGMA writable_schema=ON"))
+    try:await conn.execute(text("UPDATE sqlite_schema SET sql=:sql WHERE type='table' AND name='agent_grants'"),{"sql":rewritten})
+    finally:await conn.execute(text("PRAGMA writable_schema=OFF"))
+    version=int((await conn.execute(text("PRAGMA schema_version"))).scalar())
+    await conn.execute(text(f"PRAGMA schema_version={version+1}"))
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="agent_grant_project_v7":
+        raise RuntimeError("injected migration failure after Agent Access v7 DDL")
+
+async def _migrate_agent_grant_modes(conn,upgrading):
+    """Map every legacy grant to its exact R18 mode without widening authority."""
+    if not upgrading or not await _table_exists(conn,"agent_grants"):return
+    await conn.execute(text("""
+      UPDATE agent_grants
+      SET workspace_scope='legacy_project',
+          mode=CASE permission
+            WHEN 'read' THEN 'read_only'
+            WHEN 'propose' THEN 'review_first'
+            WHEN 'write' THEN 'direct_collaboration'
+            ELSE NULL END
+      WHERE workspace_scope='legacy_project' AND mode IS NULL
+    """))
+    if (await conn.execute(text("SELECT 1 FROM agent_grants WHERE mode IS NULL OR mode NOT IN ('read_only','review_first','direct_collaboration') OR workspace_scope NOT IN ('legacy_project','workspace') OR (workspace_scope='workspace' AND project_id IS NOT NULL) OR (workspace_scope='legacy_project' AND project_id IS NULL) OR permission != CASE mode WHEN 'read_only' THEN 'read' WHEN 'review_first' THEN 'propose' WHEN 'direct_collaboration' THEN 'write' END LIMIT 1"))).first():
+        raise RuntimeError("incompatible Agent Access v7 authority mapping")
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="agent_grant_modes_v7":
+        raise RuntimeError("injected migration failure after Agent Access v7 mode mapping")
+
 async def _validate_required_rows(conn):
     for table,columns in ROW_REQUIRED_NON_NULL.items():
         for column in columns:
             if (await conn.execute(text(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1'))).first():
                 raise RuntimeError(f"incompatible NULL data {table}.{column}")
 
-async def _validate_objects(conn,create_missing):
-    expected={"ux_edges_one_mainline_per_parent":("index",INDEX_SQL),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
+async def _demote_ambiguous_legacy_mainlines(conn, upgrading):
+    """Apply the v5 owner-approved, custody-preserving ambiguity policy.
+
+    For every legacy parent with two or more true child_of mainlines, demote all
+    true mainlines in that group. IDs and rows are preserved; unambiguous,
+    non-child, false and NULL markers are untouched. The predicate makes retry
+    safe even when a SQLite driver retains earlier transactional DDL.
+    """
+    if not upgrading:return
+    await conn.execute(text("""
+      UPDATE edges SET is_mainline=0
+      WHERE relation_type='child_of' AND is_mainline=1
+        AND from_node_id IN (
+          SELECT from_node_id FROM edges
+          WHERE relation_type='child_of' AND is_mainline=1
+          GROUP BY from_node_id HAVING COUNT(*)>1
+        )
+    """))
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER_MAINLINE_DEMOTION")=="1":
+        raise RuntimeError("injected migration failure after mainline demotion")
+
+# Legacy v0 declarations made these model-required timestamps nullable even
+# though all ORM writes and response schemas require values. SQLite's documented
+# generalized ALTER procedure permits changing only sqlite_schema when the
+# on-disk row format is unchanged. Adding NOT NULL is such a metadata-only
+# change: no value, ID, FK, index, trigger, or affinity is rewritten.
+_LEGACY_REQUIRED_TIMESTAMP_COLUMNS = {
+    "projects": ("created_at", "updated_at"),
+    "nodes": ("created_at", "updated_at"),
+    "edges": ("created_at",),
+    "content_blocks": ("created_at", "updated_at"),
+}
+
+
+async def _validate_before_mutation(conn, migration_specs, upgrading, version):
+    """Reject unsupported/NULL legacy states before the first write."""
+    for spec in migration_specs:
+        row = await _column(conn, spec[0], spec[1])
+        if row is not None and not column_matches(row, spec):
+            raise RuntimeError(f"incompatible migration column {spec[0]}.{spec[1]}")
+        if row is None and not upgrading:
+            raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
+    additive={(spec[0],spec[1]) for spec in migration_specs}
+    for table, columns in ORM_READ_COLUMNS.items():
+        rows = {row[1]: row for row in (await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()}
+        for name, expected in columns.items():
+            problem = orm_column_problem(rows.get(name), expected)
+            repairable = upgrading and (
+                (problem == "missing" and (table,name) in additive) or
+                (version == 0 and problem == "incompatible" and
+                 name in _LEGACY_REQUIRED_TIMESTAMP_COLUMNS.get(table, ()) and
+                 rows[name][2].upper() in ("DATETIME", "TIMESTAMP") and not bool(rows[name][3]))
+            )
+            if problem and not repairable:
+                raise RuntimeError(f"{problem} ORM read column {table}.{name}")
+    await _validate_required_rows(conn)
+    # Existing objects with a canonical name must be exact. Missing objects are
+    # migration-owned and may be created only after every preflight passes.
+    await _validate_objects(conn, False if not upgrading else None)
+
+
+async def _validate_objects(conn, create_missing):
+    expected={"ux_edges_one_mainline_per_parent":("index",INDEXES["ux_edges_one_mainline_per_parent"]),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
+    if await _table_exists(conn,"agent_grants"):
+        expected["ux_agent_grants_one_active_workspace"]=("index",INDEXES["ux_agent_grants_one_active_workspace"])
     for name,(kind,sql) in expected.items():
         row=(await conn.execute(text("SELECT type,sql FROM sqlite_schema WHERE name=:name"),{"name":name})).first()
         if row is None:
-            if not create_missing:raise RuntimeError(f"missing migration {kind} {name}")
-            await conn.execute(text(sql));continue
+            if create_missing is False:raise RuntimeError(f"missing migration {kind} {name}")
+            if create_missing is True:await conn.execute(text(sql))
+            continue
         if row[0]!=kind or normalize_sql(row[1])!=normalize_sql(sql):raise RuntimeError(f"incompatible migration {kind} {name}")
 
-async def migrate_sqlite(conn):
+
+async def _enforce_legacy_required_timestamps(conn, upgrading, version):
+    if not upgrading or version != 0:return
+    replacements={}
+    for table,columns in _LEGACY_REQUIRED_TIMESTAMP_COLUMNS.items():
+        rows={row[1]:row for row in (await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()}
+        nullable=[column for column in columns if not bool(rows[column][3])]
+        if not nullable:continue
+        sql=(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name=:name"),{"name":table})).scalar()
+        rewritten=sql
+        for column in nullable:
+            pattern=rf'(?i)(\b{re.escape(column)}\b\s+(?:DATETIME|TIMESTAMP))(?!\s+NOT\s+NULL)'
+            rewritten,count=re.subn(pattern,r'\1 NOT NULL',rewritten,count=1)
+            if count!=1:raise RuntimeError(f"unsupported legacy declaration {table}.{column}")
+        replacements[table]=rewritten
+    if not replacements:return
+    await conn.execute(text("PRAGMA writable_schema=ON"))
+    try:
+        for table,sql in replacements.items():
+            await conn.execute(text("UPDATE sqlite_schema SET sql=:sql WHERE type='table' AND name=:name"),{"sql":sql,"name":table})
+    finally:
+        await conn.execute(text("PRAGMA writable_schema=OFF"))
+    version=int((await conn.execute(text("PRAGMA schema_version"))).scalar())
+    await conn.execute(text(f"PRAGMA schema_version={version+1}"))
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="timestamp_ddl":
+        raise RuntimeError("injected migration failure after timestamp DDL")
+
+
+async def _migrate_sqlite_body(conn):
     version=int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
     if version>CURRENT_USER_VERSION:raise RuntimeError("database schema is newer than this application")
     upgrading=version<CURRENT_USER_VERSION
+    # Preserve the pre-existing FK custody state. Legacy authoring fixtures may
+    # contain unrelated historical violations; migration must add none.
+    foreign_keys_before=(await conn.execute(text("PRAGMA foreign_key_check"))).all()
     migration_specs=list(COLUMNS)
     for spec in TABLE_CONDITIONAL_COLUMNS:
         if await _table_exists(conn,spec[0]):migration_specs.append(spec)
+    await _validate_before_mutation(conn,migration_specs,upgrading,version)
+    await _enforce_legacy_required_timestamps(conn,upgrading,version)
     for ordinal,spec in enumerate(migration_specs,1):
         present=await _validate_column(conn,spec)
         if not present:
-            if not upgrading:raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
             await conn.execute(text(spec[5]))
         if upgrading and os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_AFTER")==str(ordinal):raise RuntimeError("injected migration failure")
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="additive_ddl":raise RuntimeError("injected migration failure after additive DDL")
     await _migrate_agent_grant_expiry_nullable(conn,upgrading)
+    await _migrate_agent_grant_project_nullable(conn,upgrading)
+    await _migrate_agent_grant_modes(conn,upgrading)
+    await _demote_ambiguous_legacy_mainlines(conn,upgrading)
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="option2":raise RuntimeError("injected migration failure after Option2")
     await _validate_objects(conn,upgrading)
+    if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="objects":raise RuntimeError("injected migration failure after objects")
     for spec in migration_specs:assert await _validate_column(conn,spec)
-    # Missing non-migration-owned mapped columns are unsupported partial schemas.
-    # Fail before advancing user_version rather than inventing data/defaults.
     await _validate_orm_read_contract(conn)
     await _validate_required_rows(conn)
+    if (await conn.execute(text("PRAGMA integrity_check"))).scalar()!="ok":raise RuntimeError("database integrity check failed after migration")
+    if (await conn.execute(text("PRAGMA foreign_key_check"))).all()!=foreign_keys_before:raise RuntimeError("database foreign key state changed after migration")
     if upgrading:await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
     if int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)!=CURRENT_USER_VERSION:raise RuntimeError("migration version did not validate")
+
+
+async def migrate_sqlite(conn):
+    # SAVEPOINT makes every migration-owned schema/data/object/version write one
+    # rollback unit, including SQLite DDL and writable_schema metadata changes.
+    # It also composes with the application's engine.begin() transaction.
+    savepoint=await conn.begin_nested()
+    try:
+        await _migrate_sqlite_body(conn)
+    except BaseException:
+        await savepoint.rollback()
+        raise
+    else:
+        await savepoint.commit()

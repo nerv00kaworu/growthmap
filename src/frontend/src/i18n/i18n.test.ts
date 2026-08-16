@@ -158,6 +158,27 @@ function scanPageUserFacingStrings(sourceText: string, file = "page.tsx"): strin
   return violations;
 }
 
+test("activation is directly reachable before a project exists", () => {
+  const file = path.resolve(__dirname, "../app/page.tsx");
+  const sourceText = fs.readFileSync(file, "utf8");
+  const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let panel: ts.JsxElement | undefined;
+  function walk(node: ts.Node) {
+    if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some((item) =>
+      ts.isJsxAttribute(item) && item.name.getText(source) === "data-testid" &&
+      item.initializer && ts.isStringLiteral(item.initializer) && item.initializer.text === "activation-panel")) panel = node;
+    ts.forEachChild(node, walk);
+  }
+  walk(source);
+  assert.ok(panel, "activation panel must be rendered");
+  let ancestor: ts.Node | undefined = panel?.parent;
+  while (ancestor) {
+    if (ts.isJsxExpression(ancestor) && ancestor.expression?.getText(source).includes("currentProject"))
+      assert.fail("activation must not depend on currentProject or the More menu");
+    ancestor = ancestor.parent;
+  }
+});
+
 test("page has no bare user-facing strings outside contextual brand/format/keyboard allowances", () => {
   const file = path.resolve(__dirname, "../app/page.tsx");
   const sourceText = fs.readFileSync(file, "utf8");

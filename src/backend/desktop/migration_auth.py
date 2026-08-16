@@ -30,7 +30,10 @@ def _identity(stat):
 
 
 def _stable_bytes(path, limit=None):
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # Windows CRT defaults low-level descriptors to text mode. SQLite commonly
+    # contains 0x1a, which text-mode os.read treats as EOF and would make a valid
+    # Electron-verified backup fail its independent backend hash verification.
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags)
     try:
         before = os.fstat(fd)

@@ -1,7 +1,10 @@
 """Canonical SQLite compatibility contract shared by migration and preflight."""
 import re
 
-CURRENT_USER_VERSION = 4
+# v5 applies the owner-approved legacy policy for ambiguous child_of mainlines:
+# every mainline in a parent group containing 2+ mainlines is demoted. This is
+# deliberately done before the one-mainline unique index is created.
+CURRENT_USER_VERSION = 7
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
@@ -18,15 +21,22 @@ COLUMNS = (
 # database.  Their additive columns are enforced only when the table exists.
 TABLE_CONDITIONAL_COLUMNS = (
     ("agent_grants", "persistent", "BOOLEAN", True, "0", "ALTER TABLE agent_grants ADD COLUMN persistent BOOLEAN NOT NULL DEFAULT 0"),
+    ("agent_grants", "workspace_scope", "VARCHAR(20)", True, "legacy_project", "ALTER TABLE agent_grants ADD COLUMN workspace_scope VARCHAR(20) NOT NULL DEFAULT 'legacy_project'"),
+    ("agent_grants", "mode", "VARCHAR(32)", False, None, "ALTER TABLE agent_grants ADD COLUMN mode VARCHAR(32)"),
 )
 INDEX_SQL = "CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type = 'child_of' AND is_mainline = 1"
+WORKSPACE_GRANT_INDEX_SQL = "CREATE UNIQUE INDEX ux_agent_grants_one_active_workspace ON agent_grants((1)) WHERE workspace_scope = 'workspace' AND status = 'active' AND revoked_at IS NULL"
+INDEXES = {
+ "ux_edges_one_mainline_per_parent": INDEX_SQL,
+ "ux_agent_grants_one_active_workspace": WORKSPACE_GRANT_INDEX_SQL,
+}
 TRIGGERS = {
 "trg_edges_one_mainline_insert": """CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1); END""",
 "trg_edges_one_mainline_update": """CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id, relation_type, is_mainline ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1 AND id != OLD.id); END""",
 "trg_edges_normalize_null_insert": """CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
 "trg_edges_normalize_null_update": """CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight, note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
 }
-OBJECT_SQL = {"ux_edges_one_mainline_per_parent": INDEX_SQL, **TRIGGERS}
+OBJECT_SQL = {**INDEXES, **TRIGGERS}
 
 # affinity, NOT NULL, normalized declared default.
 def _s(affinity, not_null=False, default=None): return (affinity, not_null, default)

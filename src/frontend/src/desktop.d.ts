@@ -8,7 +8,7 @@ declare global {
       readonly isDesktop: true;
       readonly agentPortControl: true;
       readonly agentPort:{list(p:string):Promise<Record<string,unknown>[]>;create(d:Record<string,unknown>):Promise<Record<string,unknown>>;revoke(id:string):Promise<unknown>;activity(p:string,t?:string):Promise<import("./lib/api").AgentPortActivity>;review(id:string,d:"approve"|"reject",n?:string):Promise<unknown>};
-      readonly agentAccess:{status():Promise<Record<string,unknown>>;enable(o:Record<string,unknown>):Promise<Record<string,unknown>>;disable():Promise<Record<string,unknown>>;config():Promise<{mcpServers:{growthmap:{command:string}}}>;copy():Promise<boolean>;download():Promise<{saved:boolean}>;test():Promise<{ok:boolean;status:string}>;regenerate():Promise<Record<string,unknown>>};
+      readonly agentAccess:{status():Promise<Record<string,unknown>>;enable(o:Record<string,unknown>):Promise<Record<string,unknown>>;disable():Promise<Record<string,unknown>>;copy():Promise<boolean>;download():Promise<{saved:boolean}>;test():Promise<{ok:boolean;status:string}>;regenerate():Promise<Record<string,unknown>>};
       readonly secrets: { has(id:string):Promise<boolean>; set(id:string,value:string):Promise<boolean>; delete(id:string):Promise<boolean> };
       readonly license: { import():Promise<unknown | null>; activate(key:string):Promise<unknown> };
       readonly purchase: { open():Promise<boolean>; publicConfig():Promise<CommercialPublicConfig> };

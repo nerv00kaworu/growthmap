@@ -11,7 +11,7 @@ os.environ.setdefault("APP_ENV","test")
 os.environ.setdefault("GROWTHMAP_HUMAN_CONTROL_TOKEN","human-test")
 from main import app
 from db.database import async_session
-from models.models import ActionLog,AgentProposal,AgentReceipt,Branch,ContentBlock,Edge,Node,Project
+from models.models import ActionLog,AgentGrant,AgentProposal,AgentReceipt,Branch,ContentBlock,Edge,Node,Project
 
 H={"Authorization":"Bearer human-test"}
 SEMANTIC=("title","summary","node_type","status","maturity","priority","confidence","description","rules_text","constraints_text","examples_text","questions_text","decision_notes","tags","workflow_status","file_paths","position_x","position_y","last_edited_by")
@@ -81,6 +81,49 @@ def test_gui_and_agent_are_true_dual_entry_semantic_parity():
     node.pop('last_edited_by')
     node['title']=node['key']
   assert outputs[0]==outputs[1]
+
+def test_proposal_approval_accepts_persistent_null_and_finite_future_and_is_idempotent():
+ with TestClient(app) as c:
+  for mode in ("persistent","finite-naive","finite-aware"):
+   p=c.post('/api/projects',json={'name':mode}).json();arun(lambda:seed(p['id'],p['root_node_id'],mode))
+   grant_body={'project_id':p['id'],'permission':'propose','label':mode,'agent_identity':'approval-regression'}
+   if mode=='persistent':grant_body.update(persistent=True,expires_at=None)
+   else:grant_body['expires_at']=(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat()
+   g=c.post('/api/agent-port/grants',headers=H,json=grant_body);assert g.status_code==201,g.text
+   if mode=='finite-naive':
+    async def make_naive():
+     async with async_session() as db:
+      row=await db.get(AgentGrant,g.json()['id']);row.expires_at=(datetime.now()+timedelta(hours=1));await db.commit()
+    arun(make_naive)
+   made=c.post('/agent/v1/proposals',headers={'Authorization':'Bearer '+g.json()['token']},json={'idempotency_key':'approve-'+mode,'expected_project_revision':1,'target_node_id':p['root_node_id'],'title':mode,'operations':[{'op':'create_branch','source_node_id':p['root_node_id'],'expected_source_revision':1,'name':'QA-ALPHA-TEST'}]});assert made.status_code==201,made.text
+   url=f"/api/agent-port/proposals/{made.json()['proposal_id']}/approve"
+   first=c.post(url,headers=H,json={});assert first.status_code==200,first.text
+   repeat=c.post(url,headers=H,json={});assert repeat.status_code==200 and repeat.json()=={'proposal_id':made.json()['proposal_id'],'status':'approved'}
+   copied=arun(lambda:snapshot(p['id'],first.json()['receipt']['results'][0]['id']))
+   assert copied[0].revision==2 and len(copied[1])==3 and len(copied[2])==3 and len(copied[3])==2 and len(copied[4])==1
+
+
+def test_proposal_approval_rejects_invalid_grant_states_stably():
+ with TestClient(app) as c:
+  for state in ('finite-null','expired','revoked','inactive'):
+   p=c.post('/api/projects',json={'name':'reject-'+state}).json();g=grant(c,p['id'],'propose')
+   made=c.post('/agent/v1/proposals',headers={'Authorization':'Bearer '+g['token']},json={'idempotency_key':'reject-'+state,'expected_project_revision':1,'target_node_id':p['root_node_id'],'title':state,'operations':[{'op':'create_branch','source_node_id':p['root_node_id'],'expected_source_revision':1,'name':state}]});assert made.status_code==201,made.text
+   async def poison():
+    async with async_session() as db:
+     row=await db.get(AgentGrant,g['id'])
+     if state=='finite-null':row.expires_at=None
+     elif state=='expired':row.expires_at=datetime.now(timezone.utc)-timedelta(minutes=1)
+     elif state=='revoked':row.revoked_at=datetime.now(timezone.utc)
+     else:row.status='inactive'
+     await db.commit()
+   arun(poison)
+   response=c.post(f"/api/agent-port/proposals/{made.json()['proposal_id']}/approve",headers=H,json={})
+   assert response.status_code==409,response.text;assert response.json()['detail']['code']=='GRANT_INACTIVE'
+   project,nodes,blocks,edges,branches=arun(lambda:snapshot(p['id']));assert project.revision==1 and not branches
+   async def status():
+    async with async_session() as db:return (await db.get(AgentProposal,made.json()['proposal_id'])).status
+   assert arun(status)=='pending'
+
 
 def test_proposal_branch_copy_receipt_and_forced_failure_are_atomic(monkeypatch):
  with TestClient(app,raise_server_exceptions=False) as c:

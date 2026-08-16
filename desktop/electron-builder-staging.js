@@ -9,7 +9,7 @@ const config=required('GROWTHMAP_STAGING_PUBLIC_CONFIG');
 const publicKey=required('GROWTHMAP_STAGING_LICENSE_PUBLIC_KEY');
 module.exports={
  ...base,
- files:[...base.files.filter(x=>x!=='release-mode.json'&&x!=='commercial-config.json'),{from:'release-mode-staging.json',to:'release-mode.json'}],
+ files:base.files.filter(x=>x!=='commercial-config.json'),
  extraResources:[
   ...base.extraResources.filter(x=>x.to!=='commercial-config.json'&&x.to!=='commercial/license_public_key.pem'),
   {from:config,to:'commercial-config.json'},

@@ -54,7 +54,7 @@ async def test_official_client_session_live_uvicorn():
                         initialized=await session.initialize()
                         assert initialized.protocolVersion == "2025-11-25"
                         listed=await session.list_tools()
-                        assert [t.name for t in listed.tools] == ["capabilities","read_project","read_graph","get_context","propose","apply_batch","report_event","submit_readback"]
+                        assert [t.name for t in listed.tools] == ["capabilities","list_projects","read_project","read_graph","get_context","propose","apply_batch","report_event","submit_readback"]
                         from agent_port.schemas import Batch,ProposalIn,EventIn,ReadbackIn
                         strict={"propose":ProposalIn,"apply_batch":Batch,"report_event":EventIn,"submit_readback":ReadbackIn}
                         for tool in listed.tools:
@@ -76,6 +76,17 @@ async def test_official_client_session_live_uvicorn():
             except subprocess.TimeoutExpired: server.kill();server.wait(timeout=5)
             out,err=server.communicate()
             assert agent_token not in out+err
+
+def test_windows_cp950_stdio_is_reconfigured_to_utf8_for_unicode_graph_payload():
+    # Emulate frozen Windows text wrappers initialized as CP950, without
+    # PYTHONIOENCODING. The adapter must switch them before emitting MCP JSON.
+    script=f'''import io,json,runpy,sys\nsys.platform="win32"\nframe=(json.dumps({{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"read_graph","arguments":{{}}}}}})+"\\n").encode()\nsys.stdin=io.TextIOWrapper(io.BytesIO(frame),encoding="cp950")\nout=io.BytesIO();sys.stdout=io.TextIOWrapper(out,encoding="cp950");sys.stderr=io.TextIOWrapper(io.BytesIO(),encoding="cp950")\nimport urllib.request\nclass R:\n def __enter__(self):return self\n def __exit__(self,*a):pass\n def read(self,*a):return json.dumps({{"text":"≥","padding":"界"*40000}},ensure_ascii=False).encode("utf-8")\nclass O:\n def open(self,*a,**k):return R()\nurllib.request.build_opener=lambda *a:O()\nimport os\nos.environ["GROWTHMAP_AGENT_TOKEN"]="x";os.environ["GROWTHMAP_AGENT_BASE_URL"]="http://127.0.0.1:1/agent/v1"\nrunpy.run_path({str(ADAPTER)!r},run_name="__main__")\nsys.stdout.flush();sys.__stdout__.buffer.write(out.getvalue())'''
+    env={k:v for k,v in os.environ.items() if k not in {"PYTHONIOENCODING","PYTHONUTF8","PYTEST_CURRENT_TEST"}}
+    p=subprocess.run([sys.executable,"-c",script],capture_output=True,env=env,timeout=10)
+    assert p.returncode==0,p.stderr.decode(errors="replace")
+    decoded=p.stdout.decode("utf-8","strict");assert "≥" in decoded and len(p.stdout)>73000
+    assert json.loads(decoded)["result"]["isError"] is False
+
 
 @pytest.mark.parametrize("frame,code",[
     pytest.param(b"{broken}\n", -32700, id="malformed-json"),

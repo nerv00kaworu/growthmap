@@ -3,6 +3,14 @@
 import json,os,sys,urllib.error,urllib.parse,urllib.request
 from pathlib import Path
 MAX_LINE=1_048_576;PROTOCOL="2025-11-25"
+def configure_stdio_utf8():
+ # Windows inherits the console code page (for example zh-TW CP950), while MCP
+ # stdio is a bounded UTF-8 JSON-lines protocol.  Reconfigure text wrappers;
+ # credential commands intentionally keep using the same binary stdin.
+ for stream in (sys.stdin,sys.stdout,sys.stderr):
+  reconfigure=getattr(stream,"reconfigure",None)
+  if reconfigure:reconfigure(encoding="utf-8",errors="strict")
+configure_stdio_utf8()
 def resource(name):return Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent))/name
 _STRICT=json.loads(resource("growthmap_mcp_schemas.json").read_text(encoding="utf-8"))
 _CREDENTIAL=None
@@ -110,9 +118,10 @@ if dispatch_credential_argv():raise SystemExit(0)
 
 TOOLS={
  "capabilities":("GET","/capabilities",{"type":"object","additionalProperties":False}),
- "read_project":("GET","/project",{"type":"object","additionalProperties":False}),
- "read_graph":("GET","/graph",{"type":"object","additionalProperties":False}),
- "get_context":("GET","/context/{target_id}",{"type":"object","properties":{"target_id":{"type":"string","format":"uuid"}},"required":["target_id"],"additionalProperties":False}),
+ "list_projects":("GET","/projects",{"type":"object","additionalProperties":False}),
+ "read_project":("GET","/project",{"type":"object","properties":{"project_id":{"type":"string","format":"uuid"}},"required":["project_id"],"additionalProperties":False}),
+ "read_graph":("GET","/graph",{"type":"object","properties":{"project_id":{"type":"string","format":"uuid"}},"required":["project_id"],"additionalProperties":False}),
+ "get_context":("GET","/context/{target_id}",{"type":"object","properties":{"project_id":{"type":"string","format":"uuid"},"target_id":{"type":"string","format":"uuid"}},"required":["project_id","target_id"],"additionalProperties":False}),
  "propose":("POST","/proposals",_STRICT["propose"]),
  "apply_batch":("POST","/batch",_STRICT["apply_batch"]),
  "report_event":("POST","/events",_STRICT["report_event"]),
@@ -142,10 +151,12 @@ def call(name,args):
  if "{target_id}" in path:
   if "target_id" not in args:raise ValueError("target_id required")
   path=path.replace("{target_id}",urllib.parse.quote(str(args.pop("target_id")),safe=""))
+ query=""
+ if method=="GET" and args: query="?"+urllib.parse.urlencode(args)
  data=json.dumps(args,separators=(",",":")).encode() if method=="POST" else None
  secret=os.environ.get("GROWTHMAP_AGENT_TOKEN","")
  if not secret:secret=discovered()[1]
- req=urllib.request.Request(base_url()+path,data=data,method=method,headers={"Authorization":"Bearer "+secret,"Content-Type":"application/json"})
+ req=urllib.request.Request(base_url()+path+query,data=data,method=method,headers={"Authorization":"Bearer "+secret,"Content-Type":"application/json"})
  try:
   with urllib.request.build_opener(NoRedirect).open(req,timeout=30) as r:return json.loads(r.read(1_048_577))
  except urllib.error.HTTPError as e:

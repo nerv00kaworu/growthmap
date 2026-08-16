@@ -58,18 +58,21 @@ class CreateBranch(Strict):
 Operation=Annotated[Union[CreateNode,UpdateNode,CreateEdge,CreateBlock,CreateBranch],Field(discriminator="op")]
 OperationList=Annotated[list[Operation],Field(min_length=1,max_length=50)]
 
-class Batch(Strict):
+class ProjectTarget(Strict):
+    project_id: Id|None=None
+
+class Batch(ProjectTarget):
     expected_project_revision: Annotated[int,Field(ge=1)]; idempotency_key: Key; operations: OperationList
 class ProposalIn(Batch):
     target_node_id: Id|None=None; title: Annotated[str,Field(min_length=1,max_length=200)]; rationale: Annotated[str,Field(max_length=4000)]=""
-class EventIn(Strict):
+class EventIn(ProjectTarget):
     idempotency_key: Key; target_node_id: Id|None=None
     event_type: Literal["started","progress","blocked","completed","failed"]
     message: Annotated[str,Field(min_length=1,max_length=4000)]
     payload: dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=4000)]]=Field(default_factory=dict,max_length=100)
 class Record(Strict):
     name: Annotated[str,Field(min_length=1,max_length=200)]; status: Annotated[str,Field(max_length=100)]=""; detail: Annotated[str,Field(max_length=4000)]=""
-class ReadbackIn(Strict):
+class ReadbackIn(ProjectTarget):
     idempotency_key: Key; target_node_id: Id|None=None; summary: Annotated[str,Field(max_length=8000)]=""
     commit_refs: Annotated[list[Annotated[str,Field(max_length=200)]],Field(max_length=100)]=[]
     files: Annotated[list[Annotated[str,Field(max_length=1024)]],Field(max_length=500)]=[]

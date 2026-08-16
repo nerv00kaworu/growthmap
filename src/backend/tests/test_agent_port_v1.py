@@ -1,4 +1,5 @@
-import asyncio,os,subprocess,sys,tempfile,unittest,uuid
+import asyncio,os,subprocess,sys,tempfile,threading,unittest,uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -13,6 +14,18 @@ class AgentPortV1(unittest.TestCase):
   p=self.client.post("/api/projects",json={"name":"Agent dogfood"}).json();self.pid=p["id"];self.root=p["root_node_id"]
  def grant(self,permission="write",scope=None,expired=False):
   body={"project_id":self.pid,"permission":permission,"expires_at":(datetime.now(timezone.utc)+(-timedelta(minutes=2) if expired else timedelta(hours=1))).isoformat(),"label":"test","agent_identity":"neutral-test"};body.update(scope or {});return self.client.post("/api/agent-port/grants",json=body,headers=self.human)
+ def test_grant_create_accepts_exact_caller_uuid_and_duplicate_conflicts(self):
+  selected=str(uuid.uuid4());body={"id":selected,"project_id":self.pid,"permission":"read","expires_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),"label":"correlated","agent_identity":"desktop"}
+  first=self.client.post("/api/agent-port/grants",json=body,headers=self.human);self.assertEqual(first.status_code,201,first.text);self.assertEqual(first.json()["id"],selected)
+  duplicate=self.client.post("/api/agent-port/grants",json=body,headers=self.human);self.assertEqual(duplicate.status_code,409,duplicate.text);self.assertEqual(duplicate.json()["detail"]["code"],"ID_CONFLICT")
+ def test_concurrent_duplicate_caller_uuid_has_one_durable_winner(self):
+  selected=str(uuid.uuid4());body={"id":selected,"project_id":self.pid,"permission":"read","expires_at":(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat(),"label":"concurrent-correlated","agent_identity":"desktop"};barrier=threading.Barrier(2)
+  def create():
+   with TestClient(self.client.app) as independent:
+    barrier.wait(timeout=5);return independent.post("/api/agent-port/grants",json=body,headers=self.human)
+  with ThreadPoolExecutor(max_workers=2) as pool: responses=list(pool.map(lambda _:create(),range(2)))
+  self.assertEqual(sorted(r.status_code for r in responses),[201,409],[r.text for r in responses]);winner=next(r for r in responses if r.status_code==201);loser=next(r for r in responses if r.status_code==409);self.assertEqual(winner.json()["id"],selected);self.assertEqual(loser.json()["detail"]["code"],"ID_CONFLICT");self.assertNotIn("sql",loser.text.lower());self.assertNotIn("integrity",loser.text.lower())
+  rows=self.client.get(f"/api/agent-port/grants?project_id={self.pid}",headers=self.human);self.assertEqual(rows.status_code,200,rows.text);self.assertEqual(sum(row["id"]==selected for row in rows.json()),1)
  def auth(self,t):return {"Authorization":"Bearer "+t}
  def revisions(self):
   return self.client.get(f"/api/projects/{self.pid}").json(),self.client.get(f"/api/nodes/{self.root}").json()

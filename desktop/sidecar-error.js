@@ -11,12 +11,12 @@ function safeEnvelope(status,body,{oversize=false}={}){
 }
 function errorFromResponse(status,body,options){const payload=safeEnvelope(status,body,options),error=new Error(`GROWTHMAP_DESKTOP_ERROR:${JSON.stringify(payload)}`);error.statusCode=payload.status;error.code=payload.code;error.reason=payload.reason;return error;}
 function unavailableError(){return new Error('GROWTHMAP_DESKTOP_ERROR:{"status":0,"code":"SIDECAR_UNAVAILABLE","reason":null,"detail":null}');}
-function readResponse(response){
+function readResponse(response,{maxSuccessBytes=Infinity}={}){
  const success=response.statusCode>=200&&response.statusCode<300;
- return new Promise((resolve,reject)=>{let chunks=[],size=0,oversize=false;
-  response.on('data',chunk=>{const buffer=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);if(success){chunks.push(buffer);size+=buffer.length;return;}if(oversize)return;if(size+buffer.length>MAX_ERROR_BYTES){oversize=true;chunks=[];size=0;return;}chunks.push(buffer);size+=buffer.length;});
-  response.on('end',()=>{const body=oversize?'':Buffer.concat(chunks,size).toString('utf8');if(success)return resolve(body);reject(errorFromResponse(response.statusCode,body,{oversize}));});
-  response.on('error',()=>reject(unavailableError()));
+ return new Promise((resolve,reject)=>{let chunks=[],size=0,oversize=false,settled=false;const fail=()=>{if(settled)return;settled=true;chunks=[];size=0;reject(unavailableError())};
+  response.on('data',chunk=>{if(settled)return;const buffer=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);if(success){if(size+buffer.length>maxSuccessBytes){fail();if(typeof response.destroy==='function')response.destroy();return;}chunks.push(buffer);size+=buffer.length;return;}if(oversize)return;if(size+buffer.length>MAX_ERROR_BYTES){oversize=true;chunks=[];size=0;return;}chunks.push(buffer);size+=buffer.length;});
+  response.on('end',()=>{if(settled)return;settled=true;const body=oversize?'':Buffer.concat(chunks,size).toString('utf8');if(success)return resolve(body);reject(errorFromResponse(response.statusCode,body,{oversize}));});
+  response.on('error',fail);
  });
 }
 module.exports={MAX_ERROR_BYTES,safeEnvelope,errorFromResponse,unavailableError,readResponse};
