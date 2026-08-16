@@ -93,6 +93,10 @@ interface GrowthMapStore {
   dismissAI: () => void;
 }
 
+let projectSelectionGeneration = 0;
+let branchLoadGeneration = 0;
+let branchSelectionGeneration = 0;
+
 export const useStore = create<GrowthMapStore>((set, get) => ({
   projects: [],
   currentProject: null,
@@ -125,15 +129,22 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   selectProject: async (project) => {
-    set({ loading: true, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [], currentBranch: null, branches: [], branchComparison: null });
+    const generation = ++projectSelectionGeneration;
+    ++branchSelectionGeneration;
+    set({ loading: true, branchLoading: false, currentProject: project, selectedNodeId: null, selectedNode: null, undoStack: [], currentBranch: null, branches: [], branchComparison: null, error: null });
+    // Branches are independent from the tree request, but both settlements are owned
+    // by this exact project selection. This keeps switching responsive without
+    // allowing an older project's response (or error) to repaint the new project.
+    const branchesPromise = get().loadBranches(project.id);
     try {
       const rootNode = await api.getSubtree(project.root_node_id);
+      if (generation !== projectSelectionGeneration || get().currentProject?.id !== project.id) return;
       set({ rootNode, loading: false });
-      // Load branches in background
-      get().loadBranches(project.id);
     } catch (e: unknown) {
+      if (generation !== projectSelectionGeneration || get().currentProject?.id !== project.id) return;
       set({ error: (e as Error).message, loading: false });
     }
+    await branchesPromise;
   },
 
   selectNode: (nodeId) => {
@@ -324,10 +335,13 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
 
   // Branch actions
   loadBranches: async (projectId) => {
+    const generation = ++branchLoadGeneration;
     try {
       const branches = await api.listBranches(projectId);
+      if (generation !== branchLoadGeneration || get().currentProject?.id !== projectId) return;
       set({ branches });
     } catch (e: unknown) {
+      if (generation !== branchLoadGeneration || get().currentProject?.id !== projectId) return;
       console.error("Failed to load branches:", e);
     }
   },
@@ -349,17 +363,24 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   selectBranch: async (branch) => {
     const { currentProject } = get();
     if (!currentProject) return;
+    const projectId = currentProject.id;
+    const branchId = branch?.id ?? null;
+    const generation = ++branchSelectionGeneration;
+    const current = () => generation === branchSelectionGeneration && get().currentProject?.id === projectId;
     set({ loading: true, branchLoading: true, selectedNodeId: null, selectedNode: null, branchComparison: null });
     try {
       if (!branch) {
         const rootNode = await api.getSubtree(currentProject.root_node_id);
+        if (!current()) return;
         set({ currentBranch: null, rootNode, loading: false, branchLoading: false });
         return;
       }
-      const result = await api.getBranchSubtree(branch.id);
+      const result = await api.getBranchSubtree(branchId!);
+      if (!current()) return;
       if (!result.tree) throw new Error(ui('方案線沒有可顯示的根節點','方案线没有可显示的根节点','This scenario has no displayable root node.'));
       set({ currentBranch: branch, rootNode: result.tree, loading: false, branchLoading: false });
     } catch (e: unknown) {
+      if (!current()) return;
       set({ error: (e as Error).message, loading: false, branchLoading: false });
     }
   },
