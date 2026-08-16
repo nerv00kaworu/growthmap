@@ -24,4 +24,8 @@ function startupVerdictEnv({verdict,token}){
  if(!verdict||typeof token!=='string'||token.length===0)throw new Error('Startup verdict and token are required');
  return {GROWTHMAP_SESSION_TOKEN:token,GROWTHMAP_STARTUP_VERDICT_MODE:verdict.mode,GROWTHMAP_DEVICE_PUBLIC_KEY:verdict.devicePublicKey,GROWTHMAP_STARTUP_VERDICT_NONCE:verdict.nonce,GROWTHMAP_STARTUP_SESSION:verdict.session,GROWTHMAP_STARTUP_DEVICE_PROOF:verdict.proof,GROWTHMAP_STARTUP_VERDICT_MAC:verdict.mac};
 }
-module.exports={canonicalStartupProof,canonicalStartupVerdict,createStartupVerdict,startupVerdictEnv};
+function sidecarSessionEnv(scrubbedEnv,token){
+ if(typeof token!=='string'||token.length===0)throw new Error('Sidecar session token is required');
+ return {...scrubbedEnv,GROWTHMAP_SESSION_TOKEN:token};
+}
+module.exports={canonicalStartupProof,canonicalStartupVerdict,createStartupVerdict,startupVerdictEnv,sidecarSessionEnv};
