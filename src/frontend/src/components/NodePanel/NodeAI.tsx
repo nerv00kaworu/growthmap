@@ -35,8 +35,8 @@ interface NodeAIProps {
   acceptAllSuggestions: () => Promise<void>;
   deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
   acceptDeepen: () => Promise<void>;
-  acceptDeepenSummary: () => Promise<void>;
-  acceptDeepenBlock: (index: number) => Promise<void>;
+  acceptDeepenSummary: () => Promise<unknown>;
+  acceptDeepenBlock: (index: number) => Promise<unknown>;
   ignoreDeepenBlock: (index: number) => void;
   dismissAI: () => void;
   Section: (props: { title: string; subtitle?: string; tone?: "neutral" | "ai" | "edit"; children: React.ReactNode }) => React.JSX.Element;

@@ -1,36 +1,10 @@
 // API client for GrowthMap backend
 const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";
 
-const revisionCache = {
-  projects: new Map<string, number>(),
-  nodes: new Map<string, { projectId: string; revision: number }>(),
-  edges: new Map<string, { projectId: string; revision: number }>(),
-  blocks: new Map<string, { nodeId: string; revision: number }>(),
-  branches: new Map<string, { projectId: string; revision: number }>(),
-};
+import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
+import type { Entitlement } from "./entitlement";
+import { loadLLMConfig } from "./llm-provider";
 
-function remember(value: unknown): void {
-  if (Array.isArray(value)) { value.forEach(remember); return; }
-  if (!value || typeof value !== "object") return;
-  const row = value as Record<string, unknown>;
-  const id = typeof row.id === "string" ? row.id : undefined;
-  const revision = typeof row.revision === "number" ? row.revision : undefined;
-  if (id && revision) {
-    if (typeof row.authoritative_project_revision === "number" && typeof row.project_id === "string") {
-      revisionCache.projects.set(row.project_id, row.authoritative_project_revision);
-    }
-    if (typeof row.authoritative_parent_revision === "number" && typeof row.authoritative_parent_id === "string") {
-      const cachedParent = revisionCache.nodes.get(row.authoritative_parent_id);
-      if (cachedParent) revisionCache.nodes.set(row.authoritative_parent_id, { ...cachedParent, revision: row.authoritative_parent_revision });
-    }
-    if (typeof row.root_node_id === "string") revisionCache.projects.set(id, revision);
-    else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") revisionCache.edges.set(id, { projectId: row.project_id, revision });
-    else if (typeof row.node_id === "string" && typeof row.block_type === "string") revisionCache.blocks.set(id, { nodeId: row.node_id, revision });
-    else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") revisionCache.branches.set(id, { projectId: row.project_id, revision });
-    else if (typeof row.project_id === "string" && typeof row.node_type === "string") revisionCache.nodes.set(id, { projectId: row.project_id, revision });
-  }
-  Object.values(row).forEach(remember);
-}
 
 export class ApiError extends Error {
   constructor(public readonly status: number, public readonly code: string | undefined, message: string, public readonly detail?: unknown) {
@@ -38,58 +12,6 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 }
-
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    let detail: unknown = text;
-    let code: string | undefined;
-    let message = text;
-    try {
-      const parsed = JSON.parse(text) as { detail?: unknown };
-      detail = parsed.detail ?? parsed;
-      if (detail && typeof detail === "object") {
-        const row = detail as Record<string, unknown>;
-        code = typeof row.code === "string" ? row.code : undefined;
-        if (typeof row.message === "string") message = row.message;
-      }
-    } catch { /* retain plain-text response */ }
-    throw new ApiError(res.status, code, message || `API ${res.status}`, detail);
-  }
-  if (res.status === 204) return undefined as T;
-  const value = await res.json() as T;
-  remember(value);
-  return value;
-}
-
-function projectExpected(projectId: string): number {
-  const revision = revisionCache.projects.get(projectId);
-  if (!revision) throw new Error("Revision state unavailable; refresh the project and retry");
-  return revision;
-}
-
-function nodeExpected(nodeId: string) {
-  const row = revisionCache.nodes.get(nodeId);
-  if (!row) throw new Error("Node revision unavailable; refresh and retry");
-  return { expected_project_revision: projectExpected(row.projectId), expected_revision: row.revision };
-}
-
-function blockExpected(blockId: string) {
-  const block = revisionCache.blocks.get(blockId);
-  if (!block) throw new Error("Block revision unavailable; refresh and retry");
-  const node = revisionCache.nodes.get(block.nodeId);
-  if (!node) throw new Error("Node revision unavailable; refresh and retry");
-  return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
-}
-
-
-import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
-import type { Entitlement } from "./entitlement";
-import { loadLLMConfig } from "./llm-provider";
 
 function activeLocale(): "zh-TW" | "zh-CN" | "en" {
   if (typeof window === "undefined") return "en";
@@ -129,7 +51,99 @@ export interface AgentPortActivity {
   readbacks: AgentPortReadback[];
 }
 
-export const api = {
+export function createApiClient() {
+const revisionCache = {
+  projects: new Map<string, number>(),
+  nodes: new Map<string, { projectId: string; revision: number }>(),
+  edges: new Map<string, { projectId: string; revision: number }>(),
+  blocks: new Map<string, { nodeId: string; revision: number }>(),
+  branches: new Map<string, { projectId: string; revision: number }>(),
+};
+
+function setProjectRevision(id: string, revision: number): void {
+  const current = revisionCache.projects.get(id);
+  if (current === undefined || revision > current) revisionCache.projects.set(id, revision);
+}
+
+function setEntityRevision<T extends { revision: number }>(cache: Map<string, T>, id: string, value: T): void {
+  const current = cache.get(id);
+  if (!current || value.revision > current.revision) cache.set(id, value);
+}
+
+function remember(value: unknown): void {
+  if (Array.isArray(value)) { value.forEach(remember); return; }
+  if (!value || typeof value !== "object") return;
+  const row = value as Record<string, unknown>;
+  const id = typeof row.id === "string" ? row.id : undefined;
+  const revision = typeof row.revision === "number" ? row.revision : undefined;
+  if (id && revision) {
+    if (typeof row.authoritative_project_revision === "number" && typeof row.project_id === "string") {
+      setProjectRevision(row.project_id, row.authoritative_project_revision);
+    }
+    if (typeof row.authoritative_parent_revision === "number" && typeof row.authoritative_parent_id === "string") {
+      const cachedParent = revisionCache.nodes.get(row.authoritative_parent_id);
+      if (cachedParent) setEntityRevision(revisionCache.nodes, row.authoritative_parent_id, { ...cachedParent, revision: row.authoritative_parent_revision });
+    }
+    if (typeof row.root_node_id === "string") setProjectRevision(id, revision);
+    else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") setEntityRevision(revisionCache.edges, id, { projectId: row.project_id, revision });
+    else if (typeof row.node_id === "string" && typeof row.block_type === "string") setEntityRevision(revisionCache.blocks, id, { nodeId: row.node_id, revision });
+    else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") setEntityRevision(revisionCache.branches, id, { projectId: row.project_id, revision });
+    else if (typeof row.project_id === "string" && typeof row.node_type === "string") setEntityRevision(revisionCache.nodes, id, { projectId: row.project_id, revision });
+  }
+  Object.values(row).forEach(remember);
+}
+
+
+async function request<T>(path: string, options?: RequestInit, rememberResponse = true): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail: unknown = text;
+    let code: string | undefined;
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      detail = parsed.detail ?? parsed;
+      if (detail && typeof detail === "object") {
+        const row = detail as Record<string, unknown>;
+        code = typeof row.code === "string" ? row.code : undefined;
+        if (typeof row.message === "string") message = row.message;
+      }
+    } catch { /* retain plain-text response */ }
+    throw new ApiError(res.status, code, message || `API ${res.status}`, detail);
+  }
+  if (res.status === 204) return undefined as T;
+  const value = await res.json() as T;
+  if (rememberResponse) remember(value);
+  return value;
+}
+
+function projectExpected(projectId: string): number {
+  const revision = revisionCache.projects.get(projectId);
+  if (!revision) throw new Error("Revision state unavailable; refresh the project and retry");
+  return revision;
+}
+
+function nodeExpected(nodeId: string) {
+  const row = revisionCache.nodes.get(nodeId);
+  if (!row) throw new Error("Node revision unavailable; refresh and retry");
+  return { expected_project_revision: projectExpected(row.projectId), expected_revision: row.revision };
+}
+
+function blockExpected(blockId: string) {
+  const block = revisionCache.blocks.get(blockId);
+  if (!block) throw new Error("Block revision unavailable; refresh and retry");
+  const node = revisionCache.nodes.get(block.nodeId);
+  if (!node) throw new Error("Node revision unavailable; refresh and retry");
+  return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
+}
+
+
+
+  return {
   listAgentGrants: (projectId: string) => request<Record<string, unknown>[]>(`/agent-port/grants?project_id=${encodeURIComponent(projectId)}`),
   createAgentGrant: (data: Record<string, unknown>) => request<Record<string, unknown>>("/agent-port/grants", {method:"POST",body:JSON.stringify(data)}),
   revokeAgentGrant: (id: string) => request<Record<string, unknown>>(`/agent-port/grants/${id}/revoke`, {method:"POST"}),
@@ -165,7 +179,9 @@ export const api = {
     request<AgentArtifact>(`/agent-artifacts/${artifactId}/reject`, { method: "POST", body: JSON.stringify({ review_note: reviewNote }) }),
 
   // Projects
-  listProjects: () => request<Project[]>("/projects"),
+  listProjects: (rememberResponse = true) => request<Project[]>("/projects", undefined, rememberResponse),
+  getProject: (projectId: string, rememberResponse = true) => request<Project>(`/projects/${projectId}`, undefined, rememberResponse),
+  rememberResponse: (value: unknown) => remember(value),
   createProject: (data: { name: string; description?: string; goal?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
   updateProject: (projectId: string, data: Partial<Pick<Project, "status">> & { expected_project_revision?: number }) =>
@@ -173,7 +189,7 @@ export const api = {
   getEntitlement: () => request<Entitlement>("/desktop/entitlement", { cache: "no-store" }),
 
   // Nodes
-  getSubtree: (nodeId: string) => request<GNode>(`/nodes/${nodeId}/subtree`),
+  getSubtree: (nodeId: string, rememberResponse = true) => request<GNode>(`/nodes/${nodeId}/subtree`, undefined, rememberResponse),
   getNode: (nodeId: string) => request<GNode>(`/nodes/${nodeId}`),
   createNode: (projectId: string, data: { expected_project_revision?: number; expected_parent_revision?: number; title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) => {
     const parent = data.parent_id ? revisionCache.nodes.get(data.parent_id) : undefined;
@@ -268,16 +284,16 @@ export const api = {
   },
 
   // Branches
-  listBranches: (projectId: string, includeInactive = false) =>
-    request<Branch[]>(`/projects/${projectId}/branches${includeInactive ? "?include_inactive=true" : ""}`),
+  listBranches: (projectId: string, includeInactive = false, rememberResponse = true) =>
+    request<Branch[]>(`/projects/${projectId}/branches${includeInactive ? "?include_inactive=true" : ""}`, undefined, rememberResponse),
   createBranch: (projectId: string, data: { expected_project_revision: number; source_node_id: string; name: string; description?: string }) =>
     request<Branch>(`/projects/${projectId}/branches`, { method: "POST", body: JSON.stringify(data) }),
   getBranch: (branchId: string) =>
     request<Branch>(`/branches/${branchId}`),
-  getBranchSubtree: (branchId: string) =>
-    request<{ branch: Branch; tree: GNode | null }>(`/branches/${branchId}/subtree`),
-  compareBranch: (branchId: string) =>
-    request<BranchComparison>(`/branches/${branchId}/compare`),
+  getBranchSubtree: (branchId: string, rememberResponse = true) =>
+    request<{ branch: Branch; tree: GNode | null }>(`/branches/${branchId}/subtree`, undefined, rememberResponse),
+  compareBranch: (branchId: string, rememberResponse = true) =>
+    request<BranchComparison>(`/branches/${branchId}/compare`, undefined, rememberResponse),
   getBranchHistory: (branchId: string) =>
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/branches/${branchId}/history`),
   mergeBranch: (branchId: string, targetNodeId: string, expectedProjectRevision: number, expectedRevision: number, expectedTargetRevision: number) =>
@@ -288,5 +304,6 @@ export const api = {
   archiveBranch: (branchId: string, expectedProjectRevision: number, expectedRevision: number) =>
     request<void>(`/branches/${branchId}`, { method: "DELETE", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
 };
+}
 
-
+export const api = createApiClient();

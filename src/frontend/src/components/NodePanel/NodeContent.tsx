@@ -41,7 +41,7 @@ interface NodeContentProps {
   setNewChildTitle: Dispatch<SetStateAction<string>>;
   onAddChild: (nodeType?: string) => Promise<void>;
   onPromoteMainline: (parentId: string, childId: string) => Promise<void>;
-  refreshTree: () => Promise<void>;
+  refreshTree: () => Promise<unknown>;
   Section: (props: { title: string; subtitle?: string; tone?: "neutral" | "ai" | "edit"; children: React.ReactNode }) => React.JSX.Element;
 }
 
@@ -63,7 +63,7 @@ interface ContentBlockCardProps {
   canMoveDown: boolean;
   onMoveUp: () => Promise<void>;
   onMoveDown: () => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<unknown>;
 }
 
 type BoundDoc = {

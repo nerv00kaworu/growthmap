@@ -26,6 +26,18 @@ test("normal create and sequential suggestion/deepen writes use authoritative re
   ]);
 });
 
+test("already superseded operation does not send its mutation", async () => {
+  let mutations = 0;
+  const result = await runMutationWithConflict(
+    async () => { mutations += 1; return "written"; },
+    async () => {},
+    {},
+    () => false,
+  );
+  assert.equal(mutations, 0);
+  assert.deepEqual(result, { superseded: true });
+});
+
 test("409 is not replayed, refreshes once, exposes conflict, and preserves drafts", async () => {
   let mutations = 0;
   let refreshes = 0;
@@ -42,6 +54,16 @@ test("409 is not replayed, refreshes once, exposes conflict, and preserves draft
   assert.equal(result.conflict?.suggestionInput, "keep this instruction");
 });
 
+test("409 refresh failure does not falsely claim the latest version loaded", async () => {
+  const result = await runMutationWithConflict(
+    async () => { throw new ApiError(409, "REVISION_CONFLICT", "stale"); },
+    async () => { throw new Error("refresh unavailable"); },
+    { suggestionInput: "preserved" },
+  );
+  assert.match(result.conflict?.message ?? "", /could not be loaded/);
+  assert.equal(result.conflict?.suggestionInput, "preserved");
+});
+
 test("non-conflict errors do not refresh", async () => {
   let refreshes = 0;
   await assert.rejects(() => runMutationWithConflict(
@@ -49,4 +71,36 @@ test("non-conflict errors do not refresh", async () => {
     async () => { refreshes += 1; },
   ));
   assert.equal(refreshes, 0);
+});
+
+test("superseded conflict refresh success publishes neither stale conflict nor draft", async () => {
+  let owned = true;
+  let settle!: () => void;
+  const pending = new Promise<void>((resolve) => { settle = resolve; });
+  const resultPromise = runMutationWithConflict(
+    async () => { throw new ApiError(409, "REVISION_CONFLICT", "stale"); },
+    async () => pending,
+    { suggestionInput: "old draft" },
+    () => owned,
+  );
+  await Promise.resolve();
+  owned = false;
+  settle();
+  assert.deepEqual(await resultPromise, { superseded: true });
+});
+
+test("superseded conflict refresh rejection stays silent", async () => {
+  let owned = true;
+  let reject!: (error: Error) => void;
+  const pending = new Promise<void>((_resolve, fail) => { reject = fail; });
+  const resultPromise = runMutationWithConflict(
+    async () => { throw new ApiError(409, "REVISION_CONFLICT", "stale"); },
+    async () => pending,
+    { suggestionInput: "old draft" },
+    () => owned,
+  );
+  await Promise.resolve();
+  owned = false;
+  reject(new Error("readback failed"));
+  assert.deepEqual(await resultPromise, { superseded: true });
 });
