@@ -49,7 +49,8 @@ if($q.action -eq 'private') {
  foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
  # Commit only the protected DACL. Set-Acl submits owner metadata too and can
  # require SeRestorePrivilege even when the already-trusted owner is unchanged.
- [GMIdentity]::SetDacl([string]$q.path,$a.GetSecurityDescriptorBinaryForm())
+ try{[GMIdentity]::SetDacl([string]$q.path,$a.GetSecurityDescriptorBinaryForm())}
+ catch [System.ComponentModel.Win32Exception]{@{ok=$false;stage='set-dacl';code=[int]$_.Exception.NativeErrorCode}|ConvertTo-Json -Compress;exit}
  @{ok=$true}|ConvertTo-Json -Compress;exit
 }
 if($q.action -ne 'verify'){throw 'action'}
@@ -95,7 +96,12 @@ def _run(payload: dict) -> dict:
 
 
 def apply_private(path: Path) -> None:
-    if _run({"action": "private", "path": str(path)}).get("ok") is not True:
+    value = _run({"action": "private", "path": str(path)})
+    if value.get("ok") is not True:
+        stage = value.get("stage")
+        code = value.get("code")
+        if stage == "set-dacl" and isinstance(code, int):
+            raise RuntimeError(f"Windows private ACL initialization failed ({stage}:{code})")
         raise RuntimeError("Windows private ACL initialization failed")
 
 
