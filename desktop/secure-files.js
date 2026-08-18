@@ -10,6 +10,8 @@ public static class GMFileIdentity {
  [StructLayout(LayoutKind.Sequential)] public struct Info { public uint attr; public System.Runtime.InteropServices.ComTypes.FILETIME c,a,w; public uint volume,sizeHigh,sizeLow,links,indexHigh,indexLow; }
  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreateFile(string n, uint access, uint share, IntPtr sec, uint creation, uint flags, IntPtr template);
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle h, out Info i);
+ [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool SetFileSecurity(string p,uint info,byte[] descriptor);
+ public static void SetDacl(string p,byte[] descriptor) { const uint DACL=0x4,PROTECTED_DACL=0x80000000; if(!SetFileSecurity(p,DACL|PROTECTED_DACL,descriptor)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); }
  public static string Get(string p) { using(var h=CreateFile(p,0,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero)){ if(h.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); Info i; if(!GetFileInformationByHandle(h,out i)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); if(i.volume==0 || (i.indexHigh==0 && i.indexLow==0)) throw new InvalidOperationException("identity"); return i.volume.ToString("X8")+":"+i.indexHigh.ToString("X8")+i.indexLow.ToString("X8"); } }
 }
 '@
@@ -22,10 +24,10 @@ $out=@()
 foreach($p in $q.paths){
  $i=Get-Item -LiteralPath $p -Force
  if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
- $a=Get-Acl -LiteralPath $p
+ $a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
  $owner=$a.Owner
  try{$ownerSid=([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$owner).Value}catch{throw 'owner-translation'}}
- if(($q.containerOnly -and $ownerSid -notin $trusted) -or (!$q.containerOnly -and $ownerSid -ne $me)){throw 'owner'}
+ if($ownerSid -notin $trusted){throw 'owner'}
  foreach($r in $a.Access){
   try{$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{throw 'ace-translation'}
   $rights=[Int64]$r.FileSystemRights
@@ -45,7 +47,9 @@ function nativeWindowsPolicy(paths,runner=spawnSync,containerOnly=false){
  return value.identities.map((entry,index)=>{if(!entry||entry.path!==paths[index]||typeof entry.identity!=='string'||!/^[0-9A-F]{8}:[0-9A-F]{16}$/.test(entry.identity))throw Error('Windows native secret-path identity unavailable');return entry.identity});
 }
 function applyWindowsPrivateAcl(target,options={}){
- const script=String.raw`$ErrorActionPreference='Stop';$q=[Console]::In.ReadToEnd()|ConvertFrom-Json;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User;$isDir=(Get-Item -LiteralPath $q.path -Force).PSIsContainer;$a=if($isDir){New-Object Security.AccessControl.DirectorySecurity}else{New-Object Security.AccessControl.FileSecurity};$inherit=if($isDir){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None};$a.SetAccessRuleProtection($true,$false);$a.SetOwner($me);foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))};Set-Acl -LiteralPath $q.path -AclObject $a`;
+ const script=String.raw`$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'
+using System;using System.Runtime.InteropServices;public static class GMPrivateDacl{[DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern bool SetFileSecurity(string p,uint i,byte[] d);public static void Set(string p,byte[] d){if(!SetFileSecurity(p,0x80000004,d))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}}
+'@;$q=[Console]::In.ReadToEnd()|ConvertFrom-Json;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User;$trusted=@($me.Value,'S-1-5-18','S-1-5-32-544');$i=Get-Item -LiteralPath $q.path -Force;if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'};$a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner);try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value};if($ownerSid -notin $trusted){throw 'owner'};$inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None};$a.SetAccessRuleProtection($true,$false);$seen=@{};foreach($r in @($a.Access)){$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]);if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}};foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))};[GMPrivateDacl]::Set([string]$q.path,$a.GetSecurityDescriptorBinaryForm())`;
  const encoded=Buffer.from(script,'utf16le').toString('base64'),r=(options.windowsRunner||spawnSync)('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({path:target}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
  if(r.error||r.status!==0)throw Error('Windows private secret path initialization failed');
 }
