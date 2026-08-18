@@ -185,6 +185,7 @@ function blockExpected(blockId: string) {
   reviewAgentProposal: (id:string, decision:"approve"|"reject", review_note="") => request<Record<string, unknown>>(`/agent-port/proposals/${id}/${decision}`, {method:"POST",body:JSON.stringify({review_note})}),
   // Server-side provider profiles. API keys remain in local environment variables.
   listProviders: () => request<ProviderConfig[]>("/providers"),
+  getProvider: (providerId: string) => request<ProviderConfig>(`/providers/${providerId}`),
   createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">) =>
     request<ProviderConfig>("/providers", { method: "POST", body: JSON.stringify(data) }),
   updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">>) =>

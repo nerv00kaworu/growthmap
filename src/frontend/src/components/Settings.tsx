@@ -84,12 +84,15 @@ export function Settings({ onClose }: SettingsProps) {
         else await api.writeProviderSecret(saved.id, apiKey.trim());
         setApiKey("");
       }
+      // Secret publication advances the authoritative provider revision after
+      // the metadata response. Never persist the pre-secret revision.
+      const authoritative = apiKey.trim() && saved.provider_type !== "mock" ? await api.getProvider(saved.id) : saved;
       const nextProfiles = selectedId
-        ? profiles.map((row) => row.id === saved.id ? saved : row)
-        : [saved, ...profiles];
+        ? profiles.map((row) => row.id === authoritative.id ? authoritative : row)
+        : [authoritative, ...profiles];
       setProfiles(nextProfiles);
-      setSelectedId(saved.id);
-      saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name, revision: saved.revision });
+      setSelectedId(authoritative.id);
+      saveLLMConfig({ provider: authoritative.provider_type as LLMProviderType, providerId: authoritative.id, model: authoritative.model_name, revision: authoritative.revision });
       setMessage(window.growthmapDesktop ? u('✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。','✅ 已保存。API key 由系统安全存储保护，不会写入数据库、.env 或浏览器。','✅ Saved. The API key is protected by secure system storage and never written to the database, .env, or browser.') : u('✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。','✅ 已保存。Authoring 模式从本地 .env/环境变量读取，不会写入数据库或浏览器。','✅ Saved. Authoring mode reads local .env/environment variables and never writes them to the database or browser.'));
     } catch (error: unknown) {
       setMessage(u(`儲存失敗：${(error as Error).message}`,`保存失败：${(error as Error).message}`,`Save failed: ${(error as Error).message}`));
