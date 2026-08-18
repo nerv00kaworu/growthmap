@@ -647,7 +647,7 @@ export function NodeContent({
         </div>
       </Section>
 
-      <Section title={u("方案工具", "方案工具", "Scenario tools")} subtitle={currentBranch ? u("目前在方案線中；可上方合併回主線，或到更多操作刪除方案線。", "当前位于方案线中；可在上方合并回主线，或到更多操作中删除方案线。", "You are in a scenario; merge it into the main line above, or delete it under More actions.") : u("用來開平行方案線（分支），不是主線擴寫。", "用于创建平行方案线（分支），不是扩写主线。", "Create a parallel scenario (branch), not a main-line extension.")} tone="neutral">
+      <Section title={u("方案工具", "方案工具", "Scenario tools")} subtitle={currentBranch ? u("目前在方案線中；可上方合併回主線，或到設定刪除方案線。", "当前位于方案线中；可在上方合并回主线，或到设置中删除方案线。", "You are in a scenario; merge it into the main line above, or delete it under Settings.") : u("用來開平行方案線（分支），不是主線擴寫。", "用于创建平行方案线（分支），不是扩写主线。", "Create a parallel scenario (branch), not a main-line extension.")} tone="neutral">
         <div className="space-y-4">
           <div>
             <div className="flex items-center justify-between">

@@ -343,18 +343,17 @@ export default function HomePage() {
           {t("project.new")}
         </button>
 
-        {currentProject && (
-          <div ref={moreMenuRef} className="shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowMoreMenu((v) => !v)}
-              className={topBtnClass}
-              title={t("more.tooltip")}
-            >
-              {t("more.title")}
-            </button>
-          </div>
-        )}
+        <div ref={moreMenuRef} className="shrink-0">
+          <button
+            data-testid="settings-menu-button"
+            type="button"
+            onClick={() => setShowMoreMenu((v) => !v)}
+            className={topBtnClass}
+            title={t("more.tooltip")}
+          >
+            {t("more.title")}
+          </button>
+        </div>
 
         {/* Search */}
         <div className="relative shrink-0 hidden md:block">
@@ -388,7 +387,6 @@ export default function HomePage() {
         </div>
 
         {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="database-workspace-button" type="button" onClick={() => setShowDatabaseWorkspace(true)} className="rounded-md border border-blue-700/50 bg-blue-950/30 px-2.5 py-1.5 text-xs text-blue-200 hover:text-blue-100 shrink-0" title={t("database.tooltip")}>🗄️ DB</button>}
-        <button data-testid="desktop-settings-button" type="button" onClick={() => setShowSettings(true)} className="rounded-md border border-gray-600/50 bg-gray-800/40 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100 shrink-0" title={t("llm.tooltip")}>⚙️ LLM</button>
         <button
           type="button"
           onClick={() => setShowShortcuts(true)}
@@ -400,23 +398,26 @@ export default function HomePage() {
 
       </header>
 
-      {entitlement?.state !== "paid" && <section data-testid="activation-panel" className="mx-3 mt-3 space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>{t("activation.title")}</strong><p className="text-[10px] text-amber-200/70">{t("activation.help")}</p><input data-testid="activation-key-input" type="text" value={activationKey} onChange={e=>setActivationKey(e.target.value)} placeholder={t("activation.placeholder")} autoComplete="off" spellCheck={false} maxLength={128} className="w-full rounded border border-amber-700/60 bg-gray-950/60 px-2 py-1.5 font-mono text-xs"/><div className="flex gap-2"><button data-testid="activate-license-button" type="button" disabled={!activationKey.trim()||activating} onClick={activateLicense} className="rounded border border-amber-600 px-2 py-1 disabled:opacity-40">{activating ? t("activation.activating") : t("activation.unlock")}</button><button type="button" onClick={openPurchase} className="rounded border border-gray-600 px-2 py-1">{t("activation.purchase")}</button></div><p className="text-[10px] text-gray-400">{t("activation.boundary")}</p></section>}
-
-      {showMoreMenu && currentProject && (
+      {showMoreMenu && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowMoreMenu(false)}>
           <div className="w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 p-5 shadow-2xl space-y-4" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-gray-100">{t("more.title")}</h2>
                 <p className="mt-1 text-xs text-gray-500">
-                  {currentBranch ? t("more.currentBranch", { name: currentBranch.name }) : t("more.summary")}
+                  {currentProject && currentBranch ? t("more.currentBranch", { name: currentBranch.name }) : t("more.summary")}
                 </p>
               </div>
               <button type="button" onClick={() => setShowMoreMenu(false)} className="text-gray-500 hover:text-gray-300 text-lg">×</button>
             </div>
 
+            {entitlement?.state !== "paid" && <section data-testid="activation-panel" className="space-y-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-xs text-amber-100"><strong>{t("activation.title")}</strong><p className="text-[10px] text-amber-200/70">{t("activation.help")}</p><input data-testid="activation-key-input" type="text" value={activationKey} onChange={e=>setActivationKey(e.target.value)} placeholder={t("activation.placeholder")} autoComplete="off" spellCheck={false} maxLength={128} className="w-full rounded border border-amber-700/60 bg-gray-950/60 px-2 py-1.5 font-mono text-xs"/><div className="flex gap-2"><button data-testid="activate-license-button" type="button" disabled={!activationKey.trim()||activating} onClick={activateLicense} className="rounded border border-amber-600 px-2 py-1 disabled:opacity-40">{activating ? t("activation.activating") : t("activation.unlock")}</button><button type="button" onClick={openPurchase} className="rounded border border-gray-600 px-2 py-1">{t("activation.purchase")}</button></div><p className="text-[10px] text-gray-400">{t("activation.boundary")}</p></section>}
+
             <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">{t("export.spec")}</button>
+              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("llm.settings")}</button>
+              <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">{t("license.import")}</button>
+              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">{t("updates.check")}</button>}
+              {currentProject && <><button type="button" onClick={() => { handleExportSpec(); setShowMoreMenu(false); }} className="rounded-lg border border-green-800/40 bg-green-950/20 px-3 py-2.5 text-left text-xs text-green-300 hover:bg-green-900/30">{t("export.spec")}</button>
               <button type="button" onClick={() => { handleExport(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("export.markdown")}</button>
               <button type="button" onClick={() => { handleExportJSON(); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("export.json")}</button>
               <label className={`rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 ${readOnly ? "opacity-40 pointer-events-none" : "hover:bg-gray-800 cursor-pointer"}`}>
@@ -437,17 +438,14 @@ export default function HomePage() {
               >
                 {t("undo")} {undoStack.length > 0 && <span className="ml-1 text-gray-500">({undoStack.length})</span>}
               </button>
-              <button type="button" onClick={() => { setShowSettings(true); setShowMoreMenu(false); }} disabled={readOnly} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40">{t("llm.settings")}</button>
-              <button type="button" onClick={() => { importLicense(); setShowMoreMenu(false); }} className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-left text-xs text-amber-200">{t("license.import")}</button>
-              {typeof window !== "undefined" && window.growthmapDesktop && <button data-testid="check-updates-button" type="button" onClick={() => { checkUpdates(); setShowMoreMenu(false); }} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200">{t("updates.check")}</button>}
               <button type="button" disabled={readOnly} onClick={() => { handleProjectStatus(currentProject.status === "active" ? "archived" : "active"); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 disabled:opacity-40">{t(currentProject.status === "active" ? "project.archive" : "project.restore")}</button>
               <button type="button" onClick={() => { setShowAgentSessions(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-blue-800/40 bg-blue-950/20 px-3 py-2.5 text-left text-xs text-blue-200 hover:bg-blue-900/30 disabled:opacity-40">{t("agent.sessions")}</button>
               {agentPortDesktopControl && <button data-testid="agent-port-menu-entry" type="button" onClick={() => { setShowAgentPort(true); setShowMoreMenu(false); }} disabled={!rootNode} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30 disabled:opacity-40">{t("agent.port")}</button>}
               <button type="button" onClick={() => { setShowShortcuts(true); setShowMoreMenu(false); }} className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-2.5 text-left text-xs text-gray-300 hover:bg-gray-800">{t("shortcuts.menu")}</button>
-              <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">{t("branch.history")}</button>
+              <button type="button" onClick={() => { openBranchHistory(); setShowMoreMenu(false); }} className="rounded-lg border border-purple-800/40 bg-purple-950/20 px-3 py-2.5 text-left text-xs text-purple-200 hover:bg-purple-900/30">{t("branch.history")}</button></>}
             </div>
 
-            <div className="rounded-lg border border-red-900/30 bg-red-950/10 p-3 space-y-2">
+            {currentProject && <div className="rounded-lg border border-red-900/30 bg-red-950/10 p-3 space-y-2">
               <div className="text-[10px] uppercase tracking-[0.18em] text-red-400/70">{t("danger.title")}</div>
               <button
                 type="button"
@@ -458,7 +456,7 @@ export default function HomePage() {
               >
                 🗃️ {currentBranch ? t("branch.archiveNamed", { name: currentBranch.name }) : t("branch.mainCannotArchive")}
               </button>
-            </div>
+            </div>}
           </div>
         </div>
       )}

@@ -121,7 +121,6 @@ function scanPageUserFacingStrings(sourceText: string, file = "page.tsx"): strin
     const testId = stringAttribute(element, "data-testid");
     if (tag === "h1" && testId === "growthmap-title" && text === "🌳 GrowthMap") return true;
     if (tag === "button" && testId === "database-workspace-button" && text === "🗄️ DB") return true;
-    if (tag === "button" && testId === "desktop-settings-button" && text === "⚙️ LLM") return true;
     if (tag === "button" && ["⌨️", "×", "✕"].includes(text)) return true;
     if (tag === "button" && text === "🗃️") return true;
     if (tag === "span" && ["(", ")"].includes(text)) return true;
@@ -158,7 +157,7 @@ function scanPageUserFacingStrings(sourceText: string, file = "page.tsx"): strin
   return violations;
 }
 
-test("activation is directly reachable before a project exists", () => {
+test("activation and LLM settings are reachable only through the project-independent Settings menu", () => {
   const file = path.resolve(__dirname, "../app/page.tsx");
   const sourceText = fs.readFileSync(file, "utf8");
   const source = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -170,13 +169,16 @@ test("activation is directly reachable before a project exists", () => {
     ts.forEachChild(node, walk);
   }
   walk(source);
-  assert.ok(panel, "activation panel must be rendered");
-  let ancestor: ts.Node | undefined = panel?.parent;
-  while (ancestor) {
-    if (ts.isJsxExpression(ancestor) && ancestor.expression?.getText(source).includes("currentProject"))
-      assert.fail("activation must not depend on currentProject or the More menu");
-    ancestor = ancestor.parent;
-  }
+  assert.ok(panel, "activation panel must be rendered inside Settings");
+  const settingsGate = sourceText.indexOf("{showMoreMenu && (");
+  const activation = sourceText.indexOf('data-testid="activation-panel"');
+  const llmEntry = sourceText.indexOf('{t("llm.settings")}');
+  assert.ok(settingsGate >= 0 && settingsGate < activation && settingsGate < llmEntry);
+  assert.doesNotMatch(sourceText, /data-testid="desktop-settings-button"/);
+  assert.equal((sourceText.match(/data-testid="activation-panel"/g) || []).length, 1);
+  assert.equal((sourceText.match(/\{t\("llm.settings"\)\}/g) || []).length, 1);
+  assert.match(sourceText, /data-testid="settings-menu-button"/);
+  assert.doesNotMatch(sourceText.slice(0, settingsGate), /data-testid="activation-panel"|\{t\("llm.settings"\)\}/);
 });
 
 test("page has no bare user-facing strings outside contextual brand/format/keyboard allowances", () => {
