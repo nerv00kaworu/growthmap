@@ -31,26 +31,27 @@ $q=[Console]::In.ReadToEnd()|ConvertFrom-Json
 $me=[Security.Principal.WindowsIdentity]::GetCurrent().User
 $trusted=@($me.Value,'S-1-5-18','S-1-5-32-544')
 if($q.action -eq 'private') {
- $i=Get-Item -LiteralPath $q.path -Force
- if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
- $a=Get-Acl -LiteralPath $q.path
- try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
- # A newly-created app-owned child must already belong to the explicit trust
- # boundary. Do not rewrite a trusted owner: hosted runners intentionally lack
- # the SeRestorePrivilege that SetOwner can require. Foreign owners still fail.
- if($ownerSid -notin $trusted){throw 'owner'}
- $inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
- $a.SetAccessRuleProtection($true,$false)
- $seen=@{}
- foreach($r in @($a.Access)){
-  try{$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier])}catch{throw 'ace-translation'}
-  if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}
+ $stage='item'
+ try{
+  $i=Get-Item -LiteralPath $q.path -Force
+  if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
+  $stage='acl';$a=Get-Acl -LiteralPath $q.path
+  $stage='owner';try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
+  if($ownerSid -notin $trusted){throw 'owner'}
+  $inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
+  $stage='protect';$a.SetAccessRuleProtection($true,$false)
+  $stage='purge';$seen=@{}
+  foreach($r in @($a.Access)){
+   try{$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier])}catch{throw 'ace-translation'}
+   if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}
+  }
+  $stage='add';foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
+  $stage='set-dacl';[GMIdentity]::SetDacl([string]$q.path,$a.GetSecurityDescriptorBinaryForm())
+ }catch{
+  $x=$_.Exception;$code=0
+  while($x){if($x -is [System.ComponentModel.Win32Exception]){$code=[int]$x.NativeErrorCode;break};$x=$x.InnerException}
+  @{ok=$false;stage=$stage;code=$code}|ConvertTo-Json -Compress;exit
  }
- foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
- # Commit only the protected DACL. Set-Acl submits owner metadata too and can
- # require SeRestorePrivilege even when the already-trusted owner is unchanged.
- try{[GMIdentity]::SetDacl([string]$q.path,$a.GetSecurityDescriptorBinaryForm())}
- catch [System.ComponentModel.Win32Exception]{@{ok=$false;stage='set-dacl';code=[int]$_.Exception.NativeErrorCode}|ConvertTo-Json -Compress;exit}
  @{ok=$true}|ConvertTo-Json -Compress;exit
 }
 if($q.action -ne 'verify'){throw 'action'}
@@ -100,7 +101,8 @@ def apply_private(path: Path) -> None:
     if value.get("ok") is not True:
         stage = value.get("stage")
         code = value.get("code")
-        if stage == "set-dacl" and isinstance(code, int):
+        allowed_stages = {"item", "acl", "owner", "protect", "purge", "add", "set-dacl"}
+        if stage in allowed_stages and isinstance(code, int):
             raise RuntimeError(f"Windows private ACL initialization failed ({stage}:{code})")
         raise RuntimeError("Windows private ACL initialization failed")
 
