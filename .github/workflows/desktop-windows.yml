@@ -64,6 +64,15 @@ jobs:
         run: |
           New-Item -ItemType File -Path $env:GROWTHMAP_WINDOWS_BACKEND_MARKER -Value $env:GROWTHMAP_WINDOWS_BACKEND_PROOF | Out-Null
           New-Item -ItemType Directory -Path $env:GROWTHMAP_WINDOWS_BACKEND_ROOT | Out-Null
+          # Keep this diagnostic non-sensitive: only SID/rights and the ACL API
+          # stage are emitted, never tokens, database contents, or file data.
+          $acl = Get-Acl -LiteralPath $env:GROWTHMAP_WINDOWS_BACKEND_ROOT
+          $ownerSid = ([Security.Principal.NTAccount]$acl.Owner).Translate([Security.Principal.SecurityIdentifier]).Value
+          Write-Host "ACL_DIAG owner=$ownerSid"
+          foreach ($rule in $acl.Access) {
+            $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            Write-Host "ACL_DIAG ace=$sid type=$($rule.AccessControlType) inherited=$($rule.IsInherited) rights=$([Int64]$rule.FileSystemRights)"
+          }
           $env:PYTHONPATH = 'src/backend'
           python -c "from pathlib import Path; from api.windows_file_security import apply_private,verify; p=Path(r'$env:GROWTHMAP_WINDOWS_BACKEND_ROOT'); apply_private(p); verify(p,kind='dir')"
       - name: Cross-platform backend contracts (exclude POSIX custody and deployment rails)
