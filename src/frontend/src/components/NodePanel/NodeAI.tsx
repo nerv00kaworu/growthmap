@@ -1,24 +1,20 @@
 "use client";
 
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from "react";
 import {
   NODE_TYPE_ICONS,
   type GNode,
   type GrowthMode,
 } from "@/lib/types";
-import { DEFAULT_MODELS, loadLLMConfig } from "@/lib/llm-provider";
+import { loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
+import { api } from "@/lib/api";
+import { createAIPanelController, diagnosticMessage, MAX_MODEL_NAME, providerIdentity, type AIProviderIdentity } from "@/lib/ai-panel-controller";
+import { mountAIPanelLifecycle } from "@/lib/ai-panel-lifecycle";
+import type { ProviderConfig } from "@/lib/types";
+import { providerActionDisabled } from "@/lib/provider-pending";
 import { useI18n } from "@/i18n/provider";
 import { msg } from "@/i18n/ui";
 
-const PROVIDER_LABELS: Record<string, string> = {
-  mock: "Mock / Demo",
-  openai_compatible: "OpenAI-compatible",
-  custom: "Custom Endpoint",
-  openai: "OpenAI",
-  anthropic: "Anthropic",
-  google: "Google Gemini",
-  openclaw: "OpenClaw",
-};
 
 interface NodeAIProps {
   selectedNode: GNode;
@@ -27,8 +23,11 @@ interface NodeAIProps {
   aiMode: GrowthMode;
   setAiMode: Dispatch<SetStateAction<GrowthMode>>;
   aiLoading: boolean;
-  expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
-  deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
+  aiError: { code?: string; status?: number; requestId?: string; message: string; action: "expand" | "deepen"; elapsedMs: number } | null;
+  clearAIError: () => void;
+  invalidateAISelection: () => void;
+  expandNode: (nodeId: string, identity: AIProviderIdentity, instruction?: string, mode?: GrowthMode) => Promise<void>;
+  deepenNode: (nodeId: string, identity: AIProviderIdentity, instruction?: string) => Promise<void>;
   expandSuggestions: { title: string; summary: string; node_type: string }[] | null;
   acceptSuggestion: (index: number) => Promise<void>;
   ignoreSuggestion: (index: number) => void;
@@ -49,6 +48,9 @@ export function NodeAI({
   aiMode,
   setAiMode,
   aiLoading,
+  aiError,
+  clearAIError,
+  invalidateAISelection,
   expandNode,
   deepenNode,
   expandSuggestions,
@@ -69,46 +71,50 @@ export function NodeAI({
   const growthHelp: Record<GrowthMode,string>={focused:m("補齊當前主線缺口，避免一次跳太遠。","补齐当前主线缺口，避免偏离过远。","Fill gaps in the main line without jumping too far."),explore:m("沿著主題向相鄰空間擴張。","沿主题向相邻空间扩展。","Expand into adjacent areas of the topic."),challenge:m("提出反例、風險與替代方向。","提出反例、风险与替代方向。","Surface counterexamples, risks, and alternatives.")};
   const nodeTypeLabels: Record<string,string> = { idea:m("想法","想法","Idea"), concept:m("概念","概念","Concept"), task:m("任務","任务","Task"), question:m("問題","问题","Question"), decision:m("決策","决策","Decision"), risk:m("風險","风险","Risk"), resource:m("資源","资源","Resource"), note:m("筆記","笔记","Note"), module:m("模組","模块","Module") };
   const [llmConfig, setLlmConfig] = useState(() => loadLLMConfig());
+  const [modelDraft, setModelDraft] = useState(""); const [elapsed, setElapsed] = useState(0);
+  const selectedRef = useRef<ProviderConfig | undefined>(undefined); const localeRef=useRef(locale);localeRef.current=locale;
+  const controllerRef=useRef<ReturnType<typeof createAIPanelController>|null>(null);
+  if(!controllerRef.current)controllerRef.current=createAIPanelController({listProviders:api.listProviders,updateModel:api.updateProviderModel,testConnection:api.testConnection,confirm:(text)=>confirm(text),copy:(text)=>navigator.clipboard.writeText(text),now:()=>Date.now(),locale:()=>localeRef.current,currentIdentity:()=>selectedRef.current?providerIdentity(selectedRef.current):null,onSaved:(p)=>{const next={provider:p.provider_type as LLMProviderType,providerId:p.id,model:p.model_name,revision:p.revision};setLlmConfig(next);saveLLMConfig(next);setModelDraft(p.model_name)},onInvalidate:invalidateAISelection});
+  const controller=controllerRef.current;const panel=useSyncExternalStore(controller.subscribe,controller.getSnapshot,controller.getSnapshot);const profiles=panel.profiles,profileState=panel.profileState,savingModel=panel.saving,modelError=panel.modelError,testState=panel.test;
+  const selectedProfile=profiles.find(p=>p.id===llmConfig?.providerId);selectedRef.current=selectedProfile;const providerDisabled=providerActionDisabled(selectedProfile);const currentIdentity=()=>selectedProfile?providerIdentity(selectedProfile):null;
+  const invalidateTest=()=>controller.invalidate();const loadProfiles=()=>{void controller.list()};
+  // Controller and parent invalidator are intentionally captured for this mount.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>mountAIPanelLifecycle({controller,target:window,loadProfiles,refresh:()=>{setLlmConfig(loadLLMConfig());controller.invalidate();invalidateAISelection()}}),[]);
+  useEffect(()=>{setModelDraft(selectedProfile?.model_name||"");controller.invalidate()},[selectedProfile?.id,selectedProfile?.model_name,controller]);
+  useEffect(()=>{if(!aiLoading&&testState?.kind!=="testing"){setElapsed(0);return}const started=Date.now(),timer=setInterval(()=>setElapsed(Math.floor((Date.now()-started)/1000)),1000);return()=>clearInterval(timer)},[aiLoading,testState?.kind]);
+  const selectProvider=(id:string)=>{const p=profiles.find(x=>x.id===id);if(!p)return;controller.invalidate();const next={provider:p.provider_type as LLMProviderType,providerId:p.id,model:p.model_name,revision:p.revision};saveLLMConfig(next);setLlmConfig(next);setModelDraft(p.model_name);invalidateAISelection()};const saveModel=()=>{void controller.save(modelDraft)};const testConnection=()=>{void controller.test()};
 
-  useEffect(() => {
-    const refreshConfig = () => setLlmConfig(loadLLMConfig());
-    window.addEventListener("storage", refreshConfig);
-    window.addEventListener("focus", refreshConfig);
-    return () => {
-      window.removeEventListener("storage", refreshConfig);
-      window.removeEventListener("focus", refreshConfig);
-    };
-  }, []);
 
   const aiProvider = llmConfig?.provider || "mock";
-  const aiModel = llmConfig?.model || DEFAULT_MODELS[aiProvider] || m("未設定","未设置","Not set");
   const isMockProvider = aiProvider === "mock";
   const costHint = isMockProvider ? m("Mock 模式不會呼叫外部 API。","Mock 模式不会调用外部 API。","Mock mode does not call an external API.") : m("真模型模式：每次展開/深化可能消耗 API 額度。","真实模型模式：每次展开或深化都可能消耗 API 配额。","Live-model mode: each expand or deepen action may consume API quota.");
 
-  const confirmRealModel = (action: string) => {
-    if (isMockProvider) return true;
-    return confirm(`${m("目前使用真模型 provider", "当前使用真实模型 provider", "A live-model provider is active")} (${PROVIDER_LABELS[aiProvider] || aiProvider} / ${aiModel}).\n\n${action} — ${m("可能消耗 API 額度，是否繼續？", "可能消耗 API 配额，是否继续？", "This may consume API quota. Continue?")}`);
-  };
-
-  const handleExpand = () => {
-    if (!confirmRealModel(m("展開分支","展开分支","Expand branch"))) return;
-    expandNode(selectedNode.id, aiInstruction || undefined, aiMode);
-  };
-
-  const handleDeepen = () => {
-    if (!confirmRealModel(m("深化內容","深化内容","Deepen content"))) return;
-    deepenNode(selectedNode.id, aiInstruction || undefined);
-  };
+  const savedIdentity=()=>{const x=loadLLMConfig();return x?{providerId:x.providerId,providerType:x.provider,model:x.model,revision:x.revision}:null};
+  const handleExpand=()=>{const identity=currentIdentity();if(!identity||!selectedProfile)return;controller.generate({actionLabel:m("展開分支","展开分支","Expand branch"),profileName:selectedProfile.name,identity,savedIdentity,dispatch:()=>{void expandNode(selectedNode.id,identity,aiInstruction||undefined,aiMode)}})};
+  const handleDeepen=()=>{const identity=currentIdentity();if(!identity||!selectedProfile)return;controller.generate({actionLabel:m("深化內容","深化内容","Deepen content"),profileName:selectedProfile.name,identity,savedIdentity,dispatch:()=>{void deepenNode(selectedNode.id,identity,aiInstruction||undefined)}})};
 
   return (
     <>
       <Section title={m("AI 生長","AI 生长","AI growth")} subtitle={m("切換模式，避免所有衍生結果都走同一種形狀。","切换模式，避免所有衍生结果采用相同结构。","Switch modes so generated results do not all follow the same shape.")} tone="ai">
         <div className={`rounded-lg border px-3 py-2 text-xs leading-5 ${isMockProvider ? "border-green-800/40 bg-green-950/20 text-green-200/80" : "border-amber-800/40 bg-amber-950/20 text-amber-200/80"}`}>
-          <div className="font-medium">
-            {m("目前 AI","当前 AI","Current AI")}:{PROVIDER_LABELS[aiProvider] || aiProvider} / {aiModel}
-          </div>
+          <label className="block font-medium">{m("AI 設定檔","AI 配置","AI profile")}</label>
+          <select aria-label={m("AI 設定檔","AI 配置","AI profile")} value={selectedProfile?.id || ""} onChange={(e)=>selectProvider(e.target.value)} disabled={aiLoading || testState?.kind==="testing"} className="w-full rounded bg-gray-900 px-2 py-1">
+            <option value="">{m("選擇可用設定檔…","选择可用配置…","Select an enabled profile…")}</option>
+            {profiles.map((p)=><option key={p.id} value={p.id}>{p.name} · {p.provider_type} · {p.model_name}</option>)}
+          </select>
+          <div className="mt-2 flex gap-2"><input aria-label={m("模型","模型","Model")} value={modelDraft} maxLength={MAX_MODEL_NAME} onChange={(e)=>{setModelDraft(e.target.value);invalidateTest();invalidateAISelection();}} disabled={providerDisabled || savingModel || aiLoading} className="min-w-0 flex-1 rounded bg-gray-900 px-2 py-1"/><button type="button" onClick={saveModel} disabled={providerDisabled || savingModel || !modelDraft.trim() || modelDraft.trim()===selectedProfile?.model_name} className="rounded border px-2">{m("儲存模型","保存模型","Save model")}</button><button type="button" onClick={testConnection} disabled={providerDisabled || testState?.kind==="testing" || modelDraft.trim()!==selectedProfile?.model_name} className="rounded border px-2">{testState?.kind==="testing"?m("測試中","测试中","Testing"):m("測試","测试","Test")}</button></div>
+          {(modelError||panel.copyMessage) && <div role="alert" className="text-red-300">{modelError||panel.copyMessage}</div>}
+          {modelDraft.trim()!==selectedProfile?.model_name && <div className="text-amber-300">{m("模型尚未儲存；後端仍使用已儲存模型。","模型尚未保存；后端仍使用已保存模型。","Unsaved model; the backend still uses the saved model.")}</div>}
           <div>{costHint}</div>
+          {testState && <div className="mt-1" role="status">{testState.kind.toUpperCase()} · {testState.kind==="testing"?elapsed:Math.ceil(testState.elapsed/1000)}s · {testState.message}{testState.status?` · HTTP ${testState.status}`:""}{testState.code?` · ${testState.code}`:""}{testState.requestId?` · ID ${testState.requestId}`:""}</div>}
         </div>
+        {profileState==="loading" && <div role="status" className="text-xs">{m("載入設定檔…","加载配置…","Loading profiles…")}</div>}
+        {profileState==="error" && <div role="alert" className="rounded border border-red-800 p-2 text-xs text-red-300">{m("無法載入設定檔。","无法加载配置。","Could not load profiles.")} <button type="button" className="underline" onClick={loadProfiles}>{m("重試","重试","Retry")}</button></div>}
+        {profileState==="ready" && profiles.length===0 && <div role="status" className="text-xs">{m("沒有已啟用的設定檔。","没有已启用的配置。","No enabled profiles.")}</div>}
+        {profileState==="ready" && profiles.length>0 && !selectedProfile && <div role="alert" className="rounded border border-red-800 p-2 text-xs text-red-300">{m("所選設定檔不存在或已停用，請選擇可用設定檔。","所选配置不存在或已停用，请选择可用配置。","The selected profile is missing or disabled. Select an enabled profile.")}</div>}
+        {(aiLoading || testState?.kind==="testing") && <div role="status" className="text-xs text-purple-200">{m("等待 AI 回應","等待 AI 响应","Waiting for AI")} · {elapsed}s · {m("最多約 62 秒，不顯示虛假進度。","最长约 62 秒，不显示虚假进度。","Maximum wait about 62 seconds; no artificial progress.")}</div>}
+        {aiError && <div role="alert" className="rounded border border-red-800 bg-red-950/20 p-2 text-xs text-red-200"><div>{diagnosticMessage(locale,aiError.code)}</div><div>HTTP {aiError.status || "—"} · {aiError.code || "LLM_UPSTREAM_ERROR"}{aiError.requestId?` · ID ${aiError.requestId}`:""} · {Math.ceil(aiError.elapsedMs/1000)}s</div>{aiError.requestId && <button type="button" className="underline" onClick={()=>void controller.copy(aiError.requestId!)}>{m("複製請求 ID","复制请求 ID","Copy request ID")}</button>}<button type="button" onClick={clearAIError} className="underline">{m("關閉；請重試相同操作","关闭；请重试相同操作","Dismiss; retry the same action")}</button></div>}
 
         <div className="surface-subtle rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between gap-2">
@@ -135,7 +141,7 @@ export function NodeAI({
           <button
             type="button"
             onClick={handleExpand}
-            disabled={aiLoading}
+            disabled={aiLoading || providerDisabled || modelDraft.trim()!==selectedProfile?.model_name}
             className="flex-1 px-3 py-2 bg-purple-900/60 hover:bg-purple-800 disabled:bg-gray-800 disabled:text-gray-600 text-purple-200 text-sm rounded-lg transition-colors border border-purple-700/50"
           >
             {aiLoading ? m("⏳ 生長中…","⏳ 生长中…","⏳ Growing…") : m("🌱 展開分支","🌱 展开分支","🌱 Expand branch")}
@@ -143,7 +149,7 @@ export function NodeAI({
           <button
             type="button"
             onClick={handleDeepen}
-            disabled={aiLoading}
+            disabled={aiLoading || providerDisabled || modelDraft.trim()!==selectedProfile?.model_name}
             className="flex-1 px-3 py-2 bg-teal-900/60 hover:bg-teal-800 disabled:bg-gray-800 disabled:text-gray-600 text-teal-200 text-sm rounded-lg transition-colors border border-teal-700/50"
           >
             {aiLoading ? m("⏳ 深化中…","⏳ 深化中…","⏳ Deepening…") : m("🔍 深化內容","🔍 深化内容","🔍 Deepen content")}

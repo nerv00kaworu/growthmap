@@ -2,12 +2,15 @@ import json, os
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import update
 from db.database import get_db
 from models.models import ProviderConfig
 from pydantic import BaseModel
 from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document, verify_revocation_assertion, strict_json_loads, stable_json_file
 from desktop.startup_verdict import effective_entitlement, verdict_mode
 from desktop.secrets import put, delete
+from api.provider_authority import change_external_secret, recover_external_secret
+from models.schemas import ProviderSecretRecovery
 router = APIRouter(prefix="/desktop")
 class SecretIn(BaseModel): api_key: str
 class LicenseIn(BaseModel): document: dict
@@ -20,14 +23,21 @@ async def set_secret(provider_id: str, body: SecretIn, db: AsyncSession = Depend
         raise HTTPException(404, "Provider not found")
     if provider.provider_type == "mock":
         raise HTTPException(400, "Mock provider does not use an API key")
-    put(provider_id, body.api_key)
+    await change_external_secret(db, provider, lambda: put(provider_id, body.api_key))
+
+@router.post("/secrets/{provider_id}/recover", status_code=204)
+async def recover_secret(provider_id: str, body: ProviderSecretRecovery, db: AsyncSession = Depends(get_db)):
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider: raise HTTPException(404, "Provider not found")
+    mutate = (lambda: put(provider_id, body.api_key)) if body.operation == "set" else (lambda: delete(provider_id))
+    await recover_external_secret(db, provider, body.revision, mutate)
 
 @router.delete("/secrets/{provider_id}", status_code=204)
 async def remove_secret(provider_id: str, db: AsyncSession = Depends(get_db)):
     provider = await db.get(ProviderConfig, provider_id)
     if not provider:
         raise HTTPException(404, "Provider not found")
-    delete(provider_id)
+    await change_external_secret(db, provider, lambda: delete(provider_id))
 @router.get("/entitlement")
 def entitlement(): return effective_entitlement().public()
 @router.post("/entitlement/checkpoint")

@@ -47,7 +47,7 @@ class CreateEdge(Strict):
 class CreateBlock(Strict):
     op: Literal["create_content_block"]; id: Id|None=None; node_id: Id
     expected_node_revision: Annotated[int,Field(ge=1)]
-    block_type: Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table"]="paragraph"
+    block_type: Literal["paragraph","bullet_list","rule_set","example","risk_note","decision_log","todo","prompt_context","code","quote","table","text","markdown","note","question","task","decision","risk","resource","definition","rules","spec"]="paragraph"
     content: dict[Annotated[str,Field(max_length=100)],Annotated[str,Field(max_length=16384)]]=Field(default_factory=dict,max_length=100)
     order_index: Annotated[int,Field(ge=0,le=100000)]=0
 class CreateBranch(Strict):

@@ -2,8 +2,9 @@ import re
 """Pydantic schemas for API request/response"""
 import uuid
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
+from models.content_blocks import ContentBlockType
 
 
 # === Project ===
@@ -170,7 +171,7 @@ class EdgeOut(BaseModel):
 class ContentBlockCreate(BaseModel):
     expected_project_revision: int
     expected_node_revision: int
-    block_type: str = "paragraph"
+    block_type: ContentBlockType = ContentBlockType.paragraph
     content: Any = {}
     order_index: int = 0
 
@@ -179,7 +180,7 @@ class ContentBlockUpdate(BaseModel):
     expected_project_revision: int
     expected_node_revision: int
     expected_revision: int
-    block_type: Optional[str] = None
+    block_type: Optional[ContentBlockType] = None
     content: Optional[Any] = None
     order_index: Optional[int] = None
 
@@ -274,6 +275,8 @@ class DetectGapsRequest(BaseModel):
 
 # === Branch ===
 
+from models.provider_authority import MAX_PROVIDER_REVISION
+
 APP_SECRET_ENV_PREFIX = "GROWTHMAP_LLM_KEY_"
 APP_SECRET_ENV_PATTERN = re.compile(r"^GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}$")
 
@@ -304,6 +307,7 @@ class ProviderConfigCreate(BaseModel):
 
 
 class ProviderConfigUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
     name: Optional[str] = None
     provider_type: Optional[str] = None
     endpoint: Optional[str] = None
@@ -319,6 +323,34 @@ class ProviderConfigUpdate(BaseModel):
         return validate_app_secret_env_key(value) if value is not None else None
 
 
+class ProviderModelUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    model_name: str
+
+    @field_validator("model_name")
+    @classmethod
+    def valid_model_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 128:
+            raise ValueError("model_name must contain 1 to 128 characters")
+        return value
+
+
+class ProviderSecretRecovery(BaseModel):
+    model_config = {"extra": "forbid"}
+    revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    operation: Literal["set", "delete"]
+    api_key: Optional[str] = None
+
+    @model_validator(mode="after")
+    def desired_state_is_explicit(self):
+        if self.operation == "set" and (not self.api_key or "\x00" in self.api_key):
+            raise ValueError("api_key is required for set recovery")
+        if self.operation == "delete" and self.api_key is not None:
+            raise ValueError("api_key must be omitted for delete recovery")
+        return self
+
+
 class ProviderConfigOut(BaseModel):
     id: str
     name: str
@@ -332,6 +364,17 @@ class ProviderConfigOut(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
+    revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    secret_change_pending: bool
+    credential_status: Literal["ready", "recovery_required"]
+
+    @model_validator(mode="before")
+    @classmethod
+    def derive_credential_status(cls, value):
+        if not isinstance(value, dict):
+            pending = bool(getattr(value, "secret_change_pending", False))
+            return {name: getattr(value, name) for name in cls.model_fields if name != "credential_status"} | {"credential_status": "recovery_required" if pending else "ready"}
+        return value | {"credential_status": "recovery_required" if value.get("secret_change_pending") else "ready"}
 
     model_config = {"from_attributes": True}
 

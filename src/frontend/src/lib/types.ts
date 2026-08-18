@@ -134,6 +134,9 @@ export interface ProviderConfig {
   enabled: boolean;
   created_at: string;
   updated_at: string;
+  revision: number;
+  secret_change_pending: boolean;
+  credential_status: "ready" | "recovery_required";
 }
 
 export interface Branch {

@@ -23,23 +23,48 @@ ai.routes.get_provider=fake_provider
 import ai.providers.registry
 ai.providers.registry.get_provider=fake_provider
 h={'Authorization':'Bearer test-session-token'}
-with TestClient(app) as c:
+with TestClient(app,raise_server_exceptions=False) as c:
  c.post('/api/desktop/trial/start',headers={**h,'X-GrowthMap-Fresh-Install':'1'},json={'started_at':datetime.now(timezone.utc).isoformat(),'installation_id':'test-installation'})
  project=c.post('/api/projects',headers=h,json={'name':'secret-test'}).json()
  provider=c.post('/api/providers',headers=h,json={'name':'fixture','provider_type':'openai_compatible','endpoint':'http://fixture.invalid','secret_env_key':'GROWTHMAP_LLM_KEY_FIXTURE','model_name':'fixture','capabilities':[],'cost_level':'none','enabled':True}).json()
  pid=provider['id']
  # Inherited env-only key is deliberately ignored in desktop mode.
- missing=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid})
- assert missing.status_code==400 and 'desktop secure storage' in missing.text
- assert c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'memory-key'}).status_code==204
- tested=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid})
+ missing=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
+ assert missing.status_code==400 and 'LLM_CONFIGURATION_ERROR' in missing.text,missing.text
+ before=provider['revision']
+ saved=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'memory-key'})
+ assert saved.status_code==204,saved.text
+ provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert provider['revision']==before+1,(before,provider['revision'])
+ tested=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
  assert tested.status_code==200 and tested.json()['ok'] is True, tested.text
- expanded=c.post('/api/ai/expand',headers=h,json={'node_id':project['root_node_id'],'provider_id':pid,'count':1})
+ expanded=c.post('/api/ai/expand',headers=h,json={'node_id':project['root_node_id'],'provider_id':pid,'provider_revision':provider['revision'],'count':1})
  # Resolver/provider consumed the memory key without making a network request.
  assert expanded.status_code==200 and expanded.json()['suggestions'][0]['title']=='fixture child', expanded.text
- assert c.delete(f'/api/desktop/secrets/{pid}',headers=h).status_code==204
- removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid})
- assert removed.status_code==400 and 'desktop secure storage' in removed.text
+ before=provider['revision']
+ deleted=c.delete(f'/api/desktop/secrets/{pid}',headers=h)
+ assert deleted.status_code==204,deleted.text
+ provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert provider['revision']==before+1,(before,provider['revision'])
+ removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
+ assert removed.status_code==400 and 'LLM_CONFIGURATION_ERROR' in removed.text
+ # A failed store exposes only safe pending state and is explicitly recoverable
+ import desktop.routes as dr
+ original=dr.put
+ def fail(*_): raise RuntimeError('store failure')
+ dr.put=fail
+ failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***'})
+ assert failed.status_code==500 and 'memory-key' not in failed.text
+ pending=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert pending['secret_change_pending'] is True and pending['credential_status']=='recovery_required'
+ assert c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':pending['revision']}).status_code==409
+ stale=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision']-1,'operation':'set','api_key':'***'})
+ assert stale.status_code==409
+ dr.put=original
+ recovered=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision'],'operation':'set','api_key':'***'})
+ assert recovered.status_code==204,recovered.text
+ ready=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert ready['revision']==pending['revision'] and ready['secret_change_pending'] is False
 '''
     env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'54e8b06bfded81a38763b02f2056c887ea2ed62225ab51a807a663ade5d79ab8','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',script],env=env,text=True,capture_output=True)

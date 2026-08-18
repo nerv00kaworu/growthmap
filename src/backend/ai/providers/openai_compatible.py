@@ -5,6 +5,7 @@ import httpx
 from typing import Optional
 
 from .base import LLMProvider
+from ai.diagnostics import LLMInvalidResponse
 
 
 # Default values from environment
@@ -77,7 +78,8 @@ class OpenAICompatibleProvider(LLMProvider):
                         await asyncio.sleep(2)
                         continue
                     resp.raise_for_status()
-                    data = resp.json()
+                    try: data = resp.json()
+                    except (ValueError,TypeError,AttributeError,KeyError) as exc: raise LLMInvalidResponse("invalid JSON") from exc
                     break
                 except httpx.TimeoutException:
                     if attempt == 0:
@@ -90,13 +92,18 @@ class OpenAICompatibleProvider(LLMProvider):
                         continue
                     raise
 
-        if data is None:
-            raise RuntimeError("LLM request did not produce a response payload")
-
-        # Handle both OpenAI and compatible-style responses
-        if "choices" in data and data["choices"]:
-            return data["choices"][0]["message"]["content"]
-        elif "content" in data:
-            return data["content"]
-        else:
-            raise ValueError(f"Unexpected LLM response format: {list(data.keys())}")
+        if not isinstance(data, dict):
+            raise LLMInvalidResponse("response container")
+        try:
+            if set(data) >= {"choices"}:
+                choices=data["choices"]
+                if not isinstance(choices,list) or not choices or not isinstance(choices[0],dict): raise LLMInvalidResponse("choices")
+                message=choices[0].get("message")
+                if not isinstance(message,dict) or set(message) < {"content"}: raise LLMInvalidResponse("message")
+                content=message["content"]
+            elif set(data) >= {"content"}: content=data["content"]
+            else: raise LLMInvalidResponse("shape")
+            if not isinstance(content,str) or not content.strip() or len(content)>262144: raise LLMInvalidResponse("content")
+            return content
+        except LLMInvalidResponse: raise
+        except (KeyError,TypeError,AttributeError,ValueError) as exc: raise LLMInvalidResponse("extraction") from exc

@@ -177,6 +177,17 @@ class ProviderConfig(Base):
     settings = Column(JSON, default={})
     created_at = Column(DateTime(timezone=True), default=utcnow)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    # Monotonic authority token. Every behavior/security mutation increments it
+    # atomically; timestamps are display metadata only.
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
+    # Secret transitions rotate authority and latch dispatch before touching the
+    # external store. Only a successfully reconciled transition clears it.
+    secret_change_pending = Column(Boolean, nullable=False, default=False, server_default="0")
+    secret_change_claim = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("revision >= 1 AND revision <= 9007199254740991", name="ck_provider_revision_safe"),
+    )
 
 
 class Branch(Base):

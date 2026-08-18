@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DEFAULT_MODELS, loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
 import type { ProviderConfig } from "@/lib/types";
+import { providerCredentialPending } from "@/lib/provider-pending";
 
 interface SettingsProps {
   onClose: () => void;
@@ -34,6 +35,8 @@ export function Settings({ onClose }: SettingsProps) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const selectedProfile=profiles.find(row=>row.id===selectedId);
+  const pending=providerCredentialPending(selectedProfile);
   const loadProfiles = async () => {
     const rows = await api.listProviders();
     setProfiles(rows);
@@ -86,13 +89,21 @@ export function Settings({ onClose }: SettingsProps) {
         : [saved, ...profiles];
       setProfiles(nextProfiles);
       setSelectedId(saved.id);
-      saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name });
+      saveLLMConfig({ provider: saved.provider_type as LLMProviderType, providerId: saved.id, model: saved.model_name, revision: saved.revision });
       setMessage(window.growthmapDesktop ? u('✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。','✅ 已保存。API key 由系统安全存储保护，不会写入数据库、.env 或浏览器。','✅ Saved. The API key is protected by secure system storage and never written to the database, .env, or browser.') : u('✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。','✅ 已保存。Authoring 模式从本地 .env/环境变量读取，不会写入数据库或浏览器。','✅ Saved. Authoring mode reads local .env/environment variables and never writes them to the database or browser.'));
     } catch (error: unknown) {
       setMessage(u(`儲存失敗：${(error as Error).message}`,`保存失败：${(error as Error).message}`,`Save failed: ${(error as Error).message}`));
     } finally {
       setSaving(false);
     }
+  };
+
+  const recoverCredential=async(operation:"set"|"delete")=>{
+    if(!selectedProfile)return;
+    if(operation==="set"&&!apiKey.trim()){setMessage(u("請重新輸入 API key。","请重新输入 API key。","Re-enter the API key."));return}
+    if(operation==="delete"&&!window.confirm(u("確認重試移除憑證？","确认重试移除凭据？","Retry credential removal?")))return;
+    setSaving(true);setMessage("");
+    try{await (window.growthmapDesktop?window.growthmapDesktop.secrets.recover(selectedProfile.id,selectedProfile.revision,operation,operation==="set"?apiKey.trim():undefined):api.recoverProviderSecret(selectedProfile.id,selectedProfile.revision,operation,operation==="set"?apiKey.trim():undefined));setApiKey("");await loadProfiles();setMessage(u("✅ 憑證更新已完成。","✅ 凭据更新已完成。","✅ Credential update completed."))}catch{setMessage(u("憑證更新仍未完成；請重新輸入 key 或重試移除。","凭据更新仍未完成；请重新输入 key 或重试移除。","Credential update is still incomplete; re-enter the key or retry removal."))}finally{setSaving(false)}
   };
 
   const createNew = () => {
@@ -154,10 +165,11 @@ export function Settings({ onClose }: SettingsProps) {
           </label>
         </div>
 
+        {pending&&<div data-testid="credential-recovery" className="space-y-2 rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200"><div>{u("憑證更新未完成；請重新輸入 key 或重試移除。","凭据更新未完成；请重新输入 key 或重试移除。","Credential update is incomplete; re-enter the key or retry removal.")}</div><div className="flex gap-2"><button type="button" disabled={saving} onClick={()=>recoverCredential("set")} className="rounded bg-amber-700 px-2 py-1">{u("重新輸入並完成","重新输入并完成","Re-enter and recover")}</button><button type="button" disabled={saving} onClick={()=>recoverCredential("delete")} className="rounded border border-amber-700 px-2 py-1">{u("重試移除","重试移除","Retry removal")}</button></div></div>}
         {message && <div className="rounded border border-gray-700 bg-gray-800/70 px-3 py-2 text-xs text-gray-300">{message}</div>}
         <div className="flex gap-2">
           <button type="button" onClick={createNew} className="rounded-lg border border-gray-600 px-3 py-2 text-xs text-gray-300 hover:text-white">{u('新增','新增','New')}</button>
-          <button type="button" onClick={saveProfile} disabled={saving || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? u("儲存中…", "保存中…", "Saving…") : u("儲存並使用", "保存并使用", "Save and use")}</button>
+          <button type="button" onClick={saveProfile} disabled={saving || pending || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? u("儲存中…", "保存中…", "Saving…") : u("儲存並使用", "保存并使用", "Save and use")}</button>
         </div>
       </div>
     </div>

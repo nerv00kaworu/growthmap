@@ -60,6 +60,9 @@ export function NodePanel() {
   const expandSuggestions = useStore((s) => s.expandSuggestions);
   const deepenResult = useStore((s) => s.deepenResult);
   const aiLoading = useStore((s) => s.aiLoading);
+  const aiError = useStore((s) => s.aiError);
+  const clearAIError = useStore((s) => s.clearAIError);
+  const invalidateAISelection = useStore((s) => s.invalidateAISelection);
   const refreshTree = useStore((s) => s.refreshTree);
 
   const [activeTab, setActiveTab] = useState<Tab>("content");
@@ -183,6 +186,9 @@ export function NodePanel() {
             aiMode={aiMode}
             setAiMode={setAiMode}
             aiLoading={aiLoading}
+            aiError={aiError}
+            clearAIError={clearAIError}
+            invalidateAISelection={invalidateAISelection}
             expandNode={expandNode}
             deepenNode={deepenNode}
             expandSuggestions={expandSuggestions}

@@ -16,7 +16,7 @@ class CaptureProvider:
     async def complete(self, system, user, **kwargs):
         self.calls.append((system, user))
         if "content_blocks" in system:
-            return '{"enriched_summary":"Neutral summary","content_blocks":[]}'
+            return '{"enriched_summary":"Neutral summary","content_blocks":[{"title":"A","body":"B","block_type":"paragraph"},{"title":"C","body":"D","block_type":"todo"}]}'
         if "suggest" in system.lower() or "子节点" in system or "子節點" in system:
             return '[{"title":"Neutral child","summary":"Neutral detail","node_type":"task"}]'
         return "Neutral reply"
@@ -62,9 +62,9 @@ def test_markdown_and_spec_endpoints_support_three_locales_and_omitted_is_tradit
 
 
 def test_ai_request_models_omitted_locale_remains_traditional():
-    assert ai_routes.ExpandRequest(node_id="n", provider_id="p").locale == "zh-TW"
-    assert ai_routes.DeepenRequest(node_id="n", provider_id="p").locale == "zh-TW"
-    assert ai_routes.ChatRequest(node_id="n", provider_id="p", message="m").locale == "zh-TW"
+    assert ai_routes.ExpandRequest(node_id="n", provider_id="p", provider_revision=1).locale == "zh-TW"
+    assert ai_routes.DeepenRequest(node_id="n", provider_id="p", provider_revision=1).locale == "zh-TW"
+    assert ai_routes.ChatRequest(node_id="n", provider_id="p", provider_revision=1, message="m").locale == "zh-TW"
 
 
 def test_expand_deepen_chat_capture_complete_framework_localization(monkeypatch):
@@ -73,7 +73,7 @@ def test_expand_deepen_chat_capture_complete_framework_localization(monkeypatch)
     with TestClient(app) as client:
         for locale in ("en", "zh-CN"):
             project, provider = create_fixture(client)
-            base = {"node_id":project["root_node_id"], "provider_id":provider["id"]}
+            base = {"node_id":project["root_node_id"], "provider_id":provider["id"], "provider_revision":provider["revision"]}
             calls.clear()
             assert client.post("/api/ai/expand", json={**base,"locale":locale,"count":1,"instruction":"Neutral instruction"}).status_code == 200
             assert client.post("/api/ai/deepen", json={**base,"locale":locale,"instruction":"Neutral instruction"}).status_code == 200

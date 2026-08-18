@@ -19,10 +19,12 @@ from sqlalchemy.orm import selectinload
 
 from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
+from models.content_blocks import CONTENT_BLOCK_TYPES
 from desktop.entitlements import peek_current_entitlement
-from desktop.secrets import desktop_mode, put as put_memory_secret
+from desktop.secrets import desktop_mode, put as put_memory_secret, delete as delete_memory_secret
 from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
 from api.branching import deep_copy_branch
+from api.provider_authority import guarded_provider_update, change_external_secret, recover_external_secret
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
@@ -31,7 +33,7 @@ from models.schemas import (
     NodeMoveRequest, AncestorNode, MainlinePathOut, BranchInfo,
     BranchCreate, BranchOut, ProjectRevisionRequest, EntityRevisionRequest,
     NodeEntityRevisionRequest, BranchMergeRequest,
-    ProviderConfigCreate, ProviderConfigUpdate, ProviderConfigOut,
+    ProviderConfigCreate, ProviderConfigUpdate, ProviderModelUpdate, ProviderConfigOut, ProviderSecretRecovery,
     AgentSessionCreate, AgentSessionUpdate, AgentSessionOut,
     AgentArtifactCreate, AgentArtifactReview, AgentArtifactOut,
     validate_app_secret_env_key,
@@ -109,10 +111,31 @@ def _write_env_value(env_key: str, secret: str) -> None:
     os.environ[env_key] = secret
 
 
+def _delete_env_value(env_key: str) -> None:
+    validate_app_secret_env_key(env_key)
+    env_file = _env_file()
+    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    kept = [line for line in lines if not re.match(rf"^\s*(?:export\s+)?{re.escape(env_key)}\s*=", line)]
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=env_file.parent, delete=False) as handle:
+        handle.write("\n".join(kept).rstrip() + ("\n" if kept else ""))
+        temp_path = Path(handle.name)
+    os.chmod(temp_path, 0o600)
+    temp_path.replace(env_file)
+    os.environ.pop(env_key, None)
+
+
 @router.get("/providers", response_model=list[ProviderConfigOut])
 async def list_providers(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ProviderConfig).order_by(ProviderConfig.created_at.desc()))
     return result.scalars().all()
+
+
+@router.get("/providers/{provider_id}", response_model=ProviderConfigOut)
+async def get_provider_config(provider_id: str, db: AsyncSession = Depends(get_db)):
+    provider=await db.get(ProviderConfig,provider_id)
+    if not provider: raise HTTPException(404,"Provider not found")
+    return provider
 
 
 @router.post("/providers", response_model=ProviderConfigOut, status_code=201)
@@ -142,12 +165,39 @@ async def write_provider_secret(provider_id: str, data: ProviderSecretWrite, req
         raise HTTPException(400, str(exc))
     if provider.provider_type == "mock":
         raise HTTPException(400, "Mock provider does not use an API key")
-    if desktop_mode():
-        # Compatibility endpoint stores only in this sidecar process. The Electron
-        # safeStorage IPC remains the source of persistence and never exposes reads.
-        put_memory_secret(provider.id, data.api_key)
+    # Commit a durable dispatch fence before touching the external store. If the
+    # store or final DB publish fails, resolution remains closed on the latch.
+    mutate = (lambda: put_memory_secret(provider.id, data.api_key)) if desktop_mode() else (lambda: _write_env_value(provider.secret_env_key, data.api_key))
+    await change_external_secret(db, provider, mutate)
+
+
+@router.post("/providers/{provider_id}/secret/recover", status_code=204)
+async def recover_provider_secret(provider_id: str, data: ProviderSecretRecovery, request: Request, db: AsyncSession = Depends(get_db)):
+    if not _is_local_client(request.client.host if request.client else ""):
+        raise HTTPException(403, "Provider secrets can only be configured from localhost")
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    try:
+        validate_app_secret_env_key(provider.secret_env_key)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if data.operation == "set":
+        mutate = (lambda: put_memory_secret(provider.id, data.api_key)) if desktop_mode() else (lambda: _write_env_value(provider.secret_env_key, data.api_key))
     else:
-        _write_env_value(provider.secret_env_key, data.api_key)
+        mutate = (lambda: delete_memory_secret(provider.id)) if desktop_mode() else (lambda: _delete_env_value(provider.secret_env_key))
+    await recover_external_secret(db, provider, data.revision, mutate)
+
+
+@router.patch("/providers/{provider_id}/model", response_model=ProviderConfigOut)
+async def update_provider_model(provider_id: str, data: ProviderModelUpdate, db: AsyncSession = Depends(get_db)):
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    await guarded_provider_update(db, provider, model_name=data.model_name, auth_type="env")
+    await db.commit()
+    await db.refresh(provider)
+    return provider
 
 
 @router.patch("/providers/{provider_id}", response_model=ProviderConfigOut)
@@ -155,9 +205,9 @@ async def update_provider(provider_id: str, data: ProviderConfigUpdate, db: Asyn
     provider = await db.get(ProviderConfig, provider_id)
     if not provider:
         raise HTTPException(404, "Provider not found")
-    for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(provider, key, value)
-    provider.auth_type = "env"
+    changes = data.model_dump(exclude_unset=True)
+    changes["auth_type"] = "env"
+    await guarded_provider_update(db, provider, **changes)
     await db.commit()
     await db.refresh(provider)
     return provider
@@ -277,7 +327,7 @@ def _valid_artifact_payload(artifact_type: str, payload: dict) -> bool:
     if artifact_type == "update_node":
         return bool(set(payload).intersection({"title", "summary", "description", "maturity", "tags"}))
     if artifact_type == "create_block":
-        return isinstance(payload.get("block_type"), str) and isinstance(payload.get("content"), dict)
+        return payload.get("block_type") in CONTENT_BLOCK_TYPES and isinstance(payload.get("content"), dict)
     return False
 
 

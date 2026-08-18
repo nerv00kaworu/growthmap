@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:////tmp/growthmap-security-remediation.db"
 os.environ["GROWTHMAP_ENV_FILE"] = os.path.join(tempfile.gettempdir(), "growthmap-security-test.env")
 
 from fastapi.testclient import TestClient
@@ -52,10 +52,10 @@ class SecurityRemediationTest(unittest.TestCase):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Provider path"}).json()
             provider = client.post("/api/providers", json={"name": "Mock", "provider_type": "mock", "model_name": "demo"}).json()
-            tested = client.post("/api/ai/test-connection", json={"provider_id": provider["id"]})
+            tested = client.post("/api/ai/test-connection", json={"provider_id": provider["id"],"provider_revision":provider["revision"]})
             self.assertEqual(tested.status_code, 200, tested.text)
             self.assertTrue(tested.json()["ok"])
-            expanded = client.post("/api/ai/expand", json={"node_id": project["root_node_id"], "provider_id": provider["id"], "count": 2})
+            expanded = client.post("/api/ai/expand", json={"node_id": project["root_node_id"], "provider_id": provider["id"], "provider_revision":provider["revision"], "count": 2})
             self.assertEqual(expanded.status_code, 200, expanded.text)
             self.assertGreaterEqual(len(expanded.json()["suggestions"]), 1)
 
@@ -108,15 +108,20 @@ class SecurityRemediationTest(unittest.TestCase):
                 self.assertIn("rebind", rejected.text)
                 self.assertIn("GROWTHMAP_LLM_KEY_", rejected.text)
                 self.assertNotIn("legacy-secret-value", rejected.text)
-                legacy_test = client.post("/api/ai/test-connection", json={"provider_id": legacy_id})
+                legacy_version=client.get("/api/providers").json()
+                legacy_version=next(x["revision"] for x in legacy_version if x["id"]==legacy_id)
+                legacy_test = client.post("/api/ai/test-connection", json={"provider_id": legacy_id,"provider_revision":legacy_version})
                 self.assertEqual(legacy_test.status_code, 400, (provider_type, legacy_test.text))
                 self.assertIn("rebind", legacy_test.text)
                 project = client.post("/api/projects", json={"name": f"Unsafe AI {provider_type}"}).json()
                 resolution = client.post("/api/ai/expand", json={
-                    "node_id": project["root_node_id"], "provider_id": legacy_id,
+                    "node_id": project["root_node_id"], "provider_id": legacy_id, "provider_revision":legacy_version,
                 })
-                self.assertEqual(resolution.status_code, 500, (provider_type, resolution.text))
-                self.assertIn("rebind", resolution.text)
+                self.assertEqual(resolution.status_code, 400, (provider_type, resolution.text))
+                detail = resolution.json()["detail"]
+                self.assertEqual(detail["code"], "LLM_CONFIGURATION_ERROR")
+                self.assertIn("rebind", detail["message"])
+                self.assertRegex(detail["request_id"], r"^[0-9a-f]{16}$")
             valid = client.put(f"/api/providers/{provider_id}/secret", json={"api_key": "***"})
             self.assertEqual(valid.status_code, 204, valid.text)
 
@@ -141,3 +146,55 @@ class SecurityRemediationTest(unittest.TestCase):
         result = subprocess.run([str(ROOT / "scripts/start_growthmap.sh"), "--foreground"], env=env, text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("non-loopback", result.stderr)
+
+def test_dedicated_model_patch_is_strict_trimmed_and_bounded():
+    with TestClient(app) as client:
+        provider=client.post("/api/providers",json={"name":"Model patch","provider_type":"mock","model_name":"old"}).json(); url=f"/api/providers/{provider['id']}/model"
+        updated=client.patch(url,json={"model_name":"  new-model  "}); assert updated.status_code==200 and updated.json()["model_name"]=="new-model"
+        for body in ({"model_name":""},{"model_name":"x"*129},{"model_name":"ok","endpoint":"https://secret.invalid"}): assert client.patch(url,json=body).status_code==422
+
+def test_generic_provider_patch_has_no_phantom_query_and_rejects_extras():
+    with TestClient(app) as client:
+        provider=client.post('/api/providers',json={'name':'Before','provider_type':'mock'}).json()
+        patched=client.patch(f"/api/providers/{provider['id']}",json={'name':'After','enabled':False})
+        assert patched.status_code==200 and patched.json()['name']=='After' and patched.json()['enabled'] is False
+        assert client.patch(f"/api/providers/{provider['id']}",json={'unknown':'x'}).status_code==422
+        operation=next(x for x in client.get('/openapi.json').json()['paths']['/api/providers/{provider_id}']['patch']['parameters'] if x['name']=='provider_id')
+        assert operation['in']=='path'
+        assert not [x for x in client.get('/openapi.json').json()['paths']['/api/providers/{provider_id}']['patch']['parameters'] if x['in']=='query']
+
+def test_provider_revision_exact_upper_bound_and_exhaustion(monkeypatch):
+    from db.database import async_session
+    from models.models import ProviderConfig
+    from models.provider_authority import MAX_PROVIDER_REVISION
+    async def set_revision(pid, value):
+        async with async_session() as db:
+            provider=await db.get(ProviderConfig,pid);provider.revision=value;await db.commit()
+    with TestClient(app) as client:
+        provider=client.post('/api/providers',json={'name':'Bounded','provider_type':'openai_compatible','secret_env_key':'GROWTHMAP_LLM_KEY_BOUNDED'}).json();pid=provider['id']
+        asyncio.run(set_revision(pid,MAX_PROVIDER_REVISION-1))
+        last=client.patch(f'/api/providers/{pid}',json={'name':'At max'})
+        assert last.status_code==200 and last.json()['revision']==MAX_PROVIDER_REVISION
+        listed=client.get('/api/providers').json()
+        exact=next(x['revision'] for x in listed if x['id']==pid)
+        assert type(exact) is int and exact==MAX_PROVIDER_REVISION
+        for method,path,body in (
+            ('patch',f'/api/providers/{pid}',{'name':'overflow'}),
+            ('patch',f'/api/providers/{pid}/model',{'model_name':'overflow'}),
+            ('put',f'/api/providers/{pid}/secret',{'api_key':'must-not-write'}),
+        ):
+            response=getattr(client,method)(path,json=body)
+            assert response.status_code==409 and response.json()['detail']['code']=='PROVIDER_REVISION_EXHAUSTED'
+        assert os.getenv('GROWTHMAP_LLM_KEY_BOUNDED') is None
+        current=next(x for x in client.get('/api/providers').json() if x['id']==pid)
+        assert current['revision']==MAX_PROVIDER_REVISION and current['name']=='At max'
+
+
+def test_profile_version_mismatch_aborts_before_provider_construction(monkeypatch):
+    from ai import routes
+    called=[]
+    monkeypatch.setattr(routes,'get_provider',lambda config: called.append(config))
+    with TestClient(app) as client:
+        provider=client.post('/api/providers',json={'name':'Exact','provider_type':'mock'}).json()
+        result=client.post('/api/ai/test-connection',json={'provider_id':provider['id'],'provider_revision':provider['revision']+1})
+        assert result.status_code==409 and result.json()['detail']['code']=='LLM_PROFILE_CHANGED' and not called

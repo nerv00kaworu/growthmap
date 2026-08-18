@@ -120,6 +120,9 @@ _LEGACY_REQUIRED_TIMESTAMP_COLUMNS = {
 
 async def _validate_before_mutation(conn, migration_specs, upgrading, version):
     """Reject unsupported/NULL legacy states before the first write."""
+    if await _table_exists(conn, "provider_configs") and await _column(conn, "provider_configs", "revision"):
+        if (await conn.execute(text("SELECT 1 FROM provider_configs WHERE typeof(revision) != 'integer' OR revision < 1 OR revision > 9007199254740991 LIMIT 1"))).first():
+            raise RuntimeError("provider revision outside exact JSON integer range")
     for spec in migration_specs:
         row = await _column(conn, spec[0], spec[1])
         if row is not None and not column_matches(row, spec):

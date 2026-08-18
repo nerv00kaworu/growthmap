@@ -4,13 +4,18 @@ import re
 # v5 applies the owner-approved legacy policy for ambiguous child_of mainlines:
 # every mainline in a parent group containing 2+ mainlines is demoted. This is
 # deliberately done before the one-mainline unique index is created.
-CURRENT_USER_VERSION = 7
+# v9 adds the monotonic provider authority revision. A version bump is required
+# so already-valid v8 databases are migrated instead of being rejected at startup.
+CURRENT_USER_VERSION = 11
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
     ("nodes", "workflow_status", "VARCHAR(20)", True, "draft", "ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'"),
     ("nodes", "file_paths", "JSON", False, "[]", "ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'"),
     ("provider_configs", "secret_env_key", "VARCHAR(128)", False, "", "ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''"),
+    ("provider_configs", "revision", "INTEGER", True, "1", "ALTER TABLE provider_configs ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
+    ("provider_configs", "secret_change_pending", "BOOLEAN", True, "0", "ALTER TABLE provider_configs ADD COLUMN secret_change_pending BOOLEAN NOT NULL DEFAULT 0"),
+    ("provider_configs", "secret_change_claim", "VARCHAR(64)", False, None, "ALTER TABLE provider_configs ADD COLUMN secret_change_claim VARCHAR(64)"),
     ("projects", "revision", "INTEGER", True, "1", "ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
@@ -35,6 +40,8 @@ TRIGGERS = {
 "trg_edges_one_mainline_update": """CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id, relation_type, is_mainline ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1 AND id != OLD.id); END""",
 "trg_edges_normalize_null_insert": """CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
 "trg_edges_normalize_null_update": """CREATE TRIGGER trg_edges_normalize_null_update AFTER UPDATE OF weight, note ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
+"trg_provider_revision_insert": """CREATE TRIGGER trg_provider_revision_insert BEFORE INSERT ON provider_configs WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'provider revision out of range'); END""",
+"trg_provider_revision_update": """CREATE TRIGGER trg_provider_revision_update BEFORE UPDATE OF revision ON provider_configs WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'provider revision out of range'); END""",
 }
 OBJECT_SQL = {**INDEXES, **TRIGGERS}
 
@@ -59,6 +66,7 @@ ORM_READ_COLUMNS = {
   "id":_s("TEXT",True),"project_id":_s("TEXT",True),"from_node_id":_s("TEXT",True),"to_node_id":_s("TEXT",True),"relation_type":_s("TEXT",True),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),True,(None,"0")),"created_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "content_blocks": {
   "id":_s("TEXT",True),"node_id":_s("TEXT",True),"block_type":_s("TEXT",True),"content":_s("JSON",True),"order_index":_s("INTEGER",True),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC"),True),"updated_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
+ "provider_configs": {"revision":_s("INTEGER",True,"1"),"secret_change_pending":_s(("INTEGER","NUMERIC"),True,"0"),"secret_change_claim":_s("TEXT") },
  "branches": {
   "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"name":_s("TEXT",(False,True)),"description":_s("TEXT"),"source_node_id":_s("TEXT"),"status":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},
 }

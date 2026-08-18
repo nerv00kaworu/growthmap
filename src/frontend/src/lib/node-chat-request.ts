@@ -1,0 +1,2 @@
+import type {ChatOwner} from "./node-chat-controller";
+export async function requestNodeChat<T>(owner:ChatOwner,message:string,history:{role:"user"|"assistant";content:string}[],chat:(nodeId:string,message:string,history:{role:"user"|"assistant";content:string}[],providerId:string,revision:number)=>Promise<T>){const profile=owner.profile;if(!profile)throw new Error("LOCAL_PROFILE_UNAVAILABLE");return chat(owner.nodeId,message,history,profile.providerId,profile.revision)}

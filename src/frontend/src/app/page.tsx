@@ -268,12 +268,6 @@ export default function HomePage() {
             deleteNode(selectedNodeId);
           }
         }
-        if (e.key === "e" || e.key === "E") {
-          if (selectedNodeId) expandNode(selectedNodeId);
-        }
-        if (e.key === "d" || e.key === "D") {
-          if (selectedNodeId) deepenNode(selectedNodeId);
-        }
         if ((e.ctrlKey || e.metaKey) && e.key === "z") {
           e.preventDefault();
           undo();

@@ -5,6 +5,7 @@ export interface LLMConfig {
   provider: LLMProviderType;
   providerId: string;
   model: string;
+  revision: number;
 }
 
 export const DEFAULT_MODELS: Record<LLMProviderType, string> = {
@@ -17,6 +18,8 @@ export const DEFAULT_MODELS: Record<LLMProviderType, string> = {
   mock: "demo",
 };
 
+export const LLM_CONFIG_CHANGED_EVENT = "growthmap:llm-config-changed";
+
 const LS_KEY = "growthmap_llm_config";
 
 export function saveLLMConfig(config: LLMConfig): void {
@@ -24,7 +27,9 @@ export function saveLLMConfig(config: LLMConfig): void {
     provider: config.provider,
     providerId: config.providerId,
     model: config.model,
+    revision: config.revision,
   }));
+  window.dispatchEvent(new CustomEvent(LLM_CONFIG_CHANGED_EVENT, { detail: { providerId: config.providerId } }));
 }
 
 export function loadLLMConfig(): LLMConfig | null {
@@ -34,9 +39,9 @@ export function loadLLMConfig(): LLMConfig | null {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object") return null;
     const candidate = value as Record<string, unknown>;
-    if (typeof candidate.provider !== "string" || typeof candidate.providerId !== "string" || typeof candidate.model !== "string") return null;
+    if (typeof candidate.provider !== "string" || typeof candidate.providerId !== "string" || typeof candidate.model !== "string" || typeof candidate.revision !== "number" || !Number.isInteger(candidate.revision) || candidate.revision < 1) return null;
     // Rewrite legacy records so previously persisted secret/endpoint fields are removed.
-    const safe = { provider: candidate.provider as LLMProviderType, providerId: candidate.providerId, model: candidate.model };
+    const safe = { provider: candidate.provider as LLMProviderType, providerId: candidate.providerId, model: candidate.model, revision: candidate.revision };
     localStorage.setItem(LS_KEY, JSON.stringify(safe));
     return safe;
   } catch {

@@ -43,6 +43,8 @@
       "agent-access-ipc.js",
       "preload.js",
       "secret-store.js",
+      "secure-files.js",
+      "credential-startup.js",
       "lifecycle.js",
       "database-manager.js",
       "database-workspace.js",

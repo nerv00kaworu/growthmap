@@ -2,7 +2,8 @@ import { create } from "zustand";
 import { activeMsg } from "@/i18n/ui";
 const ui=(tw:string,cn:string,en:string)=>activeMsg({"zh-TW":tw,"zh-CN":cn,en});
 import type { GNode, GrowthMode, Project, Branch, BranchComparison } from "@/lib/types";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import type { AIProviderIdentity } from "@/lib/ai-panel-controller";
 import { runMutationWithConflict, type ConflictState } from "@/lib/conflict";
 import {
   findNode,
@@ -81,8 +82,11 @@ interface GrowthMapStore {
   expandTargetNodeId: string | null;
   deepenResult: { enriched_summary: string; content_blocks: { title: string; body: string; block_type: string }[]; target_node_id: string } | null;
   aiLoading: boolean;
-  expandNode: (nodeId: string, instruction?: string, mode?: GrowthMode) => Promise<void>;
-  deepenNode: (nodeId: string, instruction?: string) => Promise<void>;
+  aiError: { code?: string; status?: number; requestId?: string; message: string; action: "expand" | "deepen"; elapsedMs: number } | null;
+  clearAIError: () => void;
+  invalidateAISelection: () => void;
+  expandNode: (nodeId: string, identity: AIProviderIdentity, instruction?: string, mode?: GrowthMode) => Promise<void>;
+  deepenNode: (nodeId: string, identity: AIProviderIdentity, instruction?: string) => Promise<void>;
   acceptSuggestion: (index: number) => Promise<void>;
   ignoreSuggestion: (index: number) => void;
   acceptAllSuggestions: () => Promise<void>;
@@ -169,6 +173,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   expandTargetNodeId: null,
   deepenResult: null,
   aiLoading: false,
+  aiError: null,
   undoStack: [],
   toast: null,
   searchQuery: "",
@@ -600,39 +605,41 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
   },
 
-  expandNode: async (nodeId, instruction, mode = "explore") => {
+  expandNode: async (nodeId, identity, instruction, mode = "explore") => {
     const { currentProject, currentBranch, rootNode } = get();
     if (!currentProject || !rootNode || !findNode(rootNode, nodeId)) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
     const ownedRoot = rootNode;
+    const started=Date.now();
     const generation = ++aiRequestGeneration;
     const active = () => generation === aiRequestGeneration && ownsOperation(owner)
       && ownedRoot.project_id === owner.projectId && Boolean(findNode(ownedRoot, nodeId))
       && Boolean(get().rootNode && findNode(get().rootNode!, nodeId));
-    set({ aiLoading: true, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null, error: null });
+    set({ aiLoading: true, aiError: null, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null, error: null });
     try {
-      const result = await api.expand(nodeId, instruction, undefined, mode);
+      const result = await api.expand(nodeId, instruction, undefined, mode, identity.providerId, identity.revision);
       if (active()) set({ expandSuggestions: result.suggestions, aiLoading: false });
     } catch (e: unknown) {
-      if (active()) set({ error: (e as Error).message, aiLoading: false });
+      if (active()) { const x=e as ApiError; set({ aiError:{code:x.code,status:x.status,requestId:x.requestId,message:x.message,action:"expand",elapsedMs:Date.now()-started}, aiLoading:false }); }
     }
   },
 
-  deepenNode: async (nodeId, instruction) => {
+  deepenNode: async (nodeId, identity, instruction) => {
     const { currentProject, currentBranch, rootNode } = get();
     if (!currentProject || !rootNode || !findNode(rootNode, nodeId)) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
     const ownedRoot = rootNode;
+    const started=Date.now();
     const generation = ++aiRequestGeneration;
     const active = () => generation === aiRequestGeneration && ownsOperation(owner)
       && ownedRoot.project_id === owner.projectId && Boolean(findNode(ownedRoot, nodeId))
       && Boolean(get().rootNode && findNode(get().rootNode!, nodeId));
-    set({ aiLoading: true, deepenResult: null, expandSuggestions: null, expandTargetNodeId: null, error: null });
+    set({ aiLoading: true, aiError: null, deepenResult: null, expandSuggestions: null, expandTargetNodeId: null, error: null });
     try {
-      const result = await api.deepen(nodeId, instruction);
+      const result = await api.deepen(nodeId, instruction, identity.providerId, identity.revision);
       if (active()) set({ deepenResult: { ...result, target_node_id: nodeId }, aiLoading: false });
     } catch (e: unknown) {
-      if (active()) set({ error: (e as Error).message, aiLoading: false });
+      if (active()) { const x=e as ApiError; set({ aiError:{code:x.code,status:x.status,requestId:x.requestId,message:x.message,action:"deepen",elapsedMs:Date.now()-started}, aiLoading:false }); }
     }
   },
 
@@ -885,7 +892,9 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     });
   },
 
+  clearAIError: () => set({ aiError: null }),
+  invalidateAISelection: () => { aiRequestGeneration++; set({ aiLoading:false, aiError:null, expandSuggestions:null, deepenResult:null }); },
   dismissAI: () => {
-    set({ expandSuggestions: null, deepenResult: null });
+    set({ expandSuggestions: null, deepenResult: null, aiError: null });
   },
 }));

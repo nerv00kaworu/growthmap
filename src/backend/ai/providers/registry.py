@@ -50,43 +50,9 @@ def get_provider(config: LLMConfig) -> LLMProvider:
 
 
 async def test_connection(config: LLMConfig) -> dict:
-    """Test if a provider configuration is valid.
-    
-    Returns dict with ok, provider, model, message.
-    Does not expose API keys in the response.
-    """
-    try:
-        provider = get_provider(config)
-        
-        # Get the resolved model name
-        model = config.model or "default"
-        
-        # For mock, just verify it's instantiable
-        if config.provider == "mock":
-            return {
-                "ok": True,
-                "provider": config.provider,
-                "model": model,
-                "message": "Mock provider ready",
-            }
-        
-        # For real providers, try a simple completion in the current async loop.
-        result = await provider.complete(
-            system="你是助理。",
-            user="回覆「OK」一字。",
-            max_tokens=10,
-        )
-        
-        return {
-            "ok": True,
-            "provider": config.provider,
-            "model": model,
-            "message": f"連線成功：{result.strip()[:50]}",
-        }
-    except Exception as e:
-        return {
-            "ok": False,
-            "provider": config.provider or "unknown",
-            "model": config.model or "",
-            "message": f"連線失敗：{str(e)}",
-        }
+    """Execute a minimal completion; failures propagate to the route taxonomy."""
+    provider = get_provider(config)
+    model = config.model or "default"
+    if config.provider == "mock": return {"ok": True, "provider": config.provider, "model": model, "message": "Mock provider ready"}
+    await provider.complete(system="Reply with only OK.", user="Connection test.", model=config.model, max_tokens=10)
+    return {"ok": True, "provider": config.provider, "model": model, "message": "Connection successful"}

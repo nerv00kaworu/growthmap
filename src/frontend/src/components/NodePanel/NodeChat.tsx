@@ -2,7 +2,12 @@
 
 import { useState, useRef, useEffect } from "react";
 import { api } from "@/lib/api";
-import type { GNode } from "@/lib/types";
+import { createNodeChatController,mountNodeChatLifecycle } from "@/lib/node-chat-controller";
+import { runNodeChatSend } from "@/lib/node-chat-runtime";
+import { requestNodeChat } from "@/lib/node-chat-request";
+import type { GNode,ProviderConfig } from "@/lib/types";
+import { providerActionDisabled } from "@/lib/provider-pending";
+import { loadLLMConfig } from "@/lib/llm-provider";
 import { useI18n } from "@/i18n/provider";
 import { msg } from "@/i18n/ui";
 
@@ -24,6 +29,9 @@ export function NodeChat({ selectedNode }: NodeChatProps) {
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevNodeId = useRef<string>(selectedNode.id);
+  const controllerRef=useRef<ReturnType<typeof createNodeChatController>|null>(null);
+  if(!controllerRef.current)controllerRef.current=createNodeChatController(()=>setLoading(false));
+  const controller=controllerRef.current;
 
   // Reset chat when node changes
   useEffect(() => {
@@ -31,31 +39,31 @@ export function NodeChat({ selectedNode }: NodeChatProps) {
       setMessages([]);
       setInput("");
       prevNodeId.current = selectedNode.id;
+      controller.invalidate(selectedNode.id);
+      setLoading(false);
     }
-  }, [selectedNode.id]);
+  }, [selectedNode.id,controller]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+  useEffect(()=>mountNodeChatLifecycle(controller,window,()=>controller.invalidate(selectedNode.id)),[controller,selectedNode.id]);
 
   const ancestorPath = selectedNode.ancestor_path || [];
   const breadcrumb = [...ancestorPath.map((a) => a.title), selectedNode.title].join(" › ");
+  const [profiles,setProfiles]=useState<ProviderConfig[]>([]);
+  useEffect(()=>{api.listProviders().then(setProfiles).catch(()=>setProfiles([]))},[]);
+  const selectedConfig=loadLLMConfig();
+  const selectedProfile=profiles.find(p=>p.id===selectedConfig?.providerId);
+  const chatDisabled=providerActionDisabled(selectedProfile,loading);
 
   const send = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || chatDisabled) return;
     const userMsg: ChatMessage = { role: "user", content: input.trim(), timestamp: Date.now() };
     const history = messages.map((m) => ({ role: m.role, content: m.content }));
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
-    setLoading(true);
-    try {
-      const result = await api.chat(selectedNode.id, userMsg.content, history);
-      setMessages((prev) => [...prev, { role: "assistant", content: result.reply, timestamp: Date.now() }]);
-    } catch (e: unknown) {
-      setMessages((prev) => [...prev, { role: "assistant", content: `❌ ${m("發生錯誤", "发生错误", "An error occurred")}: ${(e as Error).message}`, timestamp: Date.now() }]);
-    } finally {
-      setLoading(false);
-    }
+    await runNodeChatSend({capture:(id)=>controller.capture(id),owns:(owner)=>controller.owns(owner),loading:setLoading,request:(owner)=>requestNodeChat(owner,userMsg.content,history,api.chat),publish:(result)=>setMessages((prev)=>[...prev,{role:"assistant",content:result.reply,timestamp:Date.now()}]),error:(e)=>{const code=(e as {code?:string;message?:string}).code||(e as Error).message;const safe=code==="LLM_PROFILE_CHANGED"?m("AI 設定檔已變更，請重新送出。","AI 配置已更改，请重新发送。","The AI profile changed. Send again."):code==="LOCAL_PROFILE_UNAVAILABLE"?m("請先選擇可用的 AI 設定檔。","请先选择可用的 AI 配置。","Select an available AI profile first."):m("AI 暫時無法回應，請重試。","AI 暂时无法响应，请重试。","AI is temporarily unavailable. Please retry.");setMessages(prev=>[...prev,{role:"assistant",content:`❌ ${safe}`,timestamp:Date.now()}])}},selectedNode.id);
   };
 
   return (
@@ -106,14 +114,14 @@ export function NodeChat({ selectedNode }: NodeChatProps) {
               send();
             }
           }}
-          disabled={loading}
+          disabled={chatDisabled}
           placeholder={m("輸入你的問題… (Enter 發送)", "输入你的问题…（按 Enter 发送）", "Enter your question… (Enter to send)")}
           className="flex-1 bg-gray-800/80 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-blue-500/70 focus:outline-none disabled:opacity-50"
         />
         <button
           type="button"
           onClick={send}
-          disabled={!input.trim() || loading}
+          disabled={!input.trim() || chatDisabled}
           className="px-3 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-sm rounded-lg transition-colors shrink-0"
         >
           {m("發送", "发送", "Send")}

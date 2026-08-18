@@ -1,0 +1,2 @@
+import type {ChatOwner} from "./node-chat-controller";
+export async function runNodeChatSend<T>(deps:{capture(id:string):ChatOwner;owns(o:ChatOwner):boolean;request(owner:ChatOwner):Promise<T>;publish(v:T):void;error(e:unknown):void;loading(v:boolean):void},id:string){const owner=deps.capture(id);deps.loading(true);try{const result=await deps.request(owner);if(deps.owns(owner))deps.publish(result)}catch(e){if(deps.owns(owner))deps.error(e)}finally{if(deps.owns(owner))deps.loading(false)}}

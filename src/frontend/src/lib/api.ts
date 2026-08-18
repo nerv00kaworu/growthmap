@@ -3,13 +3,47 @@ const BASE = typeof window !== "undefined" ? `${window.location.origin}/api` : "
 
 import type { Project, GNode, GrowthMode, Branch, BranchComparison, ProviderConfig, AgentSession, AgentSessionStatus, AgentArtifact, Edge } from "./types";
 import type { Entitlement } from "./entitlement";
-import { loadLLMConfig } from "./llm-provider";
 
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, public readonly code: string | undefined, message: string, public readonly detail?: unknown) {
+  constructor(public readonly status: number, public readonly code: string | undefined, message: string, public readonly detail?: unknown, public readonly requestId?: string) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+export const AI_DIAGNOSTIC_STATUS = {
+  LLM_PROFILE_CHANGED: 409,
+  LLM_CONFIGURATION_ERROR: 400,
+  LLM_AUTH_FAILED: 401,
+  LLM_RATE_LIMITED: 429,
+  LLM_UPSTREAM_ERROR: 502,
+  LLM_INVALID_RESPONSE: 502,
+  LLM_TIMEOUT: 504,
+} as const;
+export type AIDiagnosticCode = keyof typeof AI_DIAGNOSTIC_STATUS;
+const REQUEST_ID = /^[0-9a-f]{16}$/;
+const MAX_AI_ERROR_BODY = 2048;
+const SAFE_AI_FALLBACK_CODE = "LLM_INVALID_RESPONSE";
+const SAFE_AI_FALLBACK_STATUS = 502;
+const SAFE_AI_FALLBACK = "The AI diagnostic response could not be validated.";
+
+export function parseAIError(status: number, text: string): ApiError {
+  if (new TextEncoder().encode(text).byteLength > MAX_AI_ERROR_BODY) return new ApiError(SAFE_AI_FALLBACK_STATUS, SAFE_AI_FALLBACK_CODE, SAFE_AI_FALLBACK);
+  try {
+    const outer = JSON.parse(text) as unknown;
+    if (!outer || typeof outer !== "object" || Array.isArray(outer) || Object.keys(outer).length !== 1 || !("detail" in outer)) throw new Error();
+    const detail = (outer as {detail: unknown}).detail;
+    if (!detail || typeof detail !== "object" || Array.isArray(detail)) throw new Error();
+    const row = detail as Record<string, unknown>;
+    if (Object.keys(row).length !== 3 || !Object.hasOwn(row,"code") || !Object.hasOwn(row,"message") || !Object.hasOwn(row,"request_id")) throw new Error();
+    if (typeof row.code !== "string" || !(row.code in AI_DIAGNOSTIC_STATUS)) throw new Error();
+    const code = row.code as AIDiagnosticCode;
+    if (AI_DIAGNOSTIC_STATUS[code] !== status || typeof row.message !== "string" || row.message.length > 512 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(row.message)) throw new Error();
+    if (typeof row.request_id !== "string" || !REQUEST_ID.test(row.request_id)) throw new Error();
+    return new ApiError(status, code, SAFE_AI_FALLBACK, undefined, row.request_id);
+  } catch {
+    return new ApiError(SAFE_AI_FALLBACK_STATUS, SAFE_AI_FALLBACK_CODE, SAFE_AI_FALLBACK);
   }
 }
 
@@ -18,9 +52,6 @@ function activeLocale(): "zh-TW" | "zh-CN" | "en" {
   try { const value=window.localStorage.getItem("growthmap.locale"); return value === "zh-TW" || value === "zh-CN" ? value : "en"; } catch { return "en"; }
 }
 
-function getProviderId(): string | undefined {
-  return loadLLMConfig()?.providerId || undefined;
-}
 
 export interface AgentPortRecord {
   name: string;
@@ -94,16 +125,18 @@ function remember(value: unknown): void {
 }
 
 
-async function request<T>(path: string, options?: RequestInit, rememberResponse = true): Promise<T> {
+async function request<T>(path: string, options?: RequestInit, rememberResponse = true, aiEnvelope = false): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
   });
   if (!res.ok) {
     const text = await res.text();
+    if (aiEnvelope) throw parseAIError(res.status, text);
     let detail: unknown = text;
     let code: string | undefined;
-    let message = text;
+    let message = `API ${res.status}`;
+    let requestId: string | undefined;
     try {
       const parsed = JSON.parse(text) as { detail?: unknown };
       detail = parsed.detail ?? parsed;
@@ -111,9 +144,10 @@ async function request<T>(path: string, options?: RequestInit, rememberResponse 
         const row = detail as Record<string, unknown>;
         code = typeof row.code === "string" ? row.code : undefined;
         if (typeof row.message === "string") message = row.message;
+        requestId = typeof row.request_id === "string" ? row.request_id : undefined;
       }
     } catch { /* retain plain-text response */ }
-    throw new ApiError(res.status, code, message || `API ${res.status}`, detail);
+    throw new ApiError(res.status, code, message || `API ${res.status}`, detail, requestId);
   }
   if (res.status === 204) return undefined as T;
   const value = await res.json() as T;
@@ -151,13 +185,19 @@ function blockExpected(blockId: string) {
   reviewAgentProposal: (id:string, decision:"approve"|"reject", review_note="") => request<Record<string, unknown>>(`/agent-port/proposals/${id}/${decision}`, {method:"POST",body:JSON.stringify({review_note})}),
   // Server-side provider profiles. API keys remain in local environment variables.
   listProviders: () => request<ProviderConfig[]>("/providers"),
-  createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at">) =>
+  createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">) =>
     request<ProviderConfig>("/providers", { method: "POST", body: JSON.stringify(data) }),
-  updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at">>) =>
+  updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">>) =>
     request<ProviderConfig>(`/providers/${providerId}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateProviderModel: (providerId: string, modelName: string) =>
+    request<ProviderConfig>(`/providers/${providerId}/model`, { method: "PATCH", body: JSON.stringify({model_name:modelName}) }),
   deleteProvider: (providerId: string) => request<void>(`/providers/${providerId}`, { method: "DELETE" }),
   writeProviderSecret: (providerId: string, apiKey: string) =>
     request<void>(`/providers/${providerId}/secret`, { method: "PUT", body: JSON.stringify({ api_key: apiKey }) }),
+  recoverProviderSecret: (providerId:string, revision:number, operation:"set"|"delete", apiKey?:string) =>
+    request<void>(`/providers/${providerId}/secret/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(apiKey===undefined?{}:{api_key:apiKey})})}),
+  recoverDesktopSecret: (providerId:string, revision:number, operation:"set"|"delete", apiKey?:string) =>
+    request<void>(`/desktop/secrets/${providerId}/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(apiKey===undefined?{}:{api_key:apiKey})})}),
 
   // Manual agent-session workflow. This records work only; it never dispatches an LLM or external agent.
   listAgentSessions: (projectId: string, status?: AgentSessionStatus) =>
@@ -244,37 +284,37 @@ function blockExpected(blockId: string) {
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/nodes/${nodeId}/history`),
 
   // AI operations
-  expand: (nodeId: string, instruction?: string, count?: number, mode: GrowthMode = "explore") =>
+  expand: (nodeId: string, instruction: string | undefined, count: number | undefined, mode: GrowthMode, providerId: string, providerRevision: number) =>
     request<{
       suggestions: { title: string; summary: string; node_type: string }[];
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: getProviderId(), locale: activeLocale() }),
-    }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+    }, true, true),
 
-  deepen: (nodeId: string, instruction?: string) =>
+  deepen: (nodeId: string, instruction: string | undefined, providerId: string, providerRevision: number) =>
     request<{
       enriched_summary: string;
       content_blocks: { title: string; body: string; block_type: string }[];
       context_used: Record<string, unknown>;
     }>("/ai/deepen", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: getProviderId(), locale: activeLocale() }),
-    }),
+      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+    }, true, true),
 
-  chat: (nodeId: string, message: string, history: { role: string; content: string }[]) =>
+  chat: (nodeId: string, message: string, history: { role: string; content: string }[], providerId: string, providerRevision: number) =>
     request<{ reply: string; context_used: Record<string, unknown> }>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: getProviderId(), locale: activeLocale() }),
-    }),
+      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+    }, true, true),
 
   // Test LLM connection
-  testConnection: (providerId: string) =>
-    request<{ ok: boolean; provider: string; model?: string; message: string }>("/ai/test-connection", {
+  testConnection: (providerId: string, providerRevision: number) =>
+    request<{ ok: true; provider: string; model?: string; message: string; code: string; request_id: string; elapsed_ms: number }>("/ai/test-connection", {
       method: "POST",
-      body: JSON.stringify({ provider_id: providerId }),
-    }),
+      body: JSON.stringify({ provider_id: providerId, provider_revision: providerRevision }),
+    }, true, true),
 
   // Spec export (returns text)
   exportSpec: async (projectId: string): Promise<string> => {
