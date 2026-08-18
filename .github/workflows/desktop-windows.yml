@@ -181,8 +181,9 @@ jobs:
         shell: pwsh
         run: |
           $exe = Resolve-Path desktop/dist/win-unpacked/GrowthMap.exe
-          $profile = Join-Path $env:RUNNER_TEMP 'growthmap-final-main-smoke'
-          New-Item $profile -ItemType Directory -Force | Out-Null
+          $profile = Join-Path $env:LOCALAPPDATA "growthmap-final-main-smoke-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path $profile) { throw 'Final package smoke profile already exists' }
+          New-Item $profile -ItemType Directory | Out-Null
           $legacyDb = Join-Path $profile 'growthmap.db'
           @'
           import sqlite3,sys
@@ -222,6 +223,7 @@ jobs:
           if ((Get-FileHash $legacyDb -Algorithm SHA256).Hash -ne $beforeHash -or (Get-Item $legacyDb).Length -ne $beforeSize -or (Get-Item $legacyDb).LastWriteTimeUtc -ne $beforeTime) { throw 'Read-only legacy DB changed during final package UI smoke' }
           $stderr = if (Test-Path $err) { Get-Content $err -Raw } else { '' }
           if ($stderr -match 'Internal Server Error|no such column|OperationalError') { throw "Final package could not render legacy DB data: $stderr" }
+          Remove-Item $profile -Recurse -Force
       - name: Verify final production resources and normal sidecar smoke
         shell: pwsh
         run: ./.github/workflows/scripts/verify-windows-package.ps1
