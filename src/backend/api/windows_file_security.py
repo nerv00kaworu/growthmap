@@ -31,9 +31,19 @@ $trusted=@($me.Value,'S-1-5-18','S-1-5-32-544')
 if($q.action -eq 'private') {
  $i=Get-Item -LiteralPath $q.path -Force
  if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
- $a=if($i.PSIsContainer){New-Object Security.AccessControl.DirectorySecurity}else{New-Object Security.AccessControl.FileSecurity}
+ $a=Get-Acl -LiteralPath $q.path
+ try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
+ # A newly-created app-owned child must already belong to the explicit trust
+ # boundary. Do not rewrite a trusted owner: hosted runners intentionally lack
+ # the SeRestorePrivilege that SetOwner can require. Foreign owners still fail.
+ if($ownerSid -notin $trusted){throw 'owner'}
  $inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
- $a.SetAccessRuleProtection($true,$false);$a.SetOwner($me)
+ $a.SetAccessRuleProtection($true,$false)
+ $seen=@{}
+ foreach($r in @($a.Access)){
+  try{$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier])}catch{throw 'ace-translation'}
+  if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}
+ }
  foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
  Set-Acl -LiteralPath $q.path -AclObject $a
  @{ok=$true}|ConvertTo-Json -Compress;exit
@@ -47,7 +57,7 @@ foreach($e in $q.entries){
  if(($e.kind -eq 'dir' -and !$i.PSIsContainer) -or ($e.kind -eq 'file' -and $i.PSIsContainer)){throw 'kind'}
  $a=Get-Acl -LiteralPath $p
  try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
- if(($e.container -and $ownerSid -notin $trusted) -or (!$e.container -and $ownerSid -ne $me.Value)){throw 'owner'}
+ if($ownerSid -notin $trusted){throw 'owner'}
  foreach($r in $a.Access){
   try{$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value}catch{throw 'ace-translation'}
   $rights=[Int64]$r.FileSystemRights;$bad=(($rights-band $danger)-ne 0)-or(($rights-band $genericWrite)-ne 0)-or(($rights-band $genericAll)-ne 0)
