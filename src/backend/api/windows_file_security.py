@@ -35,7 +35,7 @@ if($q.action -eq 'private') {
  try{
   $i=Get-Item -LiteralPath $q.path -Force
   if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
-  $stage='acl';$a=Get-Acl -LiteralPath $q.path
+  $stage='acl';$a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
   $stage='owner';try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
   if($ownerSid -notin $trusted){throw 'owner'}
   $inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None}
@@ -61,7 +61,7 @@ foreach($e in $q.entries){
  $p=[string]$e.path;$i=Get-Item -LiteralPath $p -Force
  if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'}
  if(($e.kind -eq 'dir' -and !$i.PSIsContainer) -or ($e.kind -eq 'file' -and $i.PSIsContainer)){throw 'kind'}
- $a=Get-Acl -LiteralPath $p
+ $a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)
  try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{try{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value}catch{throw 'owner-translation'}}
  if($ownerSid -notin $trusted){throw 'owner'}
  foreach($r in $a.Access){
