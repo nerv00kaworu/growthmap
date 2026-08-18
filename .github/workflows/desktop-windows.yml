@@ -44,12 +44,44 @@ jobs:
       # Production Authority custody and deployment rails require fcntl, dirfd,
       # /proc, Unix ownership/modes, bash and systemd. Ubuntu CI runs the full
       # unfiltered backend suite; Windows keeps every cross-platform sidecar test.
+      - name: Declare job-owned Windows backend database root
+        shell: pwsh
+        run: |
+          $nonce = [Guid]::NewGuid().ToString('N')
+          $root = Join-Path $env:RUNNER_TEMP ("growthmap-backend-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$nonce")
+          $marker = "$root.owner"
+          if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $marker)) { throw "Windows backend ownership paths already exist" }
+          "GROWTHMAP_WINDOWS_BACKEND_ROOT=$root" >> $env:GITHUB_ENV
+          "GROWTHMAP_WINDOWS_BACKEND_MARKER=$marker" >> $env:GITHUB_ENV
+          "GROWTHMAP_WINDOWS_BACKEND_PROOF=$env:GITHUB_RUN_ID/$env:GITHUB_RUN_ATTEMPT/$nonce/$root" >> $env:GITHUB_ENV
+          "GROWTHMAP_WINDOWS_DATABASE_URL=sqlite+aiosqlite:///$($root -replace '\\','/')/windows-ci-test.db" >> $env:GITHUB_ENV
+      - name: Create job-owned private Windows backend database root
+        shell: pwsh
+        run: |
+          New-Item -ItemType File -Path $env:GROWTHMAP_WINDOWS_BACKEND_MARKER -Value $env:GROWTHMAP_WINDOWS_BACKEND_PROOF | Out-Null
+          New-Item -ItemType Directory -Path $env:GROWTHMAP_WINDOWS_BACKEND_ROOT | Out-Null
+          $env:PYTHONPATH = 'src/backend'
+          python -c "from pathlib import Path; from api.windows_file_security import apply_private,verify; p=Path(r'$env:GROWTHMAP_WINDOWS_BACKEND_ROOT'); apply_private(p); verify(p,kind='dir')"
       - name: Cross-platform backend contracts (exclude POSIX custody and deployment rails)
         run: python -m pytest -q --ignore=tests/test_authority_composition.py --ignore=tests/test_authority_service.py --ignore=tests/test_pem_signer_hardening.py --ignore=tests/test_r14_deployment_contract.py --ignore=tests/test_r15_deployment_contract.py --ignore=tests/test_r16_deployment_contract.py --ignore=tests/test_r17_deployment_contract.py --ignore=tests/test_r18_deployment_contract.py --ignore=tests/test_r19_deployment_contract.py --ignore=tests/test_r20_deployment_contract.py --ignore=tests/test_r21_deployment_contract.py --ignore=tests/test_r22_deployment_contract.py --ignore=tests/test_r23_deployment_contract.py --ignore=tests/test_r24_deployment_contract.py --ignore=tests/test_security_remediation.py
         working-directory: src/backend
         env:
           PYTHONPATH: ../..
-          DATABASE_URL: sqlite+aiosqlite:///./windows-ci-test.db
+          DATABASE_URL: ${{ env.GROWTHMAP_WINDOWS_DATABASE_URL }}
+      - name: Delete job-owned private Windows backend database root
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:GROWTHMAP_WINDOWS_BACKEND_ROOT
+          $marker = $env:GROWTHMAP_WINDOWS_BACKEND_MARKER
+          $owned = $marker -and (Test-Path -LiteralPath $marker -PathType Leaf) -and ((Get-Content -LiteralPath $marker -Raw).Trim() -eq $env:GROWTHMAP_WINDOWS_BACKEND_PROOF)
+          if ($owned) {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+            Remove-Item -LiteralPath $marker -Force
+          }
+          if ($root -and ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $marker))) {
+            throw "Windows backend private-root cleanup left residual state: $root"
+          }
       - name: POSIX backend rails remain covered by the Linux full-suite gate
         shell: pwsh
         run: |

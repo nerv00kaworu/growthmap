@@ -7,9 +7,36 @@ from fastapi.testclient import TestClient
 class R18GlobalAgentAccess(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
-  cls.tmp=tempfile.TemporaryDirectory();os.environ['DATABASE_URL']=f"sqlite+aiosqlite:///{cls.tmp.name}/r18.db";os.environ['APP_ENV']='test';os.environ['GROWTHMAP_HUMAN_CONTROL_TOKEN']='r18-human';sys.path.insert(0,str(Path(__file__).parents[1]));import main;cls.client=TestClient(main.app);cls.client.__enter__();cls.human={'Authorization':'Bearer r18-human'}
+  keys=('DATABASE_URL','APP_ENV','GROWTHMAP_HUMAN_CONTROL_TOKEN');cls.old_env={k:(k in os.environ,os.environ.get(k)) for k in keys};cls.tmp=None;cls.client=None
+  try:
+   cls.tmp=tempfile.TemporaryDirectory();url=f"sqlite+aiosqlite:///{cls.tmp.name}/r18.db";os.environ['DATABASE_URL']=url;os.environ['APP_ENV']='test';os.environ['GROWTHMAP_HUMAN_CONTROL_TOKEN']='r18-human';sys.path.insert(0,str(Path(__file__).parents[1]));import main;from tests.database_harness import rebind_database;rebind_database(url);cls.client=TestClient(main.app);cls.client.__enter__();cls.human={'Authorization':'Bearer r18-human'}
+  except BaseException as primary:
+   try:cls._cleanup()
+   except BaseException as cleanup:
+    raise BaseExceptionGroup('R18 setup and cleanup failures',[primary,cleanup])
+   raise
  @classmethod
- def tearDownClass(cls):cls.client.__exit__(None,None,None);cls.tmp.cleanup()
+ def _cleanup(cls):
+  errors=[]
+  try:
+   if cls.client is not None:
+    try:cls.client.__exit__(None,None,None)
+    except BaseException as exc:errors.append(exc)
+    finally:cls.client=None
+   if cls.tmp is not None:
+    try:
+     from tests.database_harness import dispose_database;dispose_database()
+    except BaseException as exc:errors.append(exc)
+    try:cls.tmp.cleanup()
+    except BaseException as exc:errors.append(exc)
+    finally:cls.tmp=None
+  finally:
+   for key,(present,value) in cls.old_env.items():
+    if present:os.environ[key]=value
+    else:os.environ.pop(key,None)
+  if errors:raise BaseExceptionGroup('R18 cleanup failures',errors)
+ @classmethod
+ def tearDownClass(cls):cls._cleanup()
  def project(self,name):return self.client.post('/api/projects',json={'name':name}).json()
  def workspace(self,mode,persistent=True,expires_at=None):
   body={'workspace_scope':'workspace','mode':mode,'persistent':persistent,'expires_at':expires_at,'label':'R18 test','agent_identity':'test'}

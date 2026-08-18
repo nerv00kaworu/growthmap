@@ -64,7 +64,8 @@ def test_version_one_with_compatibility_surface_still_requires_version_advanceme
  c.execute('CREATE TABLE branches(id TEXT PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 1)')
  c.execute("ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36)");c.execute("ALTER TABLE nodes ADD COLUMN workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft'");c.execute("ALTER TABLE nodes ADD COLUMN file_paths JSON DEFAULT '[]'");c.execute("ALTER TABLE provider_configs ADD COLUMN secret_env_key VARCHAR(128) DEFAULT ''")
  c.execute("ALTER TABLE edges ADD COLUMN is_mainline BOOLEAN DEFAULT 0");c.execute("ALTER TABLE edges ADD COLUMN weight FLOAT DEFAULT 1.0");c.execute("ALTER TABLE edges ADD COLUMN note TEXT DEFAULT ''")
- for sql in (__import__('db.migrations',fromlist=['INDEX_SQL']).INDEX_SQL,*__import__('db.migrations',fromlist=['TRIGGERS']).TRIGGERS.values()):c.execute(sql)
+ contract=__import__('db.schema_contract',fromlist=['INDEX_SQL','TRIGGERS'])
+ for sql in (contract.INDEX_SQL,*contract.TRIGGERS.values()):c.execute(sql)
  c.execute('PRAGMA user_version=1');c.close()
  status=dm.schema_status(p);assert status['migrationNeeded'] is True and 'user_version:1' in status['reasons']
 
@@ -83,7 +84,8 @@ def _make_current(path):
   except sqlite3.OperationalError as error:
    if 'duplicate column' not in str(error):raise
  contract=__import__('db.schema_contract',fromlist=['OBJECT_SQL'])
- for sql in contract.OBJECT_SQL.values():
+ for name,sql in contract.OBJECT_SQL.items():
+  if name=='ux_agent_grants_one_active_workspace' and not c.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='agent_grants'").fetchone():continue
   try:c.execute(sql)
   except sqlite3.OperationalError as error:
    if 'already exists' not in str(error):raise

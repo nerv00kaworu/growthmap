@@ -3,10 +3,17 @@ import os,tempfile
 from datetime import datetime,timedelta,timezone
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("DATABASE_URL",f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/agent-union.db")
+os.environ["DATABASE_URL"]=f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/agent-union.db"
 os.environ.setdefault("APP_ENV","test")
-os.environ.setdefault("GROWTHMAP_HUMAN_CONTROL_TOKEN","human-test")
+os.environ["GROWTHMAP_HUMAN_CONTROL_TOKEN"]="human-test"
 from main import app
+
+_state=None
+def setup_module():
+ global _state
+ from tests.r4_harness import setup_r4;_state=setup_r4('agent-union')
+def teardown_module():
+ from tests.r4_harness import teardown_r4;teardown_r4(_state)
 
 H={"Authorization":"Bearer human-test"}
 def setup(c):

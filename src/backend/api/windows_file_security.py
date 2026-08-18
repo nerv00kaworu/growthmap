@@ -85,18 +85,33 @@ def apply_private(path: Path) -> None:
         raise RuntimeError("Windows private ACL initialization failed")
 
 
+def verify_many(entries: list[tuple[Path, str, bool]]) -> list[tuple[int, int]]:
+    """Verify an ordered set in one native policy process.
+
+    Repeated entries are intentional TOCTOU sentinels. Batching avoids multiple
+    PowerShell startups without weakening any owner/DACL/identity check.
+    """
+    request = [{"path": str(path), "kind": kind, "container": container}
+               for path, kind, container in entries]
+    rows = _run({"action": "verify", "entries": request}).get("entries")
+    if not isinstance(rows, list) or len(rows) != len(request):
+        raise RuntimeError("Windows provider-lock identity unavailable")
+    identities = []
+    for expected, row in zip(request, rows):
+        if not isinstance(row, dict) or row.get("path") != expected["path"]:
+            raise RuntimeError("Windows provider-lock identity unavailable")
+        text = row.get("identity")
+        if not isinstance(text, str) or len(text) != 25 or text[8] != ":":
+            raise RuntimeError("Windows provider-lock identity unavailable")
+        try:
+            identities.append((int(text[:8], 16), int(text[9:], 16)))
+        except ValueError as exc:
+            raise RuntimeError("Windows provider-lock identity unavailable") from exc
+    return identities
+
+
 def verify(path: Path, *, kind: str, container: bool = False) -> tuple[int, int]:
-    value = _run({"action": "verify", "entries": [{"path": str(path), "kind": kind, "container": container}]})
-    rows = value.get("entries")
-    if not isinstance(rows, list) or len(rows) != 1 or rows[0].get("path") != str(path):
-        raise RuntimeError("Windows provider-lock identity unavailable")
-    text = rows[0].get("identity")
-    if not isinstance(text, str) or len(text) != 25 or text[8] != ":":
-        raise RuntimeError("Windows provider-lock identity unavailable")
-    try:
-        return int(text[:8], 16), int(text[9:], 16)
-    except ValueError as exc:
-        raise RuntimeError("Windows provider-lock identity unavailable") from exc
+    return verify_many([(path, kind, container)])[0]
 
 
 class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):

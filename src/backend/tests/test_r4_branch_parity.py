@@ -6,19 +6,26 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-os.environ.setdefault("DATABASE_URL",f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/branch-parity.db")
+os.environ["DATABASE_URL"]=f"sqlite+aiosqlite:///{tempfile.mkdtemp()}/branch-parity.db"
 os.environ.setdefault("APP_ENV","test")
-os.environ.setdefault("GROWTHMAP_HUMAN_CONTROL_TOKEN","human-test")
+os.environ["GROWTHMAP_HUMAN_CONTROL_TOKEN"]="human-test"
 from main import app
-from db.database import async_session
+import db.database as database
 from models.models import ActionLog,AgentGrant,AgentProposal,AgentReceipt,Branch,ContentBlock,Edge,Node,Project
+
+_state=None
+def setup_module():
+ global _state
+ from tests.r4_harness import setup_r4;_state=setup_r4('branch-parity')
+def teardown_module():
+ from tests.r4_harness import teardown_r4;teardown_r4(_state)
 
 H={"Authorization":"Bearer human-test"}
 SEMANTIC=("title","summary","node_type","status","maturity","priority","confidence","description","rules_text","constraints_text","examples_text","questions_text","decision_notes","tags","workflow_status","file_paths","position_x","position_y","last_edited_by")
 
 def arun(fn): return asyncio.run(fn())
 async def seed(project_id,root_id,label):
- async with async_session() as db:
+ async with database.async_session() as db:
   root=await db.get(Node,root_id)
   values=dict(title=f"{label}-root",summary="sum",node_type="decision",status="blocked",maturity="stable",priority=9,confidence=.87,description="desc",rules_text="rules",constraints_text="constraints",examples_text="examples",questions_text="questions",decision_notes="notes",tags=["z",{"nested":True}],workflow_status="approved",file_paths=["src/a.py"],position_x=12.5,position_y=-4,last_edited_by="editor-root")
   for k,v in values.items():setattr(root,k,deepcopy(v))
@@ -36,7 +43,7 @@ async def seed(project_id,root_id,label):
   ]);await db.commit()
   return child.id,grand.id,outside.id
 async def snapshot(project_id,branch_id=None):
- async with async_session() as db:
+ async with database.async_session() as db:
   p=await db.get(Project,project_id)
   q=select(Node).where(Node.project_id==project_id)
   if branch_id is None:q=q.where(Node.branch_id.is_(None))
@@ -92,7 +99,7 @@ def test_proposal_approval_accepts_persistent_null_and_finite_future_and_is_idem
    g=c.post('/api/agent-port/grants',headers=H,json=grant_body);assert g.status_code==201,g.text
    if mode=='finite-naive':
     async def make_naive():
-     async with async_session() as db:
+     async with database.async_session() as db:
       row=await db.get(AgentGrant,g.json()['id']);row.expires_at=(datetime.now()+timedelta(hours=1));await db.commit()
     arun(make_naive)
    made=c.post('/agent/v1/proposals',headers={'Authorization':'Bearer '+g.json()['token']},json={'idempotency_key':'approve-'+mode,'expected_project_revision':1,'target_node_id':p['root_node_id'],'title':mode,'operations':[{'op':'create_branch','source_node_id':p['root_node_id'],'expected_source_revision':1,'name':'QA-ALPHA-TEST'}]});assert made.status_code==201,made.text
@@ -109,7 +116,7 @@ def test_proposal_approval_rejects_invalid_grant_states_stably():
    p=c.post('/api/projects',json={'name':'reject-'+state}).json();g=grant(c,p['id'],'propose')
    made=c.post('/agent/v1/proposals',headers={'Authorization':'Bearer '+g['token']},json={'idempotency_key':'reject-'+state,'expected_project_revision':1,'target_node_id':p['root_node_id'],'title':state,'operations':[{'op':'create_branch','source_node_id':p['root_node_id'],'expected_source_revision':1,'name':state}]});assert made.status_code==201,made.text
    async def poison():
-    async with async_session() as db:
+    async with database.async_session() as db:
      row=await db.get(AgentGrant,g['id'])
      if state=='finite-null':row.expires_at=None
      elif state=='expired':row.expires_at=datetime.now(timezone.utc)-timedelta(minutes=1)
@@ -121,7 +128,7 @@ def test_proposal_approval_rejects_invalid_grant_states_stably():
    assert response.status_code==409,response.text;assert response.json()['detail']['code']=='GRANT_INACTIVE'
    project,nodes,blocks,edges,branches=arun(lambda:snapshot(p['id']));assert project.revision==1 and not branches
    async def status():
-    async with async_session() as db:return (await db.get(AgentProposal,made.json()['proposal_id'])).status
+    async with database.async_session() as db:return (await db.get(AgentProposal,made.json()['proposal_id'])).status
    assert arun(status)=='pending'
 
 
@@ -133,7 +140,7 @@ def test_proposal_branch_copy_receipt_and_forced_failure_are_atomic(monkeypatch)
   approved=c.post(f"/api/agent-port/proposals/{made.json()['proposal_id']}/approve",headers=H,json={});assert approved.status_code==200,approved.text
   good_bid=approved.json()['receipt']['results'][0]['id'];copied=arun(lambda:snapshot(p['id'],good_bid));assert len(copied[1:4])==3 and [len(x) for x in copied[1:4]]==[3,3,2]
   async def good_state():
-   async with async_session() as db:return await db.get(AgentProposal,made.json()['proposal_id']),await db.scalar(select(func.count()).select_from(AgentReceipt).where(AgentReceipt.project_id==p['id']))
+   async with database.async_session() as db:return await db.get(AgentProposal,made.json()['proposal_id']),await db.scalar(select(func.count()).select_from(AgentReceipt).where(AgentReceipt.project_id==p['id']))
   proposal,receipts=arun(good_state);assert proposal.status=='approved' and receipts==2  # proposal-store + approval
 
   # New project preserves expected rev=1 and isolates exact rollback counts.
@@ -153,7 +160,7 @@ def test_proposal_branch_copy_receipt_and_forced_failure_are_atomic(monkeypatch)
   monkeypatch.setattr(AsyncSession,'flush',fail_after_tree_staged)
   failed=c.post(f"/api/agent-port/proposals/{made.json()['proposal_id']}/approve",headers=H,json={});assert failed.status_code==409,failed.text
   async def failed_state():
-   async with async_session() as db:
+   async with database.async_session() as db:
     project=await db.get(Project,p2['id']);proposal=await db.get(AgentProposal,made.json()['proposal_id']);branches=await db.scalar(select(func.count()).select_from(Branch).where(Branch.project_id==p2['id']));receipts=await db.scalar(select(func.count()).select_from(AgentReceipt).where(AgentReceipt.project_id==p2['id'],AgentReceipt.action_type=='batch'));logs=await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.project_id==p2['id'],ActionLog.action_type=='agent_batch_applied'));nodes=await db.scalar(select(func.count()).select_from(Node).where(Node.project_id==p2['id'],Node.branch_id.is_not(None)));return project.revision,proposal.status,branches,receipts,logs,nodes
   assert arun(failed_state)==(1,'pending',0,0,0,0)
 
@@ -170,7 +177,7 @@ def test_independent_create_branch_races_have_one_atomic_tree_and_no_loser_artif
   assert agent_response.status_code in (200,409) and gui_response.status_code in (201,409),[(r.status_code,r.text) for r in responses]
   assert sum(r.status_code==409 for r in responses)==1,[(r.status_code,r.text) for r in responses]
   async def race_state(pid):
-   async with async_session() as db:
+   async with database.async_session() as db:
     project=await db.get(Project,pid);branches=(await db.execute(select(Branch).where(Branch.project_id==pid))).scalars().all();bids={b.id for b in branches};nodes=(await db.execute(select(Node).where(Node.branch_id.in_(bids)))).scalars().all() if bids else [];receipts=(await db.execute(select(AgentReceipt).where(AgentReceipt.project_id==pid,AgentReceipt.action_type=='batch'))).scalars().all();logs=(await db.execute(select(ActionLog).where(ActionLog.project_id==pid,ActionLog.action_type.in_(['create_branch','agent_batch_applied'])))).scalars().all();source=await db.get(Node,p['root_node_id']);return project.revision,branches,nodes,receipts,logs,source.revision
   rev,branches,nodes,receipts,logs,source_rev=arun(lambda:race_state(p['id']));assert rev==2 and len(branches)==1 and len(nodes)==3 and source_rev==1 and len(logs)==1
   assert len(receipts)==(1 if agent_response.status_code==200 else 0)
@@ -191,6 +198,6 @@ def test_same_key_concurrent_branch_replay_has_one_receipt_and_tree():
   with ThreadPoolExecutor(max_workers=2) as pool:a=pool.submit(writer);b=pool.submit(writer);responses=[a.result(),b.result()]
   assert [r.status_code for r in responses]==[200,200] and responses[0].json()==responses[1].json()
   async def counts():
-   async with async_session() as db:
+   async with database.async_session() as db:
     project=await db.get(Project,p['id']);branches=(await db.execute(select(Branch).where(Branch.project_id==p['id']))).scalars().all();nodes=await db.scalar(select(func.count()).select_from(Node).where(Node.branch_id==branches[0].id));blocks=await db.scalar(select(func.count()).select_from(ContentBlock).join(Node,ContentBlock.node_id==Node.id).where(Node.branch_id==branches[0].id));edges=await db.scalar(select(func.count()).select_from(Edge).where(Edge.project_id==p['id'],Edge.from_node_id.in_(select(Node.id).where(Node.branch_id==branches[0].id))));receipts=await db.scalar(select(func.count()).select_from(AgentReceipt).where(AgentReceipt.project_id==p['id'],AgentReceipt.action_type=='batch'));logs=await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.project_id==p['id'],ActionLog.action_type=='agent_batch_applied'));source=await db.get(Node,p['root_node_id']);return project.revision,len(branches),nodes,blocks,edges,receipts,logs,source.revision
   assert arun(counts)==(2,1,3,3,2,1,1,1)

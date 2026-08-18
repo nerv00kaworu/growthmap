@@ -33,8 +33,11 @@ def _child(db_url, provider_id, revision, operation, recorder, start, result, cu
                 await recover_external_secret(session,provider,revision,record,after_claim=after_claim,after_mutate=after_mutate)
                 result.put(("ok",None))
             except BaseException as e:
-                result.put(("error",getattr(e,"status_code",type(e).__name__)))
-    asyncio.run(run())
+                result.put(("error",getattr(e,"status_code",type(e).__name__),str(e)))
+    try: asyncio.run(run())
+    except BaseException as error:
+        try: result.put(("child-error",type(error).__name__,str(error)))
+        finally: raise
 
 
 def _db(tmp_path):
@@ -54,7 +57,15 @@ def _run(tmp_path, operations, cuts=None, failures=None, spellings=None):
     for operation,cut,failure,url in zip(operations,cuts,failures,urls):
         p=ctx.Process(target=_child,args=(url,"provider",2,operation,str(recorder),start,result,cut,failure.get("store",False),failure.get("finalize",False)));p.start();children.append(p)
     start.set()
-    for p in children:p.join(15);assert not p.is_alive()
+    deadline=time.monotonic()+60
+    try:
+        for p in children:
+            p.join(max(0,deadline-time.monotonic()))
+            assert not p.is_alive(),f"provider recovery child {p.pid} exceeded measured custody bound"
+    finally:
+        for p in children:
+            if p.is_alive():p.terminate()
+        for p in children:p.join(5)
     outcomes=[]
     while not result.empty():outcomes.append(result.get())
     records=[json.loads(x) for x in recorder.read_text().splitlines()] if recorder.exists() else []
@@ -64,7 +75,8 @@ def _run(tmp_path, operations, cuts=None, failures=None, spellings=None):
 def test_two_process_same_revision_has_one_external_winner_and_stale_loser(tmp_path,operation):
     db,_,outcomes,records=_run(tmp_path,[operation,operation])
     assert sorted(x[0] for x in outcomes)==["error","ok"]
-    assert [x[1] for x in outcomes if x[0]=="error"]==[409]
+    errors=[x for x in outcomes if x[0]=="error"]
+    assert [x[1] for x in errors]==[409],errors
     assert records==[{"operation":operation,"revision":2,"provider":"provider"}]
     assert _state(db)==(2,0,None)
 
