@@ -48,7 +48,11 @@ jobs:
         shell: pwsh
         run: |
           $nonce = [Guid]::NewGuid().ToString('N')
-          $root = Join-Path $env:RUNNER_TEMP ("growthmap-backend-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$nonce")
+          # Hosted runner D: work/temp volumes can reject Set-Acl even though the
+          # same policy is supported on the current user's local NTFS profile.
+          $privateBase = Join-Path $env:LOCALAPPDATA 'Temp'
+          if (-not $env:LOCALAPPDATA -or -not (Test-Path -LiteralPath $privateBase -PathType Container)) { throw 'Current-user Windows local temp root is unavailable' }
+          $root = Join-Path $privateBase ("growthmap-backend-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$nonce")
           $marker = "$root.owner"
           if ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $marker)) { throw "Windows backend ownership paths already exist" }
           "GROWTHMAP_WINDOWS_BACKEND_ROOT=$root" >> $env:GITHUB_ENV
