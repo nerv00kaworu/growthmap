@@ -1,10 +1,10 @@
 """Offline SQLite maintenance used by the packaged desktop sidecar."""
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
-CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
+CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","provider_selection","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
 # These are the accepted immutable Abyss/gameplay extension schemas already
 # present in canonical GrowthMap databases. Exact column sets prevent a table
 # name alone from bypassing the desktop hostile-schema gate.
@@ -88,6 +88,9 @@ def _validate_connection(connection,source):
    if expected is not None:
     actual={row[1] for row in connection.execute(f'PRAGMA table_info("{name}")')}
     if actual!=expected: raise ValueError("database contains an incompatible extension table")
+   if name=="provider_selection":
+    problem=provider_selection_contract_problem(connection.execute('PRAGMA table_info("provider_selection")').fetchall(),connection.execute('PRAGMA foreign_key_list("provider_selection")').fetchall(),sql)
+    if problem is not None: raise ValueError("database contains an incompatible provider selection authority")
    continue
   if kind=="index" and ALLOWED_INDEX_TABLES.get(name)==table: continue
   if kind=="trigger" and ALLOWED_TRIGGER_TABLES.get(name)==table: continue
@@ -97,6 +100,9 @@ def _validate_connection(connection,source):
  quick=connection.execute("PRAGMA quick_check").fetchall()
  if quick!=[("ok",)]: raise ValueError("SQLite quick check failed")
  if connection.execute("PRAGMA foreign_key_check").fetchall(): raise ValueError("foreign key check failed")
+ if connection.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='provider_selection'").fetchone():
+  rows=connection.execute("SELECT singleton_id,provider_id,selection_revision FROM provider_selection").fetchall()
+  if rows!=[(1,None,1)] and (len(rows)!=1 or rows[0][0]!=1 or not isinstance(rows[0][2],int) or rows[0][2]<1 or rows[0][2]>9007199254740991): raise ValueError("database contains an invalid provider selection authority row")
  version=int(connection.execute("PRAGMA user_version").fetchone()[0])
  if version>CURRENT_USER_VERSION: raise ValueError("database schema is newer than this application")
  for table,columns in REQUIRED.items():

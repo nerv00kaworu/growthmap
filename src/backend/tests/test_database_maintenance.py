@@ -23,6 +23,18 @@ def test_rejects_trigger_view_and_oversize(tmp_path,monkeypatch):
  p=tmp_path/'large.db';fixture(p);monkeypatch.setattr(dm,'MAX_BYTES',100)
  with pytest.raises(ValueError,match='size'):dm.validate(p)
 
+def test_provider_selection_authority_is_exactly_allowlisted(tmp_path):
+ import subprocess,sys
+ script=Path(__file__).parents[3]/'desktop/scripts/create-e2e-fixture.py'
+ canonical=tmp_path/'fixture-canonical.db';subprocess.run([sys.executable,str(script),str(canonical)],check=True,capture_output=True)
+ assert dm.validate(canonical)['valid'] is True
+ malformed=tmp_path/'fixture-malformed.db';subprocess.run([sys.executable,str(script),str(malformed)],check=True,capture_output=True)
+ c=sqlite3.connect(malformed);c.execute('DROP TABLE provider_selection');c.execute('CREATE TABLE provider_selection(singleton_id INTEGER PRIMARY KEY,provider_id TEXT,selection_revision INTEGER,updated_at TEXT)');c.execute("INSERT INTO provider_selection VALUES(2,NULL,0,CURRENT_TIMESTAMP)");c.commit();c.close()
+ with pytest.raises(ValueError,match='incompatible provider selection authority'):dm.validate(malformed)
+ near=tmp_path/'fixture-near.db';subprocess.run([sys.executable,str(script),str(near)],check=True,capture_output=True)
+ c=sqlite3.connect(near);c.execute('CREATE TABLE provider_selection_backup(singleton_id INTEGER)');c.commit();c.close()
+ with pytest.raises(ValueError,match='unapproved'):dm.validate(near)
+
 def test_accepts_canonical_edge_integrity_objects_only(tmp_path):
  p=tmp_path/'canonical.db';fixture(p);c=sqlite3.connect(p)
  c.execute("CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of'")
