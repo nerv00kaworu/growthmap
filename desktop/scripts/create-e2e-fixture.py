@@ -2,7 +2,7 @@
 import os, sqlite3, sys, tempfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/"src/backend"))
-from db.schema_contract import CURRENT_USER_VERSION, WORKSPACE_GRANT_INDEX_SQL
+from db.schema_contract import CURRENT_USER_VERSION, WORKSPACE_GRANT_INDEX_SQL, PROVIDER_SELECTION_TABLE_SQL
 
 def fixture_output(argument: str) -> Path:
     output=Path(argument).resolve(); temp_root=Path(tempfile.gettempdir()).resolve()
@@ -25,6 +25,8 @@ CREATE TABLE content_blocks(id TEXT PRIMARY KEY NOT NULL,node_id TEXT NOT NULL,b
 CREATE TABLE agent_grants(id TEXT PRIMARY KEY,token_prefix TEXT NOT NULL,token_salt TEXT NOT NULL,token_hash TEXT NOT NULL,project_id TEXT,permission TEXT NOT NULL,workspace_scope VARCHAR(20) NOT NULL DEFAULT 'legacy_project',mode VARCHAR(32),node_scope_id TEXT,branch_root_id TEXT,label TEXT NOT NULL,agent_identity TEXT NOT NULL,status TEXT NOT NULL,expires_at DATETIME,persistent BOOLEAN NOT NULL DEFAULT 0,revoked_at DATETIME,last_used_at DATETIME,created_at DATETIME);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
 CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,secret_change_pending BOOLEAN NOT NULL DEFAULT 0,secret_change_claim VARCHAR(64));
+{PROVIDER_SELECTION_TABLE_SQL};
+INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP);
 CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of' AND is_mainline=1;
 {WORKSPACE_GRANT_INDEX_SQL};
 CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type='child_of' AND NEW.is_mainline=1 BEGIN SELECT RAISE(ABORT,'duplicate mainline for parent') WHERE EXISTS(SELECT 1 FROM edges WHERE from_node_id=NEW.from_node_id AND relation_type='child_of' AND is_mainline=1); END;
@@ -43,4 +45,6 @@ c.execute("INSERT INTO edges(id,project_id,from_node_id,to_node_id,relation_type
 c.execute("INSERT INTO content_blocks(id,node_id,block_type,content,order_index,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?)",('block','root','note','{\"body\":\"fixture body\"}',0,'human',created_at,created_at,1));c.commit()
 row=c.execute("SELECT id,name,status,revision,created_at,updated_at FROM projects WHERE id='fixture'").fetchone()
 if row != ('fixture','Desktop Fixture','active',1,created_at,created_at): raise SystemExit("E2E fixture project contract mismatch")
+if c.execute("PRAGMA user_version").fetchone()[0] != CURRENT_USER_VERSION: raise SystemExit("E2E fixture schema version mismatch")
+if c.execute("SELECT singleton_id,provider_id,selection_revision FROM provider_selection").fetchone() != (1,None,1): raise SystemExit("E2E fixture provider selection mismatch")
 c.close()
