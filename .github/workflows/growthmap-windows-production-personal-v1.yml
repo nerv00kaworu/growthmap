@@ -39,6 +39,15 @@ jobs:
         run: python -m pytest -q src/backend/tests/test_commercial_entitlements.py
         env:
           PYTHONPATH: src/backend
+      - name: Run focused product provider-selection authority tests
+        shell: pwsh
+        env:
+          PYTHONPATH: src/backend
+        run: |
+          $db=(Join-Path $env:RUNNER_TEMP 'growthmap-provider-selection-product.db')
+          $env:DATABASE_URL=('sqlite+aiosqlite:///' + ($db -replace '\\','/'))
+          python -m pytest -q src/backend/tests/test_provider_selection_authority.py
+          python -m unittest -v src/backend/tests/test_provider_selection_authority_stdlib.py
       - run: npm ci
         working-directory: src/frontend
       - run: npm audit --audit-level=low

@@ -11,14 +11,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
-from sqlalchemy import select, func, or_, update
-from sqlalchemy.exc import StatementError
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func, or_, update, exists
+from sqlalchemy.exc import StatementError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.database import get_db
-from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
+from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, ProviderSelection, AgentSession, AgentArtifact
 from models.content_blocks import CONTENT_BLOCK_TYPES
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret, delete as delete_memory_secret
@@ -125,17 +125,69 @@ def _delete_env_value(env_key: str) -> None:
     os.environ.pop(env_key, None)
 
 
+class ProviderSelectionWrite(BaseModel):
+    expected_selection_revision: int = Field(ge=1, le=9007199254740991)
+    provider_id: str | None
+
+def _is_sqlite_busy(exc: OperationalError) -> bool:
+    orig=getattr(exc,"orig",exc)
+    code=getattr(orig,"sqlite_errorcode",None)
+    # Extended result codes retain the primary code in the low byte.
+    if isinstance(code,int) and (code & 0xFF) in {5,6}: return True
+    message=str(orig).lower()
+    return message in {"database is locked","database table is locked","database schema is locked","database is busy"} or "sqlite_busy" in message or "sqlite_locked" in message
+
+async def _selection_busy(db: AsyncSession, exc: OperationalError):
+    await db.rollback()
+    if not _is_sqlite_busy(exc): raise exc
+    raise HTTPException(503,detail={"code":"LLM_SELECTION_BUSY","message":"Selection is busy; retry shortly."},headers={"Retry-After":"1"}) from exc
+
+async def _selection(db: AsyncSession) -> ProviderSelection:
+    row=(await db.execute(select(ProviderSelection).where(ProviderSelection.singleton_id==1))).scalar_one_or_none()
+    if not row: raise HTTPException(503,detail={"code":"LLM_SELECTION_UNAVAILABLE","message":"Selection authority is unavailable."})
+    return row
+
+async def _project_provider(db: AsyncSession, row: ProviderConfig) -> dict:
+    return _provider_out(row, await _selection(db))
+
+def _provider_out(row: ProviderConfig, selection: ProviderSelection) -> dict:
+    return {name:getattr(row,name) for name in ProviderConfigOut.model_fields if name not in {"credential_status","is_default","selection_revision"}} | {"is_default":row.id==selection.provider_id,"selection_revision":selection.selection_revision}
+
+async def _clear_selection_for_provider(db: AsyncSession, provider_id: str) -> None:
+    selection=await _selection(db)
+    if selection.provider_id != provider_id: return
+    if selection.selection_revision >= 9007199254740991:
+        raise HTTPException(409,detail={"code":"LLM_SELECTION_REVISION_EXHAUSTED","message":"Selection revision exhausted."})
+    result=await db.execute(update(ProviderSelection).where(ProviderSelection.singleton_id==1,ProviderSelection.provider_id==provider_id,ProviderSelection.selection_revision==selection.selection_revision,ProviderSelection.selection_revision<9007199254740991).values(provider_id=None,selection_revision=ProviderSelection.selection_revision+1,updated_at=datetime.now(timezone.utc)))
+    if result.rowcount != 1: raise HTTPException(409,detail={"code":"LLM_SELECTION_STALE","message":"Selection changed; reload and retry."})
+
 @router.get("/providers", response_model=list[ProviderConfigOut])
 async def list_providers(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(ProviderConfig).order_by(ProviderConfig.created_at.desc()))
-    return result.scalars().all()
+    selection=await _selection(db)
+    rows=(await db.execute(select(ProviderConfig).order_by(ProviderConfig.created_at.desc()))).scalars().all()
+    return [_provider_out(row,selection) for row in rows]
+
+@router.put("/providers/selection")
+async def set_provider_selection(data: ProviderSelectionWrite, db: AsyncSession = Depends(get_db)):
+    try:
+        eligible=exists(select(ProviderConfig.id).where(ProviderConfig.id==data.provider_id,ProviderConfig.enabled.is_(True),ProviderConfig.secret_change_pending.is_(False)))
+        result=await db.execute(update(ProviderSelection).where(ProviderSelection.singleton_id==1,ProviderSelection.selection_revision==data.expected_selection_revision,ProviderSelection.selection_revision<9007199254740991,True if data.provider_id is None else eligible).values(provider_id=data.provider_id,selection_revision=ProviderSelection.selection_revision+1,updated_at=datetime.now(timezone.utc)))
+        if result.rowcount!=1:
+            await db.rollback(); current=await _selection(db)
+            if current.selection_revision != data.expected_selection_revision or current.selection_revision >= 9007199254740991:
+                raise HTTPException(409,detail={"code":"LLM_SELECTION_STALE","message":"Selection changed or revision exhausted; reload and retry."})
+            raise HTTPException(409,detail={"code":"PROVIDER_UNAVAILABLE","message":"Only an enabled ready provider can be selected."})
+        await db.commit(); row=await _selection(db)
+        return {"provider_id":row.provider_id,"selection_revision":row.selection_revision,"updated_at":row.updated_at}
+    except OperationalError as exc:
+        await _selection_busy(db,exc)
 
 
 @router.get("/providers/{provider_id}", response_model=ProviderConfigOut)
 async def get_provider_config(provider_id: str, db: AsyncSession = Depends(get_db)):
     provider=await db.get(ProviderConfig,provider_id)
     if not provider: raise HTTPException(404,"Provider not found")
-    return provider
+    return await _project_provider(db,provider)
 
 
 @router.post("/providers", response_model=ProviderConfigOut, status_code=201)
@@ -144,7 +196,7 @@ async def create_provider(data: ProviderConfigCreate, db: AsyncSession = Depends
     db.add(provider)
     await db.commit()
     await db.refresh(provider)
-    return provider
+    return await _project_provider(db,provider)
 
 
 def _is_local_client(host: str) -> bool:
@@ -197,29 +249,40 @@ async def update_provider_model(provider_id: str, data: ProviderModelUpdate, db:
     await guarded_provider_update(db, provider, model_name=data.model_name, auth_type="env")
     await db.commit()
     await db.refresh(provider)
-    return provider
+    return await _project_provider(db,provider)
 
 
 @router.patch("/providers/{provider_id}", response_model=ProviderConfigOut)
 async def update_provider(provider_id: str, data: ProviderConfigUpdate, db: AsyncSession = Depends(get_db)):
-    provider = await db.get(ProviderConfig, provider_id)
-    if not provider:
-        raise HTTPException(404, "Provider not found")
-    changes = data.model_dump(exclude_unset=True)
-    changes["auth_type"] = "env"
-    await guarded_provider_update(db, provider, **changes)
-    await db.commit()
-    await db.refresh(provider)
-    return provider
+    try:
+        provider = await db.get(ProviderConfig, provider_id)
+        if not provider: raise HTTPException(404, "Provider not found")
+        changes = data.model_dump(exclude_unset=True); changes["auth_type"] = "env"
+        if changes.get("enabled") is False: await _clear_selection_for_provider(db,provider_id)
+        await guarded_provider_update(db, provider, **changes); await db.commit(); await db.refresh(provider)
+        return await _project_provider(db,provider)
+    except OperationalError as exc:
+        await db.rollback()
+        if data.enabled is False and _is_sqlite_busy(exc): await _selection_busy(db,exc)
+        raise
+    except BaseException:
+        await db.rollback()
+        raise
 
 
 @router.delete("/providers/{provider_id}", status_code=204)
 async def delete_provider(provider_id: str, db: AsyncSession = Depends(get_db)):
-    provider = await db.get(ProviderConfig, provider_id)
-    if not provider:
-        raise HTTPException(404, "Provider not found")
-    await db.delete(provider)
-    await db.commit()
+    try:
+        provider = await db.get(ProviderConfig, provider_id)
+        if not provider: raise HTTPException(404, "Provider not found")
+        await _clear_selection_for_provider(db,provider_id); await db.delete(provider); await db.commit()
+    except OperationalError as exc:
+        await db.rollback()
+        if _is_sqlite_busy(exc): await _selection_busy(db,exc)
+        raise
+    except BaseException:
+        await db.rollback()
+        raise
 
 
 # ─── Agent sessions (manual workflow only; no external dispatch) ───

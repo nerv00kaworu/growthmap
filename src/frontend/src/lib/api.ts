@@ -186,6 +186,7 @@ function blockExpected(blockId: string) {
   // Server-side provider profiles. API keys remain in local environment variables.
   listProviders: () => request<ProviderConfig[]>("/providers"),
   getProvider: (providerId: string) => request<ProviderConfig>(`/providers/${providerId}`),
+  setProviderSelection: (providerId: string | null, expectedSelectionRevision: number) => request<{provider_id:string|null;selection_revision:number;updated_at:string}>(`/providers/selection`, { method: "PUT", body:JSON.stringify({provider_id:providerId,expected_selection_revision:expectedSelectionRevision}) }),
   createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">) =>
     request<ProviderConfig>("/providers", { method: "POST", body: JSON.stringify(data) }),
   updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">>) =>
@@ -285,36 +286,36 @@ function blockExpected(blockId: string) {
     request<{ id: string; action_type: string; actor_type: string; payload: Record<string, unknown>; created_at: string }[]>(`/nodes/${nodeId}/history`),
 
   // AI operations
-  expand: (nodeId: string, instruction: string | undefined, count: number | undefined, mode: GrowthMode, providerId: string, providerRevision: number) =>
+  expand: (nodeId: string, instruction: string | undefined, count: number | undefined, mode: GrowthMode, providerId: string, providerRevision: number, selectionRevision: number) =>
     request<{
       suggestions: { title: string; summary: string; node_type: string }[];
       context_used: Record<string, unknown>;
     }>("/ai/expand", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, count: count || 3, mode, provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision, locale: activeLocale() }),
     }, true, true),
 
-  deepen: (nodeId: string, instruction: string | undefined, providerId: string, providerRevision: number) =>
+  deepen: (nodeId: string, instruction: string | undefined, providerId: string, providerRevision: number, selectionRevision: number) =>
     request<{
       enriched_summary: string;
       content_blocks: { title: string; body: string; block_type: string }[];
       context_used: Record<string, unknown>;
     }>("/ai/deepen", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+      body: JSON.stringify({ node_id: nodeId, instruction, provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision, locale: activeLocale() }),
     }, true, true),
 
-  chat: (nodeId: string, message: string, history: { role: string; content: string }[], providerId: string, providerRevision: number) =>
+  chat: (nodeId: string, message: string, history: { role: string; content: string }[], providerId: string, providerRevision: number, selectionRevision: number) =>
     request<{ reply: string; context_used: Record<string, unknown> }>("/ai/chat", {
       method: "POST",
-      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: providerId, provider_revision: providerRevision, locale: activeLocale() }),
+      body: JSON.stringify({ node_id: nodeId, message, history, provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision, locale: activeLocale() }),
     }, true, true),
 
   // Test LLM connection
-  testConnection: (providerId: string, providerRevision: number) =>
+  testConnection: (providerId: string, providerRevision: number, selectionRevision: number) =>
     request<{ ok: true; provider: string; model?: string; message: string; code: string; request_id: string; elapsed_ms: number }>("/ai/test-connection", {
       method: "POST",
-      body: JSON.stringify({ provider_id: providerId, provider_revision: providerRevision }),
+      body: JSON.stringify({ provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision }),
     }, true, true),
 
   // Spec export (returns text)

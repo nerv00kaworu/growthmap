@@ -3,8 +3,9 @@ import { useI18n } from "@/i18n/provider";
 import { msg } from "@/i18n/ui";
 
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { DEFAULT_MODELS, loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
+import { api, ApiError } from "@/lib/api";
+import { DEFAULT_MODELS, resolveAuthoritativeLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
+import { initialSettingsSaveState, reduceSettingsSave } from "@/lib/settings-save-state";
 import type { ProviderConfig } from "@/lib/types";
 import { providerCredentialPending } from "@/lib/provider-pending";
 
@@ -35,15 +36,16 @@ export function Settings({ onClose }: SettingsProps) {
   const [apiKey, setApiKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [saveState, setSaveState] = useState(initialSettingsSaveState);
   const selectedProfile=profiles.find(row=>row.id===selectedId);
   const pending=providerCredentialPending(selectedProfile);
-  const loadProfiles = async () => {
+  const loadProfiles = async (keepProviderId?: string) => {
     const rows = await api.listProviders();
     setProfiles(rows);
-    const saved = loadLLMConfig();
-    if (saved?.providerId && rows.some((row) => row.id === saved.providerId)) {
-      setSelectedId(saved.providerId);
-    }
+    const saved = resolveAuthoritativeLLMConfig(rows);
+    if (keepProviderId && rows.some(row=>row.id===keepProviderId)) setSelectedId(keepProviderId);
+    else if (saved) setSelectedId(saved.providerId);
+    return rows;
   };
 
   useEffect(() => {
@@ -61,44 +63,56 @@ export function Settings({ onClose }: SettingsProps) {
     setModel(profile.model_name || "");
   };
 
+  const refreshAfterCommittedSelection = async (providerId: string) => {
+    try {
+      await loadProfiles(providerId);
+      setSaveState(state=>reduceSettingsSave(state,{type:"READBACK_OK"}));
+      setMessage(u("✅ 設定已儲存並選用。","✅ 设置已保存并选用。","✅ Settings saved and selected."));
+    } catch {
+      setSaveState(state=>reduceSettingsSave(state,{type:"READBACK_FAIL"}));
+      setMessage(u("✅ 已選用；清單刷新暫時失敗。","✅ 已选用；列表刷新暂时失败。","✅ Selected; the list refresh temporarily failed."));
+    }
+  };
+
+  const refreshAndSelect = async (providerId: string) => {
+    const rows=await loadProfiles(providerId);
+    const revision=rows[0]?.selection_revision;
+    if(!revision) throw new Error("Selection revision unavailable");
+    setSaveState(state=>reduceSettingsSave(state,{type:"REFRESH_OK",selectionRevision:revision}));
+    try {
+      const committed=await api.setProviderSelection(providerId,revision);
+      setSaveState(state=>reduceSettingsSave(state,{type:"SELECTION_COMMITTED",selectionRevision:committed.selection_revision}));
+      await refreshAfterCommittedSelection(providerId);
+    } catch(error: unknown) {
+      const retryable=error instanceof ApiError && ["LLM_SELECTION_STALE","LLM_SELECTION_BUSY","LLM_SELECTION_UNAVAILABLE"].includes(error.code||"");
+      if(retryable){
+        const refreshed=await loadProfiles(providerId).catch(()=>[]);
+        const latest=refreshed[0]?.selection_revision;
+        if(latest) setSaveState(state=>reduceSettingsSave(state,{type:"SELECTION_RETRY",selectionRevision:latest}));
+      }
+      setMessage(retryable
+        ? u("設定已保存，但目前未選用；請按選用重試。","设置已保存，但目前未选用；请按选用重试。","Settings were saved but are not selected. Select again to retry.")
+        : u(`設定已保存，但選用失敗：${(error as Error).message}`,`设置已保存，但选用失败：${(error as Error).message}`,`Settings were saved, but selection failed: ${(error as Error).message}`));
+    }
+  };
+
+  const retrySelection=async()=>{
+    if(!saveState.providerId||!saveState.selectionRevision)return;
+    setSaving(true);
+    try{const committed=await api.setProviderSelection(saveState.providerId,saveState.selectionRevision);setSaveState(state=>reduceSettingsSave(state,{type:"SELECTION_COMMITTED",selectionRevision:committed.selection_revision}));await refreshAfterCommittedSelection(saveState.providerId)}
+    catch(error: unknown){const retryable=error instanceof ApiError&&["LLM_SELECTION_STALE","LLM_SELECTION_BUSY","LLM_SELECTION_UNAVAILABLE"].includes(error.code||"");if(retryable){const rows=await loadProfiles(saveState.providerId).catch(()=>[]);const latest=rows[0]?.selection_revision;if(latest)setSaveState(state=>reduceSettingsSave(state,{type:"SELECTION_RETRY",selectionRevision:latest}))}setMessage(u("仍無法選用；請重試。","仍无法选用；请重试。","Selection is still unavailable. Retry."))}finally{setSaving(false)}
+  };
+
   const saveProfile = async () => {
     if (!name.trim()) return;
-    setSaving(true);
-    setMessage("");
-    try {
-      const payload = {
-        name: name.trim(),
-        provider_type: provider,
-        endpoint: endpoint.trim(),
-        secret_env_key: envKey.trim() || "GROWTHMAP_LLM_KEY_DEFAULT",
-        model_name: model.trim() || DEFAULT_MODELS[provider],
-        capabilities: ["expand", "deepen", "chat"],
-        cost_level: provider === "mock" ? "none" : "variable",
-        enabled: true,
-      };
-      const saved = selectedId
-        ? await api.updateProvider(selectedId, payload)
-        : await api.createProvider(payload);
-      if (apiKey.trim() && saved.provider_type !== "mock") {
-        if (window.growthmapDesktop) await window.growthmapDesktop.secrets.set(saved.id, apiKey.trim());
-        else await api.writeProviderSecret(saved.id, apiKey.trim());
-        setApiKey("");
-      }
-      // Secret publication advances the authoritative provider revision after
-      // the metadata response. Never persist the pre-secret revision.
-      const authoritative = apiKey.trim() && saved.provider_type !== "mock" ? await api.getProvider(saved.id) : saved;
-      const nextProfiles = selectedId
-        ? profiles.map((row) => row.id === authoritative.id ? authoritative : row)
-        : [authoritative, ...profiles];
-      setProfiles(nextProfiles);
-      setSelectedId(authoritative.id);
-      saveLLMConfig({ provider: authoritative.provider_type as LLMProviderType, providerId: authoritative.id, model: authoritative.model_name, revision: authoritative.revision });
-      setMessage(window.growthmapDesktop ? u('✅ 已儲存。API key 由系統安全儲存保護，不會寫入資料庫、.env 或瀏覽器。','✅ 已保存。API key 由系统安全存储保护，不会写入数据库、.env 或浏览器。','✅ Saved. The API key is protected by secure system storage and never written to the database, .env, or browser.') : u('✅ 已儲存。Authoring 模式從本機 .env／環境變數讀取，不會寫進資料庫或瀏覽器。','✅ 已保存。Authoring 模式从本地 .env/环境变量读取，不会写入数据库或浏览器。','✅ Saved. Authoring mode reads local .env/environment variables and never writes them to the database or browser.'));
-    } catch (error: unknown) {
-      setMessage(u(`儲存失敗：${(error as Error).message}`,`保存失败：${(error as Error).message}`,`Save failed: ${(error as Error).message}`));
-    } finally {
-      setSaving(false);
-    }
+    setSaving(true); setMessage(""); setSaveState(reduceSettingsSave(initialSettingsSaveState,{type:"START"}));
+    const payload={name:name.trim(),provider_type:provider,endpoint:endpoint.trim(),secret_env_key:envKey.trim()||"GROWTHMAP_LLM_KEY_DEFAULT",model_name:model.trim()||DEFAULT_MODELS[provider],capabilities:["expand","deepen","chat"],cost_level:provider==="mock"?"none":"variable",enabled:true};
+    let saved: ProviderConfig;
+    try{saved=selectedId?await api.updateProvider(selectedId,payload):await api.createProvider(payload);setSaveState(state=>reduceSettingsSave(state,{type:"METADATA_OK",providerId:saved.id}));setSelectedId(saved.id);setProfiles(rows=>rows.some(row=>row.id===saved.id)?rows.map(row=>row.id===saved.id?saved:row):[saved,...rows])}
+    catch(error){setSaveState(state=>reduceSettingsSave(state,{type:"METADATA_FAIL"}));setMessage(u(`Metadata 儲存失敗：${(error as Error).message}`,`Metadata 保存失败：${(error as Error).message}`,`Metadata save failed: ${(error as Error).message}`));setSaving(false);return}
+    try{if(apiKey.trim()&&saved.provider_type!=="mock"){if(window.growthmapDesktop)await window.growthmapDesktop.secrets.set(saved.id,apiKey.trim());else await api.writeProviderSecret(saved.id,apiKey.trim());setApiKey("")}setSaveState(state=>reduceSettingsSave(state,{type:"SECRET_OK"}))}
+    catch(error){setSaveState(state=>reduceSettingsSave(state,{type:"SECRET_FAIL"}));await loadProfiles(saved.id).catch(()=>undefined);setMessage(u(`Metadata 已保存，但憑證階段失敗：${(error as Error).message}；請依下方復原提示重試。`,`Metadata 已保存，但凭据阶段失败：${(error as Error).message}；请按下方恢复提示重试。`,`Metadata was saved, but the secret stage failed: ${(error as Error).message}. Use the recovery controls below.`));setSaving(false);return}
+    try{await refreshAndSelect(saved.id)}catch(error){setMessage(u(`設定已保存，但清單刷新失敗：${(error as Error).message}`,`设置已保存，但列表刷新失败：${(error as Error).message}`,`Settings were saved, but profile refresh failed: ${(error as Error).message}`))}finally{setSaving(false)}
   };
 
   const recoverCredential=async(operation:"set"|"delete")=>{
@@ -170,6 +184,7 @@ export function Settings({ onClose }: SettingsProps) {
 
         {pending&&<div data-testid="credential-recovery" className="space-y-2 rounded border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-200"><div>{u("憑證更新未完成；請重新輸入 key 或重試移除。","凭据更新未完成；请重新输入 key 或重试移除。","Credential update is incomplete; re-enter the key or retry removal.")}</div><div className="flex gap-2"><button type="button" disabled={saving} onClick={()=>recoverCredential("set")} className="rounded bg-amber-700 px-2 py-1">{u("重新輸入並完成","重新输入并完成","Re-enter and recover")}</button><button type="button" disabled={saving} onClick={()=>recoverCredential("delete")} className="rounded border border-amber-700 px-2 py-1">{u("重試移除","重试移除","Retry removal")}</button></div></div>}
         {message && <div className="rounded border border-gray-700 bg-gray-800/70 px-3 py-2 text-xs text-gray-300">{message}</div>}
+        {saveState.phase==="selection_retry"&&<button data-testid="retry-provider-selection" type="button" disabled={saving} onClick={retrySelection} className="w-full rounded-lg border border-amber-600 bg-amber-950/30 px-3 py-2 text-xs font-medium text-amber-100">{u("選用／重試","选用／重试","Select / Retry")}</button>}
         <div className="flex gap-2">
           <button type="button" onClick={createNew} className="rounded-lg border border-gray-600 px-3 py-2 text-xs text-gray-300 hover:text-white">{u('新增','新增','New')}</button>
           <button type="button" onClick={saveProfile} disabled={saving || pending || !name.trim()} className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50">{saving ? u("儲存中…", "保存中…", "Saving…") : u("儲存並使用", "保存并使用", "Save and use")}</button>

@@ -1,5 +1,7 @@
-import { LLM_CONFIG_CHANGED_EVENT,loadLLMConfig,type LLMConfig } from "./llm-provider";
-export type ChatOwner={generation:number;nodeId:string;profile:LLMConfig|null};
-const same=(a:LLMConfig|null,b:LLMConfig|null)=>a===b||!!(a&&b&&a.providerId===b.providerId&&a.provider===b.provider&&a.model===b.model&&a.revision===b.revision);
-export function createNodeChatController(onAbandon:()=>void){let generation=0,nodeId="",alive=false;return{activate(){alive=true},capture(id:string):ChatOwner{nodeId=id;return{generation:++generation,nodeId:id,profile:loadLLMConfig()}},owns(o:ChatOwner){return alive&&o.generation===generation&&o.nodeId===nodeId&&same(o.profile,loadLLMConfig())},invalidate(id=nodeId){nodeId=id;generation++;if(alive)onAbandon()},suspend(){alive=false;generation++}}}
+import { LLM_CONFIG_CHANGED_EVENT,type LLMConfig } from "./llm-provider";
+export type ChatOwner={generation:number;nodeId:string;profile:Readonly<LLMConfig>|null};
+const snapshot=(p:LLMConfig|null):Readonly<LLMConfig>|null=>p?Object.freeze({...p}):null;
+const same=(a:Readonly<LLMConfig>|null,b:LLMConfig|null)=>a===b||!!(a&&b&&a.providerId===b.providerId&&a.provider===b.provider&&a.model===b.model&&a.revision===b.revision&&a.selectionRevision===b.selectionRevision);
+/** The component injects the current backend-authoritative selection. Browser storage never grants authority. */
+export function createNodeChatController(onAbandon:()=>void,currentProfile:()=>LLMConfig|null){let generation=0,nodeId="",alive=false;return{activate(){alive=true},capture(id:string):ChatOwner{nodeId=id;return{generation:++generation,nodeId:id,profile:snapshot(currentProfile())}},owns(o:ChatOwner){return alive&&o.generation===generation&&o.nodeId===nodeId&&same(o.profile,currentProfile())},invalidate(id=nodeId){nodeId=id;generation++;if(alive)onAbandon()},suspend(){alive=false;generation++}}}
 export function mountNodeChatLifecycle(controller:ReturnType<typeof createNodeChatController>,target:Pick<Window,"addEventListener"|"removeEventListener">,invalidate:()=>void){controller.activate();const f=()=>invalidate();for(const e of ["storage","focus",LLM_CONFIG_CHANGED_EVENT])target.addEventListener(e,f);return()=>{for(const e of ["storage","focus",LLM_CONFIG_CHANGED_EVENT])target.removeEventListener(e,f);controller.suspend()}}

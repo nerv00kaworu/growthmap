@@ -13,13 +13,13 @@ from sqlalchemy import select
 from db.database import get_db, async_session
 from ai.providers import LLMConfig, get_provider
 from ai.context import build_node_context
-from models.models import ActionLog, Node, ProviderConfig
+from models.models import ActionLog, Node, ProviderConfig, ProviderSelection
 from models.schemas import validate_app_secret_env_key
 from models.provider_authority import MAX_PROVIDER_REVISION
 from models.content_blocks import ContentBlockType, CONTENT_BLOCK_TYPES_PROMPT
 from desktop.secrets import desktop_mode, get as get_desktop_secret
 from ai.provider import parse_json_response  # Reuse existing JSON parser
-from ai.diagnostics import classify_ai_exception, LLMConfigurationError, LLMInvalidResponse, LLMProfileChanged
+from ai.diagnostics import classify_ai_exception, LLMConfigurationError, LLMInvalidResponse, LLMProfileChanged, LLMSelectionChanged
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -35,6 +35,7 @@ class ExpandRequest(StrictRequest):
     mode: Literal["focused", "explore", "challenge"] = "explore"
     provider_id: str
     provider_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
@@ -43,12 +44,14 @@ class DeepenRequest(StrictRequest):
     instruction: Optional[str] = None
     provider_id: str
     provider_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
 class TestConnectionRequest(StrictRequest):
     provider_id: str
     provider_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
 
 
 class TestConnectionResponse(BaseModel):
@@ -132,13 +135,15 @@ def get_expand_mode_prompt(mode: Literal["focused", "explore", "challenge"], loc
     return _framework(locale)["modes"][mode]
 
 
-async def _to_llm_config(provider_id: str, provider_revision: int, db: AsyncSession) -> tuple[LLMConfig, str]:
+async def _to_llm_config(provider_id: str, provider_revision: int, selection_revision: int, db: AsyncSession) -> tuple[LLMConfig, str]:
     """Copy one exact enabled revision using a single authority predicate.
 
     SQLite serializes writes; every mutation atomically increments revision.
     Values are copied to immutable LLMConfig before dispatch, so later writes
     cannot alter this request and necessarily stale subsequent old tuples.
     """
+    selection=(await db.execute(select(ProviderSelection).where(ProviderSelection.singleton_id==1,ProviderSelection.provider_id==provider_id,ProviderSelection.selection_revision==selection_revision))).scalar_one_or_none()
+    if not selection: raise LLMSelectionChanged("Selected provider selection changed")
     provider_config = (await db.execute(select(ProviderConfig).where(
         ProviderConfig.id == provider_id,
         ProviderConfig.enabled.is_(True),
@@ -231,7 +236,7 @@ async def _log_ai_failure(node_id, action, provider_id, model, started, code, re
 async def test_connection(req: TestConnectionRequest, db: AsyncSession = Depends(get_db)):
     request_id, started = _request_id(), time.monotonic()
     try:
-        config, _ = await _to_llm_config(req.provider_id, req.provider_revision, db)
+        config, _ = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         from ai.providers.registry import test_connection as test_conn
         result = await test_conn(config)
         return TestConnectionResponse(**result, request_id=request_id, elapsed_ms=int((time.monotonic()-started)*1000))
@@ -260,7 +265,7 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
     )
 
     try:
-        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, db)
+        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
         raw = await provider.complete(frame["expand_system"], user_prompt, model=llm_cfg.model)
             
@@ -313,7 +318,7 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
     )
 
     try:
-        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, db)
+        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
         raw = await provider.complete(frame["deepen_system"], user_prompt, model=llm_cfg.model)
             
@@ -357,6 +362,7 @@ class ChatRequest(StrictRequest):
     history: list[dict] = []
     provider_id: str
     provider_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     locale: Literal["zh-TW", "zh-CN", "en"] = "zh-TW"
 
 
@@ -386,7 +392,7 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     )
 
     try:
-        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, db)
+        llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
         reply = await provider.complete(system_prompt, context_summary, model=llm_cfg.model)
 

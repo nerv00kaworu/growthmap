@@ -7,7 +7,7 @@ import { runNodeChatSend } from "@/lib/node-chat-runtime";
 import { requestNodeChat } from "@/lib/node-chat-request";
 import type { GNode,ProviderConfig } from "@/lib/types";
 import { providerActionDisabled } from "@/lib/provider-pending";
-import { loadLLMConfig } from "@/lib/llm-provider";
+import { LLM_CONFIG_CHANGED_EVENT, resolveAuthoritativeLLMConfig } from "@/lib/llm-provider";
 import { useI18n } from "@/i18n/provider";
 import { msg } from "@/i18n/ui";
 
@@ -29,8 +29,9 @@ export function NodeChat({ selectedNode }: NodeChatProps) {
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const prevNodeId = useRef<string>(selectedNode.id);
+  const authoritativeConfigRef=useRef<ReturnType<typeof resolveAuthoritativeLLMConfig>>(null);
   const controllerRef=useRef<ReturnType<typeof createNodeChatController>|null>(null);
-  if(!controllerRef.current)controllerRef.current=createNodeChatController(()=>setLoading(false));
+  if(!controllerRef.current)controllerRef.current=createNodeChatController(()=>setLoading(false),()=>authoritativeConfigRef.current);
   const controller=controllerRef.current;
 
   // Reset chat when node changes
@@ -52,8 +53,9 @@ export function NodeChat({ selectedNode }: NodeChatProps) {
   const ancestorPath = selectedNode.ancestor_path || [];
   const breadcrumb = [...ancestorPath.map((a) => a.title), selectedNode.title].join(" › ");
   const [profiles,setProfiles]=useState<ProviderConfig[]>([]);
-  useEffect(()=>{api.listProviders().then(setProfiles).catch(()=>setProfiles([]))},[]);
-  const selectedConfig=loadLLMConfig();
+  useEffect(()=>{const refresh=()=>{api.listProviders().then(setProfiles).catch(()=>setProfiles([]))};refresh();for(const event of ["storage","focus",LLM_CONFIG_CHANGED_EVENT])window.addEventListener(event,refresh);return()=>{for(const event of ["storage","focus",LLM_CONFIG_CHANGED_EVENT])window.removeEventListener(event,refresh)}},[]);
+  const selectedConfig=resolveAuthoritativeLLMConfig(profiles);
+  authoritativeConfigRef.current=selectedConfig;
   const selectedProfile=profiles.find(p=>p.id===selectedConfig?.providerId);
   const chatDisabled=providerActionDisabled(selectedProfile,loading);
 

@@ -190,6 +190,18 @@ class ProviderConfig(Base):
     )
 
 
+class ProviderSelection(Base):
+    __tablename__ = "provider_selection"
+    singleton_id = Column(Integer, primary_key=True, default=1)
+    provider_id = Column(String(36), ForeignKey("provider_configs.id", ondelete="SET NULL"), nullable=True)
+    selection_revision = Column(Integer, nullable=False, default=1, server_default="1")
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        CheckConstraint("singleton_id = 1", name="ck_provider_selection_singleton"),
+        CheckConstraint("selection_revision >= 1 AND selection_revision <= 9007199254740991", name="ck_provider_selection_revision_safe"),
+    )
+
+
 class Branch(Base):
     __tablename__ = "branches"
 

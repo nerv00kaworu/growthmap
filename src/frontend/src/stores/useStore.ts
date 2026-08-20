@@ -617,7 +617,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       && Boolean(get().rootNode && findNode(get().rootNode!, nodeId));
     set({ aiLoading: true, aiError: null, expandSuggestions: null, expandTargetNodeId: nodeId, deepenResult: null, error: null });
     try {
-      const result = await api.expand(nodeId, instruction, undefined, mode, identity.providerId, identity.revision);
+      const result = await api.expand(nodeId, instruction, undefined, mode, identity.providerId, identity.revision, identity.selectionRevision);
       if (active()) set({ expandSuggestions: result.suggestions, aiLoading: false });
     } catch (e: unknown) {
       if (active()) { const x=e as ApiError; set({ aiError:{code:x.code,status:x.status,requestId:x.requestId,message:x.message,action:"expand",elapsedMs:Date.now()-started}, aiLoading:false }); }
@@ -636,7 +636,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       && Boolean(get().rootNode && findNode(get().rootNode!, nodeId));
     set({ aiLoading: true, aiError: null, deepenResult: null, expandSuggestions: null, expandTargetNodeId: null, error: null });
     try {
-      const result = await api.deepen(nodeId, instruction, identity.providerId, identity.revision);
+      const result = await api.deepen(nodeId, instruction, identity.providerId, identity.revision, identity.selectionRevision);
       if (active()) set({ deepenResult: { ...result, target_node_id: nodeId }, aiLoading: false });
     } catch (e: unknown) {
       if (active()) { const x=e as ApiError; set({ aiError:{code:x.code,status:x.status,requestId:x.requestId,message:x.message,action:"deepen",elapsedMs:Date.now()-started}, aiLoading:false }); }

@@ -367,14 +367,16 @@ class ProviderConfigOut(BaseModel):
     revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     secret_change_pending: bool
     credential_status: Literal["ready", "recovery_required"]
+    is_default: bool
+    selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
 
     @model_validator(mode="before")
     @classmethod
     def derive_credential_status(cls, value):
         if not isinstance(value, dict):
-            pending = bool(getattr(value, "secret_change_pending", False))
-            return {name: getattr(value, name) for name in cls.model_fields if name != "credential_status"} | {"credential_status": "recovery_required" if pending else "ready"}
+            value={name:getattr(value,name) for name in cls.model_fields if name not in {"credential_status","is_default","selection_revision"}}
         return value | {"credential_status": "recovery_required" if value.get("secret_change_pending") else "ready"}
+
 
     model_config = {"from_attributes": True}
 

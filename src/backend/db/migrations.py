@@ -2,7 +2,7 @@
 import os
 import re
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEXES, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEXES, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
 
 async def _table_exists(conn, table):
     return (await conn.execute(text("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=:name"), {"name":table})).first() is not None
@@ -17,8 +17,8 @@ async def _validate_column(conn,spec):
     if not column_matches(row,spec):raise RuntimeError(f"incompatible migration column {spec[0]}.{spec[1]}")
     return True
 
-async def _validate_orm_read_contract(conn):
-    for table,columns in ORM_READ_COLUMNS.items():
+async def _validate_orm_read_contract(conn, orm_read_columns=ORM_READ_COLUMNS):
+    for table,columns in orm_read_columns.items():
         rows={row[1]:row for row in (await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()}
         for name,expected in columns.items():
             problem=orm_column_problem(rows.get(name),expected)
@@ -118,7 +118,7 @@ _LEGACY_REQUIRED_TIMESTAMP_COLUMNS = {
 }
 
 
-async def _validate_before_mutation(conn, migration_specs, upgrading, version):
+async def _validate_before_mutation(conn, migration_specs, upgrading, version, orm_read_columns=ORM_READ_COLUMNS):
     """Reject unsupported/NULL legacy states before the first write."""
     if await _table_exists(conn, "provider_configs") and await _column(conn, "provider_configs", "revision"):
         if (await conn.execute(text("SELECT 1 FROM provider_configs WHERE typeof(revision) != 'integer' OR revision < 1 OR revision > 9007199254740991 LIMIT 1"))).first():
@@ -130,7 +130,7 @@ async def _validate_before_mutation(conn, migration_specs, upgrading, version):
         if row is None and not upgrading:
             raise RuntimeError(f"missing migration column {spec[0]}.{spec[1]}")
     additive={(spec[0],spec[1]) for spec in migration_specs}
-    for table, columns in ORM_READ_COLUMNS.items():
+    for table, columns in orm_read_columns.items():
         rows = {row[1]: row for row in (await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()}
         for name, expected in columns.items():
             problem = orm_column_problem(rows.get(name), expected)
@@ -188,6 +188,20 @@ async def _enforce_legacy_required_timestamps(conn, upgrading, version):
         raise RuntimeError("injected migration failure after timestamp DDL")
 
 
+async def _validate_provider_selection_contract(conn, require_row=True):
+    info=(await conn.execute(text("PRAGMA table_info('provider_selection')"))).all()
+    foreign_keys=(await conn.execute(text("PRAGMA foreign_key_list('provider_selection')"))).all()
+    sql=(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name='provider_selection'"))).scalar()
+    problem=provider_selection_contract_problem(info,foreign_keys,sql)
+    if problem: raise RuntimeError(f"incompatible provider_selection authority table: {problem}")
+    rows=(await conn.execute(text("SELECT singleton_id,provider_id,selection_revision,updated_at FROM provider_selection"))).all()
+    if require_row and len(rows)!=1: raise RuntimeError("missing or duplicate provider_selection singleton row")
+    if rows:
+        row=rows[0]
+        if row[0]!=1 or not isinstance(row[2],int) or not 1<=row[2]<=9007199254740991 or row[3] is None:
+            raise RuntimeError("incompatible provider_selection singleton row")
+
+
 async def _migrate_sqlite_body(conn):
     version=int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)
     if version>CURRENT_USER_VERSION:raise RuntimeError("database schema is newer than this application")
@@ -198,7 +212,24 @@ async def _migrate_sqlite_body(conn):
     migration_specs=list(COLUMNS)
     for spec in TABLE_CONDITIONAL_COLUMNS:
         if await _table_exists(conn,spec[0]):migration_specs.append(spec)
-    await _validate_before_mutation(conn,migration_specs,upgrading,version)
+    selection_exists = await _table_exists(conn, "provider_selection")
+    if not selection_exists and not upgrading: raise RuntimeError("missing provider_selection authority table")
+    if selection_exists:
+        await _validate_provider_selection_contract(conn, require_row=False)
+    # Per-call immutable view: concurrent migrations must never observe a mutated
+    # process-global schema contract while the v12 authority table is being born.
+    preflight_contract = ORM_READ_COLUMNS if selection_exists else {table: columns for table, columns in ORM_READ_COLUMNS.items() if table != "provider_selection"}
+    await _validate_before_mutation(conn,migration_specs,upgrading,version,preflight_contract)
+    if not selection_exists:
+        await conn.execute(text(PROVIDER_SELECTION_TABLE_SQL))
+        await conn.execute(text("INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP)"))
+        if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="provider_selection_v12":
+            raise RuntimeError("injected migration failure after provider selection DDL")
+    elif not (await conn.execute(text("SELECT 1 FROM provider_selection WHERE singleton_id=1"))).first():
+        # A malformed/missing authority row is not inferable user data. Fail
+        # closed even during upgrade rather than silently minting authority.
+        raise RuntimeError("missing provider_selection singleton row")
+    await _validate_provider_selection_contract(conn)
     await _enforce_legacy_required_timestamps(conn,upgrading,version)
     for ordinal,spec in enumerate(migration_specs,1):
         present=await _validate_column(conn,spec)

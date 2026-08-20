@@ -6,9 +6,9 @@ import {
   type GNode,
   type GrowthMode,
 } from "@/lib/types";
-import { loadLLMConfig, saveLLMConfig, type LLMProviderType } from "@/lib/llm-provider";
+import { configFromProvider, loadLLMConfig, resolveAuthoritativeLLMConfig, saveLLMConfig } from "@/lib/llm-provider";
 import { api } from "@/lib/api";
-import { createAIPanelController, diagnosticMessage, MAX_MODEL_NAME, providerIdentity, type AIProviderIdentity } from "@/lib/ai-panel-controller";
+import { createAIPanelController, diagnosticMessage, MAX_MODEL_NAME, providerIdentity, sameProviderIdentity, type AIProviderIdentity } from "@/lib/ai-panel-controller";
 import { mountAIPanelLifecycle } from "@/lib/ai-panel-lifecycle";
 import type { ProviderConfig } from "@/lib/types";
 import { providerActionDisabled } from "@/lib/provider-pending";
@@ -73,25 +73,28 @@ export function NodeAI({
   const [llmConfig, setLlmConfig] = useState(() => loadLLMConfig());
   const [modelDraft, setModelDraft] = useState(""); const [elapsed, setElapsed] = useState(0);
   const selectedRef = useRef<ProviderConfig | undefined>(undefined); const localeRef=useRef(locale);localeRef.current=locale;
+  // Backend list/readback is the authority. localStorage remains only a persisted
+  // preference and never decides whether an in-flight AI result may publish.
+  const authorityRef=useRef<AIProviderIdentity|null>(null);
   const controllerRef=useRef<ReturnType<typeof createAIPanelController>|null>(null);
-  if(!controllerRef.current)controllerRef.current=createAIPanelController({listProviders:api.listProviders,updateModel:api.updateProviderModel,testConnection:api.testConnection,confirm:(text)=>confirm(text),copy:(text)=>navigator.clipboard.writeText(text),now:()=>Date.now(),locale:()=>localeRef.current,currentIdentity:()=>selectedRef.current?providerIdentity(selectedRef.current):null,onSaved:(p)=>{const next={provider:p.provider_type as LLMProviderType,providerId:p.id,model:p.model_name,revision:p.revision};setLlmConfig(next);saveLLMConfig(next);setModelDraft(p.model_name)},onInvalidate:invalidateAISelection});
+  if(!controllerRef.current)controllerRef.current=createAIPanelController({listProviders:api.listProviders,updateModel:api.updateProviderModel,testConnection:api.testConnection,confirm:(text)=>confirm(text),copy:(text)=>navigator.clipboard.writeText(text),now:()=>Date.now(),locale:()=>localeRef.current,currentIdentity:()=>selectedRef.current?providerIdentity(selectedRef.current):null,onSaved:(p)=>{const next=configFromProvider(p);setLlmConfig(next);saveLLMConfig(next);setModelDraft(p.model_name)},onListed:(rows)=>{const next=resolveAuthoritativeLLMConfig(rows);const nextIdentity=next?{providerId:next.providerId,providerType:next.provider,model:next.model,revision:next.revision,selectionRevision:next.selectionRevision}:null;if(!sameProviderIdentity(authorityRef.current,nextIdentity))invalidateAISelection();authorityRef.current=nextIdentity;setLlmConfig(next);if(next)saveLLMConfig(next)},onInvalidate:invalidateAISelection});
   const controller=controllerRef.current;const panel=useSyncExternalStore(controller.subscribe,controller.getSnapshot,controller.getSnapshot);const profiles=panel.profiles,profileState=panel.profileState,savingModel=panel.saving,modelError=panel.modelError,testState=panel.test;
   const selectedProfile=profiles.find(p=>p.id===llmConfig?.providerId);selectedRef.current=selectedProfile;const providerDisabled=providerActionDisabled(selectedProfile);const currentIdentity=()=>selectedProfile?providerIdentity(selectedProfile):null;
-  const invalidateTest=()=>controller.invalidate();const loadProfiles=()=>{void controller.list()};
+  const invalidateTest=()=>controller.invalidateOperations();const loadProfiles=()=>{void controller.list()};
   // Controller and parent invalidator are intentionally captured for this mount.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(()=>mountAIPanelLifecycle({controller,target:window,loadProfiles,refresh:()=>{setLlmConfig(loadLLMConfig());controller.invalidate();invalidateAISelection()}}),[]);
-  useEffect(()=>{setModelDraft(selectedProfile?.model_name||"");controller.invalidate()},[selectedProfile?.id,selectedProfile?.model_name,controller]);
-  useEffect(()=>{if(!selectedProfile||!llmConfig)return;const authoritative=providerIdentity(selectedProfile);if(llmConfig.providerId===authoritative.providerId&&llmConfig.provider===authoritative.providerType&&llmConfig.model===authoritative.model&&llmConfig.revision!==authoritative.revision){const next={provider:authoritative.providerType,providerId:authoritative.providerId,model:authoritative.model,revision:authoritative.revision};setLlmConfig(next);saveLLMConfig(next)}},[selectedProfile,llmConfig]);
+  useEffect(()=>{setModelDraft(selectedProfile?.model_name||"");controller.invalidateOperations()},[selectedProfile?.id,selectedProfile?.model_name,controller]);
+  useEffect(()=>{if(!selectedProfile||!llmConfig)return;const authoritative=providerIdentity(selectedProfile);if(llmConfig.providerId===authoritative.providerId&&llmConfig.provider===authoritative.providerType&&llmConfig.model===authoritative.model&&llmConfig.revision!==authoritative.revision){const next={provider:authoritative.providerType,providerId:authoritative.providerId,model:authoritative.model,revision:authoritative.revision,selectionRevision:llmConfig.selectionRevision};setLlmConfig(next);saveLLMConfig(next)}},[selectedProfile,llmConfig]);
   useEffect(()=>{if(!aiLoading&&testState?.kind!=="testing"){setElapsed(0);return}const started=Date.now(),timer=setInterval(()=>setElapsed(Math.floor((Date.now()-started)/1000)),1000);return()=>clearInterval(timer)},[aiLoading,testState?.kind]);
-  const selectProvider=(id:string)=>{const p=profiles.find(x=>x.id===id);if(!p)return;controller.invalidate();const next={provider:p.provider_type as LLMProviderType,providerId:p.id,model:p.model_name,revision:p.revision};saveLLMConfig(next);setLlmConfig(next);setModelDraft(p.model_name);invalidateAISelection()};const saveModel=()=>{void controller.save(modelDraft)};const testConnection=()=>{void controller.test()};
+  const selectProvider=(id:string)=>{const p=profiles.find(x=>x.id===id);if(!p)return;controller.invalidateOperations();invalidateAISelection();void api.setProviderSelection(p.id,p.selection_revision ?? 1).then(()=>{invalidateAISelection();return controller.list()}).catch(()=>{invalidateAISelection();loadProfiles()})};const saveModel=()=>{void controller.save(modelDraft)};const testConnection=()=>{void controller.test()};
 
 
   const aiProvider = llmConfig?.provider || "mock";
   const isMockProvider = aiProvider === "mock";
   const costHint = isMockProvider ? m("Mock 模式不會呼叫外部 API。","Mock 模式不会调用外部 API。","Mock mode does not call an external API.") : m("真模型模式：每次展開/深化可能消耗 API 額度。","真实模型模式：每次展开或深化都可能消耗 API 配额。","Live-model mode: each expand or deepen action may consume API quota.");
 
-  const savedIdentity=()=>{const x=loadLLMConfig();return x?{providerId:x.providerId,providerType:x.provider,model:x.model,revision:x.revision}:null};
+  const savedIdentity=()=>{const x=loadLLMConfig();return x?{providerId:x.providerId,providerType:x.provider,model:x.model,revision:x.revision,selectionRevision:x.selectionRevision}:null};
   const handleExpand=()=>{const identity=currentIdentity();if(!identity||!selectedProfile)return;controller.generate({actionLabel:m("展開分支","展开分支","Expand branch"),profileName:selectedProfile.name,identity,savedIdentity,dispatch:()=>{void expandNode(selectedNode.id,identity,aiInstruction||undefined,aiMode)}})};
   const handleDeepen=()=>{const identity=currentIdentity();if(!identity||!selectedProfile)return;controller.generate({actionLabel:m("深化內容","深化内容","Deepen content"),profileName:selectedProfile.name,identity,savedIdentity,dispatch:()=>{void deepenNode(selectedNode.id,identity,aiInstruction||undefined)}})};
 

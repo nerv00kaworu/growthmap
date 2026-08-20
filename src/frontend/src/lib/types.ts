@@ -137,6 +137,8 @@ export interface ProviderConfig {
   revision: number;
   secret_change_pending: boolean;
   credential_status: "ready" | "recovery_required";
+  is_default?: boolean;
+  selection_revision?: number;
 }
 
 export interface Branch {
