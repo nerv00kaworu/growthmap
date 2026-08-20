@@ -53,8 +53,8 @@
     ".github/workflows/scripts/verify-production-unsigned-package.ps1": "2545af14712b0f6f6b59096d26be084b56d5e88e13526e2bf76d70e2eb8292e1",
     ".github/workflows/scripts/verify-gift-staging-package.ps1": "f44d3880114379b3e663f2a85132f574442b2655c86b5fdbe36fa8d08b3110c7",
     ".github/workflows/scripts/verify-production-asar.ps1": "62cf3ff93bf1b6ede6ad5836e3d2a79e3088bb9d054df5089bd378b0133704f1",
-    ".github/workflows/scripts/resolve-local-asar.ps1": "9c3f02f434e02ba0e4a3a86c131509239cddc098a421035f9d57857f7b14a869",
+    ".github/workflows/scripts/resolve-local-asar.ps1": "b0e0eb6477054720c088a5df2871f839bfd66e6c5e79a633125519f90183b760",
     "release/verify-windows-r29-candidate.cjs": "d30ff2be8e3d5a0ad0c3d918975d567828d2610c9a1e8f81e880ebf3819c4710",
-    "desktop/tests/contracts.test.js": "d7551086b0336f94f9925d33ee1459a5b8032cb1ed0263a187061a1d7e1dda48"
+    "desktop/tests/contracts.test.js": "8a3f3efae305bf048c85e3a224255ed13084e50fcd36cb8ebd283519ef239983"
   }
 }
