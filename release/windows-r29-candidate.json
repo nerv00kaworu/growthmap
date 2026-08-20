@@ -55,6 +55,6 @@
     ".github/workflows/scripts/verify-production-asar.ps1": "62cf3ff93bf1b6ede6ad5836e3d2a79e3088bb9d054df5089bd378b0133704f1",
     ".github/workflows/scripts/resolve-local-asar.ps1": "9c3f02f434e02ba0e4a3a86c131509239cddc098a421035f9d57857f7b14a869",
     "release/verify-windows-r29-candidate.cjs": "d30ff2be8e3d5a0ad0c3d918975d567828d2610c9a1e8f81e880ebf3819c4710",
-    "desktop/tests/contracts.test.js": "573899046f60faffdf6dc9ecc0763fac75cdb29cbdd507ddc0512c677bb2895f"
+    "desktop/tests/contracts.test.js": "d7551086b0336f94f9925d33ee1459a5b8032cb1ed0263a187061a1d7e1dda48"
   }
 }
