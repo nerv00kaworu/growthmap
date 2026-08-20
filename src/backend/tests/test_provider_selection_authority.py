@@ -50,6 +50,19 @@ def test_fresh_create_all_migrate_reopen_same_structural_contract(product_case):
     """)
     assert result.returncode==0,result.stderr
 
+def test_create_all_v11_upgrade_seeds_only_empty_selection_authority(product_case):
+    database,run=product_case
+    result=run("""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text('PRAGMA user_version=11'))
+        assert not (await conn.execute(text('SELECT 1 FROM provider_selection'))).first()
+        await migrate_sqlite(conn)
+        assert (await conn.execute(text('SELECT singleton_id,provider_id,selection_revision FROM provider_selection'))).one()==(1,None,1)
+        assert (await conn.execute(text('PRAGMA user_version'))).scalar()==12
+    """)
+    assert result.returncode==0,result.stderr
+
 def test_missing_singleton_fails_closed_without_repair(product_case):
     database,run=product_case
     result=run("""
@@ -60,6 +73,22 @@ def test_missing_singleton_fails_closed_without_repair(product_case):
         async with engine.begin() as conn: await migrate_sqlite(conn)
     except RuntimeError as exc: assert 'singleton' in str(exc)
     else: raise AssertionError('missing singleton accepted')
+    """)
+    assert result.returncode==0,result.stderr
+
+def test_nonempty_pre_v12_selection_container_fails_closed(product_case):
+    database,run=product_case
+    result=run("""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text('DROP TABLE provider_selection'))
+        await conn.execute(text('CREATE TABLE provider_selection(singleton_id INTEGER PRIMARY KEY,provider_id VARCHAR(36),selection_revision INTEGER NOT NULL DEFAULT 1,updated_at DATETIME NOT NULL)'))
+        await conn.execute(text("INSERT INTO provider_selection VALUES(2,NULL,2,CURRENT_TIMESTAMP)"))
+        await conn.execute(text('PRAGMA user_version=11'))
+    try:
+        async with engine.begin() as conn: await migrate_sqlite(conn)
+    except Exception as exc: assert 'provider_selection' in str(exc) or 'CHECK constraint' in str(exc)
+    else: raise AssertionError('malformed pre-v12 authority accepted')
     """)
     assert result.returncode==0,result.stderr
 

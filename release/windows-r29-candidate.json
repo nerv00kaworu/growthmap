@@ -55,11 +55,12 @@
     ".github/workflows/scripts/verify-production-asar.ps1": "62cf3ff93bf1b6ede6ad5836e3d2a79e3088bb9d054df5089bd378b0133704f1",
     ".github/workflows/scripts/resolve-local-asar.ps1": "b0e0eb6477054720c088a5df2871f839bfd66e6c5e79a633125519f90183b760",
     "release/verify-windows-r29-candidate.cjs": "d30ff2be8e3d5a0ad0c3d918975d567828d2610c9a1e8f81e880ebf3819c4710",
-    "desktop/tests/contracts.test.js": "d28779b20cf6321768ddd7b814d1faef353a35ae3be9827a05615edd4eec37fd",
-    "src/backend/tests/test_provider_selection_authority.py": "88e7b2e55b665ddd6bf9e983a8e013a318531ed6a0299f8e288fc3dd7aa7896a",
+    "desktop/tests/contracts.test.js": "ee9f1facf157c4192e36988f27378ca7a02ca613a3fcb9298fef3a86b9b9d5ec",
+    "src/backend/tests/test_provider_selection_authority.py": "3f940020b4c00420fd54b8c1b79ecbba9d91ea8894341365e04bed0a9cc34b14",
     "src/backend/tests/test_provider_selection_authority_stdlib.py": "8371776abffc9cb27960b73fa676db96f09ff46c6dfe2ae3f0f329e83786fc01",
     "src/backend/tests/test_provider_selection_schema_contract_stdlib.py": "4f1d8dc89fc4a84dff2abaafd1339790ba2f55bce3b7371a35d7534458906849",
     "desktop/generated/csp-script-hashes.json": "0a35d5b681b984b8e577d9348af60e83ee719e679b7811db8786a41809e74e16",
-    "src/backend/db/schema_contract.py": "f9b434e8d4aefc2a1ab558260991b5ceb2220faaec50b987c3621b2b5ecdea8e"
+    "src/backend/db/schema_contract.py": "f9b434e8d4aefc2a1ab558260991b5ceb2220faaec50b987c3621b2b5ecdea8e",
+    "src/backend/db/migrations.py": "731849e25e565b72a449b212a0cccd7a909899484131c1819b96a08184cceb80"
   }
 }

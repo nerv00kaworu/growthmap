@@ -226,9 +226,17 @@ async def _migrate_sqlite_body(conn):
         if os.getenv("GROWTHMAP_TEST_FAIL_MIGRATION_PHASE")=="provider_selection_v12":
             raise RuntimeError("injected migration failure after provider selection DDL")
     elif not (await conn.execute(text("SELECT 1 FROM provider_selection WHERE singleton_id=1"))).first():
-        # A malformed/missing authority row is not inferable user data. Fail
-        # closed even during upgrade rather than silently minting authority.
-        raise RuntimeError("missing provider_selection singleton row")
+        if not upgrading:
+            # Once v12 is authoritative, a missing singleton is corruption and
+            # must never be recreated silently.
+            raise RuntimeError("missing provider_selection singleton row")
+        # SQLAlchemy create_all() runs before migrations and may materialize the
+        # new v12 table on a v0-v11 database.  Seed only the empty authority
+        # container while upgrading; provider_id stays NULL, so no provider is
+        # inferred or selected from legacy/user data.
+        if (await conn.execute(text("SELECT 1 FROM provider_selection LIMIT 1"))).first():
+            raise RuntimeError("malformed provider_selection rows before v12 upgrade")
+        await conn.execute(text("INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP)"))
     await _validate_provider_selection_contract(conn)
     await _enforce_legacy_required_timestamps(conn,upgrading,version)
     for ordinal,spec in enumerate(migration_specs,1):
