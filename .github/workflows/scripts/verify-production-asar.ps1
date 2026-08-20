@@ -1,6 +1,7 @@
 param([switch]$SelfTestOnly,[string]$ProvenancePath,[string]$ProvenanceSha256)
 
 $ErrorActionPreference = 'Stop'
+$asarCli = & (Join-Path $PSScriptRoot 'resolve-local-asar.ps1')
 
 $fixturePath = Join-Path $PSScriptRoot 'fixtures/production-package-layout.json'
 $layout = Get-Content $fixturePath -Raw | ConvertFrom-Json
@@ -334,7 +335,7 @@ if (-not (Get-ChildItem $dist -Filter 'GrowthMap-Setup-*.exe' | Select-Object -F
 
 # Use the maintained package explicitly; its output is one path per line and may
 # contain leading separators/CRLF depending on capture and platform.
-$list = @(npx --yes '@electron/asar' list $asar)
+$list = @(& node $asarCli list $asar)
 if ($LASTEXITCODE -ne 0) { throw '@electron/asar list failed' }
 $resourceList = @(Get-ChildItem $resources -File -Recurse | ForEach-Object {
   [IO.Path]::GetRelativePath($resources, $_.FullName)
@@ -345,12 +346,12 @@ $tmp = Join-Path $env:RUNNER_TEMP ("growthmap-production-asar-{0}" -f [guid]::Ne
 New-Item -ItemType Directory -Path $tmp | Out-Null
 Push-Location $tmp
 try {
-  npx --yes '@electron/asar' extract-file $asar main.js
+  & node $asarCli extract-file $asar main.js
   if ($LASTEXITCODE -ne 0) { throw 'Could not extract packaged main.js' }
-  npx --yes '@electron/asar' extract-file $asar package.json
+  & node $asarCli extract-file $asar package.json
   if ($LASTEXITCODE -ne 0) { throw 'Could not extract packaged package.json' }
   $allPath = Join-Path $tmp 'all'
-  npx --yes '@electron/asar' extract $asar $allPath
+  & node $asarCli extract $asar $allPath
   if ($LASTEXITCODE -ne 0) { throw 'Could not extract production ASAR for content inspection' }
 } finally {
   Pop-Location

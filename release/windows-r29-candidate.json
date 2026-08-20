@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "candidate": "Windows R29",
+  "releaseStatus": "candidate-not-released",
+  "source": {
+    "baseCommit": "e57c3b1a8eed5d79248d8f47d647231ae53e9e4f",
+    "candidateDelta": "reviewed candidate commit atop baseCommit; exact commit SHA is bound by CI github.sha and the generated artifact manifest; content files are pinned below",
+    "tag": null,
+    "release": null
+  },
+  "scope": {
+    "platform": "windows",
+    "arch": "x64",
+    "channel": "unsigned-commercial",
+    "signed": false,
+    "linuxSidecarReleaseGate": false,
+    "windowsSidecarAndMcpPackageGate": true
+  },
+  "build": {
+    "node": "22.x",
+    "python": "3.12",
+    "workflow": ".github/workflows/growthmap-windows-production-personal-v1.yml",
+    "artifactManifest": "desktop/dist/growthmap-windows-production-personal-v1-manifest.json (generated only by package verifier)"
+  },
+  "gates": {
+    "required": [
+      "frontend test/lint/typecheck/build/deterministic-build/audit",
+      "desktop tests/preflight:win/audit",
+      "workflow contract tests",
+      "candidate manifest verifier",
+      "Windows candidate workflow and artifact hash verification before distribution"
+    ],
+    "satisfiedByMetadata": [
+      "source/scope declarations",
+      "committed-file integrity pins"
+    ],
+    "pendingExternal": [
+      "Windows workflow candidate build and generated artifact hashes",
+      "human distribution approval"
+    ]
+  },
+  "integrity": {
+    "src/frontend/package.json": "9fbb9ef6f3f02a84a6b894408c302b558c11d1fa80bcc7a2fbcbe90c405f7849",
+    "src/frontend/package-lock.json": "1d7df74d3a098b9f7e1df974226db2884f8ff2f07fde55a7ce67371fd9b2298f",
+    "desktop/package.json": "2204f6ee048967804cd774416093b59a7292b5ef5b5fcaf104aa0f3a2b3d6c60",
+    "desktop/package-lock.json": "8135b77c80174b879fc41b140381a3252fbd209a5cb7b38ee0a2a536d511b409",
+    "RELEASE-MANIFEST.json": "3251fbb3f5c93a92d41fe7edb267d0a06c83b8df63a8c7422d4472b533f3ad94",
+    "release/WINDOWS-R29-CANDIDATE-CHECKLIST.md": "feab6553fda5c67eb0e5e2697fdd7aea120bdbe9faed6e04f3fd62d07080ba43",
+    ".github/workflows/ci.yml": "4534e94867095b438047f80b484e8a83343417a948082f54d12123c754608ec0",
+    ".github/workflows/desktop-windows.yml": "99ccb19bdcbce605f356bf14beaa172bbfa97ee49bc6a5a03af012993a4737ff",
+    ".github/workflows/gift-staging-windows.yml": "ceb6b1b958193384ff760e58491eef9860648958df7fda1a496f4af09c2a61b7",
+    ".github/workflows/growthmap-windows-production-personal-v1.yml": "55759c2666a451198c1808adf54b1b4ef59d6409f91b42f0ff7d4a299dfeec68",
+    ".github/workflows/scripts/verify-production-unsigned-package.ps1": "2545af14712b0f6f6b59096d26be084b56d5e88e13526e2bf76d70e2eb8292e1",
+    ".github/workflows/scripts/verify-gift-staging-package.ps1": "f44d3880114379b3e663f2a85132f574442b2655c86b5fdbe36fa8d08b3110c7",
+    ".github/workflows/scripts/verify-production-asar.ps1": "62cf3ff93bf1b6ede6ad5836e3d2a79e3088bb9d054df5089bd378b0133704f1",
+    ".github/workflows/scripts/resolve-local-asar.ps1": "9c3f02f434e02ba0e4a3a86c131509239cddc098a421035f9d57857f7b14a869",
+    "release/verify-windows-r29-candidate.cjs": "9901200ea5c745049feccfb7ccaadd025450706a8386baf7f1d14926c7d4ec52",
+    "desktop/tests/contracts.test.js": "0f6ed3af02f41cd4ae82182041865714a93d4bd8e0fee655d413ab027c3b3be3"
+  }
+}

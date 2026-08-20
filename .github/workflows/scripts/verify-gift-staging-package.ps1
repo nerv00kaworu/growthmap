@@ -1,11 +1,13 @@
 param([Parameter(Mandatory)][string]$ExpectedOrigin,[Parameter(Mandatory)][string]$ExpectedPin,[Parameter(Mandatory)][string]$SourceSha)
 $ErrorActionPreference='Stop'
+$asarCli = & (Join-Path $PSScriptRoot 'resolve-local-asar.ps1')
 $resources='desktop/dist/win-unpacked/resources';$asar=Join-Path $resources 'app.asar';$config=Join-Path $resources 'commercial-config.json';$key=Join-Path $resources 'commercial/license_public_key.pem';$mcp=Join-Path $resources 'growthmap-mcp.exe'
 foreach($path in @($asar,$config,$key,$mcp,'desktop/dist/win-unpacked/GrowthMap.exe')){if(-not(Test-Path $path -PathType Leaf)){throw "Missing staged package file: $path"}}
 $doc=Get-Content $config -Raw|ConvertFrom-Json
 if($doc.publisherStatus -cne 'STAGING_ONLY' -or $doc.activationApiOrigin -cne $ExpectedOrigin -or $doc.licensePublicKeySha256 -cne $ExpectedPin){throw 'Staging public config mismatch'}
 if((Get-FileHash $key -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedPin){throw 'Packaged key pin mismatch'}
-$list=& npx --yes @electron/asar list $asar
+$list=& node $asarCli list $asar
+if($LASTEXITCODE -ne 0){throw 'Repository-local ASAR list failed'}
 foreach($needle in @('e2e-main.js','e2e-commercial-config.js','gift_api.py','authority.py','PRIVATE KEY','create-e2e-fixture')){if(($list -join "`n") -match [regex]::Escape($needle)){throw "Forbidden ASAR entry: $needle"}}
 if(($list -join "`n") -notmatch 'release-mode.json'){throw 'Staging release mode metadata absent'}
 $installer=Get-ChildItem desktop/dist -Filter 'GrowthMap-Setup-*.exe'|Select-Object -First 1;if(-not $installer){throw 'Installer absent'}

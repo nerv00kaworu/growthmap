@@ -16,11 +16,13 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: '22', cache: npm, cache-dependency-path: '**/package-lock.json' }
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12', cache: pip }
+      - name: Verify exact R29 candidate source metadata and integrity
+        run: node release/verify-windows-r29-candidate.cjs
       - name: Validate manual unsigned release inputs
         shell: pwsh
         env:
@@ -39,6 +41,8 @@ jobs:
           PYTHONPATH: src/backend
       - run: npm ci
         working-directory: src/frontend
+      - run: npm audit --audit-level=low
+        working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build
         working-directory: src/frontend
       - run: ./packaging/build-sidecar.ps1
@@ -46,6 +50,8 @@ jobs:
       - run: ./packaging/build-mcp.ps1
         working-directory: src/backend
       - run: npm ci
+        working-directory: desktop
+      - run: npm audit --audit-level=low
         working-directory: desktop
       - run: npm test
         working-directory: desktop
@@ -84,7 +90,7 @@ jobs:
         run: ./.github/workflows/scripts/verify-production-unsigned-package.ps1 -ExpectedPin '${{ inputs.g1_public_key_sha256 }}' -SourceSha '${{ github.sha }}'
       - name: Upload verifier diagnostic on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: growthmap-windows-production-diagnostic-${{ github.sha }}
           path: |
@@ -93,7 +99,7 @@ jobs:
           if-no-files-found: error
           retention-days: 3
       - name: Upload installer and manifest hashes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: growthmap-windows-production-personal-v1-${{ inputs.release_label }}-${{ github.sha }}
           path: |

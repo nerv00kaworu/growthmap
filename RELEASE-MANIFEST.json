@@ -3,7 +3,7 @@
   "package": {
     "name": "growthmap-authoring",
     "version": "0.1.0-authoring.2",
-    "releaseStatus": "release"
+    "releaseStatus": "superseded-authoring-release"
   },
   "boundary": {
     "includes": [
@@ -41,14 +41,14 @@
     "launcherDatabasePolicy": "DATABASE_URL is required; frontend/backend hosts are restricted to 127.0.0.1 or localhost (IPv6 forms rejected), with matching backend Host validation."
   },
   "integrity": {
-    "src/frontend/package-lock.json": "cc2da96e51a81761de1ae68b5911fae02296a518ff344468e982ebf81ac0638a",
-    "src/backend/requirements.txt": "e12e4080a187ce0d14b1901213362bf1ab8b072ed3ee79f86050ad0c0cdcb2c5",
-    "src/backend/requirements.lock": "058ca48d59c3b7c36d50f19e032fb9ef7e89f0b896bbf78f9116ce1cf978f124",
-    ".gitignore": "5e7d233a8e008305ace277c678d5fed9831322a68006e8a2d06341475a3dde2d",
-    "README.md": "013cf5863259eafe1ec91ccf2f185147b9ec774fcd7d0a349a0d7c1d68544c8b",
+    "src/frontend/package-lock.json": "1d7df74d3a098b9f7e1df974226db2884f8ff2f07fde55a7ce67371fd9b2298f",
+    "src/backend/requirements.txt": "5fe6f21ec1dfe3329858794b8033770fe559d49731ed76e7035e277ae70d96f2",
+    "src/backend/requirements.lock": "fbedd4e1f6744fc0050ed0998145f67ee04d5d630d505ed884e8285af5844d57",
+    ".gitignore": "f66a6280741d22fb97e75cd6230e77f263acce2182c4dbfea29050c0d48d4c43",
+    "README.md": "4113e2443bb99306246c1063d3be033d53770f0e64fcb07568907b6bc959ef69",
     "CHANGELOG.md": "08a0673ca3ab9380901801e6fd10bd1d25932921635d2945fd41fac0fef1dd8a",
     "docs/RELEASE-CONVERGENCE-CHECKLIST-v1.md": "f24e301dc7d2912224470cf137a8e4b282da35e0a073f6266e9624046857af7c",
-    "src/frontend/package.json": "e28945bc58e58003d0ddd7299364608b7b482bcedab803877d608d7bedbbe532",
+    "src/frontend/package.json": "9fbb9ef6f3f02a84a6b894408c302b558c11d1fa80bcc7a2fbcbe90c405f7849",
     "docs/SECURITY-REMEDIATION-0.1.0-authoring.2.md": "9697e2afe34c9a80dc932baf61c1ed982fea5e9942e5f64fc44bb71725bea825"
   },
   "releaseGates": {
@@ -64,5 +64,6 @@
       "BYOK and loopback-boundary security regressions pass"
     ],
     "notYetSatisfied": []
-  }
+  },
+  "provenanceNotice": "Superseded authoring.2 record only; not Windows R29 provenance."
 }

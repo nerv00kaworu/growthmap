@@ -1,5 +1,6 @@
 param([Parameter(Mandatory)][string]$ExpectedPin,[Parameter(Mandatory)][string]$SourceSha)
 $ErrorActionPreference='Stop'
+$asarCli = & (Join-Path $PSScriptRoot 'resolve-local-asar.ps1')
 $resources='desktop/dist/win-unpacked/resources';$asar=Join-Path $resources 'app.asar';$config=Join-Path $resources 'commercial-config.json';$key=Join-Path $resources 'commercial/license_public_key.pem';$sidecar=Join-Path $resources 'sidecar/growthmap-sidecar.exe';$mcp=Join-Path $resources 'growthmap-mcp.exe';$exe='desktop/dist/win-unpacked/GrowthMap.exe'
 foreach($path in @($asar,$config,$key,$sidecar,$mcp,$exe)){if(-not(Test-Path $path -PathType Leaf)){throw "Missing production package file: $path"}}
 $doc=Get-Content $config -Raw|ConvertFrom-Json
@@ -8,7 +9,8 @@ if($doc.activationApiOrigin -cne 'https://payments.growthmap.work' -or $doc.purc
 if($doc.updateUrl -cne '' -or $doc.updateOrigin -cne ''){throw 'Updater must be disabled in unsigned production v1'}
 if($doc.licensePublicKeySha256 -cne $ExpectedPin -or (Get-FileHash $key -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedPin){throw 'Packaged G1 public-key pin mismatch'}
 $pem=Get-Content $key -Raw;if($pem -notmatch 'BEGIN PUBLIC KEY' -or $pem -match 'PRIVATE KEY'){throw 'Packaged key is not public-only PEM'}
-$extract=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-verify';if(Test-Path $extract){Remove-Item $extract -Recurse -Force};& npx --yes @electron/asar extract $asar $extract
+$extract=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-verify';if(Test-Path $extract){Remove-Item $extract -Recurse -Force};& node $asarCli extract $asar $extract
+if($LASTEXITCODE -ne 0){throw 'Repository-local ASAR extract failed'}
 $productRoots=@(Get-ChildItem $extract -Recurse -File -Filter 'package.json'|ForEach-Object{try{$metadata=Get-Content $_.FullName -Raw|ConvertFrom-Json;if($metadata.name -ceq 'growthmap-desktop' -and $metadata.main -ceq 'main.js'){$_.Directory.FullName}}catch{}})
 if($productRoots.Count -ne 1){throw 'Unique GrowthMap desktop application root absent from ASAR'}
 $appRoot=$productRoots[0];$main=Join-Path $appRoot 'main.js';$releaseMode=Join-Path $appRoot 'release-mode.json'
