@@ -20,6 +20,15 @@ from ai.providers.mock import MockProvider
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def select_provider(client, provider):
+    response=client.put("/api/providers/selection",json={"provider_id":provider["id"],"expected_selection_revision":provider["selection_revision"]})
+    assert response.status_code==200,response.text
+    selected=response.json()
+    stale=client.put("/api/providers/selection",json={"provider_id":provider["id"],"expected_selection_revision":provider["selection_revision"]})
+    assert stale.status_code==409 and stale.json()["detail"]["code"]=="LLM_SELECTION_STALE"
+    return {**provider,"selection_revision":selected["selection_revision"]}
+
+
 class SecurityRemediationTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
@@ -51,11 +60,11 @@ class SecurityRemediationTest(unittest.TestCase):
     def test_ai_provider_id_path_and_test_connection(self):
         with TestClient(app) as client:
             project = client.post("/api/projects", json={"name": "Provider path"}).json()
-            provider = client.post("/api/providers", json={"name": "Mock", "provider_type": "mock", "model_name": "demo"}).json()
-            tested = client.post("/api/ai/test-connection", json={"provider_id": provider["id"],"provider_revision":provider["revision"]})
+            provider = select_provider(client,client.post("/api/providers", json={"name": "Mock", "provider_type": "mock", "model_name": "demo"}).json())
+            tested = client.post("/api/ai/test-connection", json={"provider_id": provider["id"],"provider_revision":provider["revision"],"selection_revision":provider["selection_revision"]})
             self.assertEqual(tested.status_code, 200, tested.text)
             self.assertTrue(tested.json()["ok"])
-            expanded = client.post("/api/ai/expand", json={"node_id": project["root_node_id"], "provider_id": provider["id"], "provider_revision":provider["revision"], "count": 2})
+            expanded = client.post("/api/ai/expand", json={"node_id": project["root_node_id"], "provider_id": provider["id"], "provider_revision":provider["revision"], "selection_revision":provider["selection_revision"], "count": 2})
             self.assertEqual(expanded.status_code, 200, expanded.text)
             self.assertGreaterEqual(len(expanded.json()["suggestions"]), 1)
 
@@ -100,9 +109,14 @@ class SecurityRemediationTest(unittest.TestCase):
                     session.add(legacy)
                     await session.commit()
                     await session.refresh(legacy)
-                    return legacy.id
+                    from models.models import ProviderSelection
+                    selection=await session.get(ProviderSelection,1)
+                    selection.provider_id=legacy.id
+                    selection.selection_revision+=1
+                    await session.commit()
+                    return legacy.id, selection.selection_revision
             for provider_type in ("openai_compatible", "mock"):
-                legacy_id = asyncio.run(seed_unsafe(provider_type))
+                legacy_id, legacy_selection_revision = asyncio.run(seed_unsafe(provider_type))
                 rejected = client.put(f"/api/providers/{legacy_id}/secret", json={"api_key": "***"})
                 self.assertEqual(rejected.status_code, 400, (provider_type, rejected.text))
                 self.assertIn("rebind", rejected.text)
@@ -110,12 +124,12 @@ class SecurityRemediationTest(unittest.TestCase):
                 self.assertNotIn("legacy-secret-value", rejected.text)
                 legacy_version=client.get("/api/providers").json()
                 legacy_version=next(x["revision"] for x in legacy_version if x["id"]==legacy_id)
-                legacy_test = client.post("/api/ai/test-connection", json={"provider_id": legacy_id,"provider_revision":legacy_version})
+                legacy_test = client.post("/api/ai/test-connection", json={"provider_id": legacy_id,"provider_revision":legacy_version,"selection_revision":legacy_selection_revision})
                 self.assertEqual(legacy_test.status_code, 400, (provider_type, legacy_test.text))
                 self.assertIn("rebind", legacy_test.text)
                 project = client.post("/api/projects", json={"name": f"Unsafe AI {provider_type}"}).json()
                 resolution = client.post("/api/ai/expand", json={
-                    "node_id": project["root_node_id"], "provider_id": legacy_id, "provider_revision":legacy_version,
+                    "node_id": project["root_node_id"], "provider_id": legacy_id, "provider_revision":legacy_version, "selection_revision":legacy_selection_revision,
                 })
                 self.assertEqual(resolution.status_code, 400, (provider_type, resolution.text))
                 detail = resolution.json()["detail"]
@@ -195,6 +209,6 @@ def test_profile_version_mismatch_aborts_before_provider_construction(monkeypatc
     called=[]
     monkeypatch.setattr(routes,'get_provider',lambda config: called.append(config))
     with TestClient(app) as client:
-        provider=client.post('/api/providers',json={'name':'Exact','provider_type':'mock'}).json()
-        result=client.post('/api/ai/test-connection',json={'provider_id':provider['id'],'provider_revision':provider['revision']+1})
+        provider=select_provider(client,client.post('/api/providers',json={'name':'Exact','provider_type':'mock'}).json())
+        result=client.post('/api/ai/test-connection',json={'provider_id':provider['id'],'provider_revision':provider['revision']+1,'selection_revision':provider['selection_revision']})
         assert result.status_code==409 and result.json()['detail']['code']=='LLM_PROFILE_CHANGED' and not called

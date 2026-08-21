@@ -1,5 +1,7 @@
-param([Parameter(Mandatory)][string]$ExpectedPin,[Parameter(Mandatory)][string]$SourceSha)
+param([Parameter(Mandatory)][string]$ExpectedPin,[Parameter(Mandatory)][string]$SourceSha,[string]$GitHubOutput=$env:GITHUB_OUTPUT)
 $ErrorActionPreference='Stop'
+$runtimeVersion=[Version]$PSVersionTable.PSVersion.ToString()
+if ($PSVersionTable.PSEdition -cne 'Core' -or $runtimeVersion -lt [Version]'7.4.0') { throw 'Production package verifier requires PowerShell Core 7.4 or newer' }
 $asarCli = & (Join-Path $PSScriptRoot 'resolve-local-asar.ps1')
 $resources='desktop/dist/win-unpacked/resources';$asar=Join-Path $resources 'app.asar';$config=Join-Path $resources 'commercial-config.json';$key=Join-Path $resources 'commercial/license_public_key.pem';$sidecar=Join-Path $resources 'sidecar/growthmap-sidecar.exe';$mcp=Join-Path $resources 'growthmap-mcp.exe';$exe='desktop/dist/win-unpacked/GrowthMap.exe'
 foreach($path in @($asar,$config,$key,$sidecar,$mcp,$exe)){if(-not(Test-Path $path -PathType Leaf)){throw "Missing production package file: $path"}}
@@ -25,9 +27,12 @@ foreach($needle in @('e2e-main.js','e2e-commercial-config.js','create-e2e-fixtur
 $sourceText=(Get-Content $main -Raw)
 if($sourceText -match 'PRIVATE KEY'){throw 'Forbidden ASAR material: PRIVATE KEY'}
 $mode=Get-Content $releaseMode -Raw|ConvertFrom-Json;if($mode.mode -cne 'unsigned-commercial' -or $mode.updatesEnabled -ne $false -or $mode.publisherDisplay -cne 'Unknown Publisher — 月影塵（nerv00kaworu）'){throw 'Unsigned commercial release metadata mismatch'}
-$installer=Get-ChildItem desktop/dist -Filter 'GrowthMap-Setup-*.exe'|Select-Object -First 1;if(-not $installer){throw 'Installer absent'}
+$installers=@(Get-ChildItem desktop/dist -File -Filter 'GrowthMap-Setup-*.exe');if($installers.Count-ne 1){throw "Expected exactly one installer, found $($installers.Count)"};$installer=$installers[0]
 if((Get-AuthenticodeSignature $installer.FullName).Status -eq 'Valid'){throw 'No fake signing: candidate must remain unsigned'}
 $installerHash=(Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant();"$installerHash  $($installer.Name)"|Set-Content "$($installer.FullName).sha256" -Encoding ascii
-$manifest=[ordered]@{schema_version=1;product='GrowthMap Windows Production Personal v1';source_sha=$SourceSha;unsigned=$true;publisher='月影塵（nerv00kaworu）';publisher_display='Unknown Publisher';activation_api_origin='https://payments.growthmap.work';activation_challenge_url='https://payments.growthmap.work/v1/activation/challenge';activation_complete_url='https://payments.growthmap.work/v1/activation/complete';purchase_portal_url='https://whop.com/growthmap/growthmap/';updates_enabled=$false;g1_public_key_sha256=$ExpectedPin;installer=$installer.Name;installer_sha256=$installerHash;asar_sha256=(Get-FileHash $asar -Algorithm SHA256).Hash.ToLowerInvariant();sidecar_sha256=(Get-FileHash $sidecar -Algorithm SHA256).Hash.ToLowerInvariant();mcp_sha256=(Get-FileHash $mcp -Algorithm SHA256).Hash.ToLowerInvariant()}
-$manifest|ConvertTo-Json|Set-Content desktop/dist/growthmap-windows-production-personal-v1-manifest.json -Encoding utf8
-(Get-FileHash desktop/dist/growthmap-windows-production-personal-v1-manifest.json -Algorithm SHA256).Hash.ToLowerInvariant()+"  growthmap-windows-production-personal-v1-manifest.json"|Set-Content desktop/dist/growthmap-windows-production-personal-v1-manifest.json.sha256 -Encoding ascii
+$manifest=[ordered]@{schema_version=1;product='GrowthMap Windows Production Personal v1';source_sha=$SourceSha;unsigned=$true;publisher='月影塵（nerv00kaworu）';publisher_display='Unknown Publisher';activation_api_origin='https://payments.growthmap.work';activation_challenge_url='https://payments.growthmap.work/v1/activation/challenge';activation_complete_url='https://payments.growthmap.work/v1/activation/complete';purchase_portal_url='https://whop.com/growthmap/growthmap/';updates_enabled=$false;g1_public_key_sha256=$ExpectedPin;installer=$installer.Name;installer_sha256=$installerHash;executable_sha256=(Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant();asar_sha256=(Get-FileHash $asar -Algorithm SHA256).Hash.ToLowerInvariant();sidecar_sha256=(Get-FileHash $sidecar -Algorithm SHA256).Hash.ToLowerInvariant();mcp_sha256=(Get-FileHash $mcp -Algorithm SHA256).Hash.ToLowerInvariant()}
+$manifestPath='desktop/dist/growthmap-windows-production-personal-v1-manifest.json'
+$manifest|ConvertTo-Json|Set-Content $manifestPath -Encoding utf8
+$manifestHash=(Get-FileHash $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+$manifestHash+"  growthmap-windows-production-personal-v1-manifest.json"|Set-Content "$manifestPath.sha256" -Encoding ascii
+if ($GitHubOutput) { "manifest_sha256=$manifestHash" >> $GitHubOutput }

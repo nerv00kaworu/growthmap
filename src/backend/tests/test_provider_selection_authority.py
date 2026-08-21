@@ -19,7 +19,7 @@ def product_case(tmp_path):
     assert database not in SENTINELS and database.parent==tmp_path.resolve()
     def run(body, **extra):
         env=os.environ.copy(); env.update({"PYTHONPATH":str(BACKEND),"APP_ENV":"test","DATABASE_URL":f"sqlite+aiosqlite:///{database}",**extra})
-        script=textwrap.dedent(f"""
+        prelude=textwrap.dedent(f"""\
         import asyncio
         from pathlib import Path
         from sqlalchemy import text
@@ -28,9 +28,8 @@ def product_case(tmp_path):
         from db.migrations import migrate_sqlite
         assert Path(engine.url.database).resolve()==Path({str(database)!r})
         async def case():
-            {textwrap.indent(textwrap.dedent(body),'    ').lstrip()}
-        asyncio.run(case())
         """)
+        script=prelude+textwrap.indent(textwrap.dedent(body).strip(),"    ")+"\nasyncio.run(case())\n"
         return subprocess.run([sys.executable,"-c",script],cwd=BACKEND,env=env,text=True,capture_output=True)
     return database,run
 
@@ -68,7 +67,8 @@ def test_missing_singleton_fails_closed_without_repair(product_case):
     result=run("""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(text('PRAGMA user_version=12'))
+        await migrate_sqlite(conn)
+        await conn.execute(text('DELETE FROM provider_selection'))
     try:
         async with engine.begin() as conn: await migrate_sqlite(conn)
     except RuntimeError as exc: assert 'singleton' in str(exc)

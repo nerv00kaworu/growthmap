@@ -5,7 +5,11 @@ function fail(message){throw Error(`Production unsigned package blocked: ${messa
 function requiredAbsolute(name){const value=process.env[name];if(!value||!path.isAbsolute(value))fail(`${name} absolute path is required`);return value;}
 const key=requiredAbsolute('GROWTHMAP_PRODUCTION_LICENSE_PUBLIC_KEY');
 const output=requiredAbsolute('GROWTHMAP_PRODUCTION_PUBLIC_CONFIG');
+const releaseMode=requiredAbsolute('GROWTHMAP_PRODUCTION_RELEASE_MODE');
 if(!fs.statSync(key,{throwIfNoEntry:false})?.isFile())fail('G1 public key is missing');
+const expectedMode={schemaVersion:1,mode:'unsigned-commercial',updatesEnabled:false,publisherDisplay:'Unknown Publisher — 月影塵（nerv00kaworu）'};
+let actualMode;try{actualMode=JSON.parse(fs.readFileSync(releaseMode,'utf8'));}catch{fail('external production release mode is missing or invalid JSON');}
+if(JSON.stringify(actualMode)!==JSON.stringify(expectedMode))fail('external production release mode metadata mismatch');
 const keyBytes=fs.readFileSync(key),pem=keyBytes.toString('utf8');
 if(!/^-----BEGIN PUBLIC KEY-----\r?\n[\s\S]+\r?\n-----END PUBLIC KEY-----\r?\n?$/.test(pem)||pem.includes('PRIVATE KEY'))fail('G1 input must be an exact public PEM');
 const pin=crypto.createHash('sha256').update(keyBytes).digest('hex');

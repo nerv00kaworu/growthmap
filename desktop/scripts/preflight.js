@@ -3,7 +3,8 @@ const fs=require('node:fs'),path=require('node:path');
 const {verify}=require('./csp-manifest');
 const root=path.resolve(process.env.GROWTHMAP_PREFLIGHT_ROOT||path.resolve(__dirname,'..','..')); const platform=process.argv[2]||process.platform;
 const binary=path.join(root,'src','backend','dist',platform==='win32'?'growthmap-sidecar.exe':'growthmap-sidecar');
-const required=[binary,path.join(root,'src','frontend','out','index.html'),...['LICENSE','EULA.md','PRIVACY.md','THIRD_PARTY_NOTICES.md'].map(x=>path.join(root,x))];
+const windowsEvidence=platform==='win32'?['windows-native-broker.js','windows-native-broker-helper.ps1','windows-native-evidence.js','windows-native-evidence-helper.ps1','windows-native-replacement.js','windows-native-replacement-helper.ps1'].map(x=>path.join(root,'desktop',x)):[];
+const required=[binary,path.join(root,'src','frontend','out','index.html'),...windowsEvidence,...['LICENSE','EULA.md','PRIVACY.md','THIRD_PARTY_NOTICES.md'].map(x=>path.join(root,x))];
 const missing=required.filter(x=>!fs.statSync?.(x,{throwIfNoEntry:false})?.isFile());
 if(missing.length){console.error('Desktop packaging preflight failed; missing required files:\n'+missing.map(x=>`- ${x}`).join('\n'));process.exit(1);}
 const manifestFile=path.join(root,'desktop','generated','csp-script-hashes.json');

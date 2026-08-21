@@ -19,8 +19,9 @@ function createLifecycle({platform=process.platform,spawn=defaultSpawn,graceMs=2
  }
  if(target===child)child=null;
  }
- function shutdown(closeWindows=()=>{}){if(shutdownPromise)return shutdownPromise;shuttingDown=true;acceptingIpc=false;shutdownPromise=(async()=>{closeWindows();await cleanup();})();return shutdownPromise;}
- return {attach,cleanup,shutdown,isExpectedExit:target=>expectedExits.has(target),get child(){return child;},get shuttingDown(){return shuttingDown;},get acceptingIpc(){return acceptingIpc;}};
+ function beginShutdown(){shuttingDown=true;acceptingIpc=false;}
+ function shutdown(closeWindows=()=>{}){if(shutdownPromise)return shutdownPromise;beginShutdown();shutdownPromise=(async()=>{closeWindows();await cleanup();})();return shutdownPromise;}
+ return {attach,cleanup,beginShutdown,shutdown,isExpectedExit:target=>expectedExits.has(target),get child(){return child;},get shuttingDown(){return shuttingDown;},get acceptingIpc(){return acceptingIpc;}};
 }
 function sidecarSpawnOptions(platform=process.platform){return {detached:platform!=='win32',windowsHide:true,stdio:['ignore','ignore','ignore']};}
 function probeSpawnOptions(platform=process.platform){return {...sidecarSpawnOptions(platform),stdio:['ignore','pipe','pipe']};}

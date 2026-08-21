@@ -6,8 +6,10 @@ import unittest
 # database.py creates its engine during import. This must happen before main is imported
 # so the test can never read or mutate the developer's local growthmap.db.
 # Override rather than setdefault: tests must never inherit an operator/developer DB URL.
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
-os.environ["GROWTHMAP_ENV_FILE"] = os.path.join(tempfile.gettempdir(), "growthmap-test.env")
+_ISOLATED_DIR = tempfile.mkdtemp(prefix="growthmap-smoke-")
+os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_ISOLATED_DIR}/growthmap.db"
+os.environ["GROWTHMAP_ENV_FILE"] = os.path.join(_ISOLATED_DIR, "growthmap.env")
+os.environ["GROWTHMAP_CREDENTIAL_DIR"] = os.path.join(_ISOLATED_DIR, "credentials")
 
 from fastapi.testclient import TestClient
 from main import app

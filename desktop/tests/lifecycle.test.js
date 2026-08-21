@@ -12,12 +12,13 @@ test('Windows cleanup always awaits taskkill tree even after bootloader parent e
 
 test('already exited/crashed child needs no tree kill',async()=>{const c=child();c.exitCode=1;const l=createLifecycle({graceMs:1});l.attach(c);await l.cleanup(c);assert.deepEqual(c.kills,[]);});
 
-test('entitlement probes capture output and sidecars expose stderr only in CI',()=>{
+test('entitlement probes capture bounded output while production sidecars never expose stderr via ambient CI',()=>{
  assert.deepEqual(probeSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
  assert.deepEqual(sidecarSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','ignore','ignore']});
  const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8');
  assert.match(source,/--entitlement-status[\s\S]*probeSpawnOptions\(\)/);
- assert.match(source,/const spawnOptions=sidecarSpawnOptions\(\);if\(process\.env\.CI==='true'\)spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
+ assert.match(source,/const spawnOptions=sidecarSpawnOptions\(\)/);
+ assert.doesNotMatch(source,/process\.env\.CI|spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
  assert.match(source,/lifecycle\.attach\(spawn\(executable\(\),\[\],\{env,\.\.\.spawnOptions\}\)\)/);
  assert.match(source,/if\(!child\.stdout\|\|!child\.stderr\)return reject/);
 });

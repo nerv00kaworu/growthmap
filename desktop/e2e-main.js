@@ -28,6 +28,11 @@ const relative=path.relative(realProfile,path.resolve(fixture));
 if(relative===''||(!relative.startsWith('..'+path.sep)&&relative!=='..')||path.isAbsolute(relative))throw new Error('E2E import fixture must be outside userData');
 const original=dialog.showOpenDialog.bind(dialog);
 dialog.showOpenDialog=async(window,options)=>options?.filters?.some(x=>x.extensions?.includes('db'))?{canceled:false,filePaths:[fixture]}:original(window,options);
+if(process.env.GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE==='1'){
+ const secretModule=require.resolve('./secret-store'),original=require(secretModule).createSecretStore;
+ require.cache[secretModule].exports.createSecretStore=options=>{const store=original(options),hydrate=store.hydrate.bind(store);store.hydrate=async()=>{await hydrate();throw new Error('Injected E2E hydration failure')};return store};
+ phase('hydration-failure-injected');
+}
 phase('main-required');
 require('./main');
 app.on('browser-window-created',(_event,window)=>window.webContents.on('did-finish-load',()=>window.webContents.executeJavaScript(`document.documentElement.dataset.growthmapRendererReady='true'`).catch(()=>{})));

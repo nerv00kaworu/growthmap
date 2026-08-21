@@ -21,7 +21,7 @@ from db.database import get_db
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, ProviderSelection, AgentSession, AgentArtifact
 from models.content_blocks import CONTENT_BLOCK_TYPES
 from desktop.entitlements import peek_current_entitlement
-from desktop.secrets import desktop_mode, put as put_memory_secret, delete as delete_memory_secret
+from desktop.secrets import desktop_mode, has as has_memory_secret, put as put_memory_secret, delete as delete_memory_secret
 from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
 from api.branching import deep_copy_branch
 from api.provider_authority import guarded_provider_update, change_external_secret, recover_external_secret
@@ -150,8 +150,16 @@ async def _selection(db: AsyncSession) -> ProviderSelection:
 async def _project_provider(db: AsyncSession, row: ProviderConfig) -> dict:
     return _provider_out(row, await _selection(db))
 
+def _credential_status(row: ProviderConfig) -> str:
+    if row.secret_change_pending: return "recovery_required"
+    if row.provider_type == "mock": return "ready"
+    if desktop_mode(): return "ready" if has_memory_secret(row.id) else "unavailable"
+    key=row.secret_env_key
+    return "ready" if isinstance(key,str) and re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}",key) and bool(os.getenv(key)) else "unavailable"
+
 def _provider_out(row: ProviderConfig, selection: ProviderSelection) -> dict:
-    return {name:getattr(row,name) for name in ProviderConfigOut.model_fields if name not in {"credential_status","is_default","selection_revision"}} | {"is_default":row.id==selection.provider_id,"selection_revision":selection.selection_revision}
+    credential_status=_credential_status(row)
+    return {name:getattr(row,name) for name in ProviderConfigOut.model_fields if name not in {"credential_status","is_default","selection_revision"}} | {"credential_status":credential_status,"is_default":row.id==selection.provider_id,"selection_revision":selection.selection_revision}
 
 async def _clear_selection_for_provider(db: AsyncSession, provider_id: str) -> None:
     selection=await _selection(db)
@@ -170,6 +178,10 @@ async def list_providers(db: AsyncSession = Depends(get_db)):
 @router.put("/providers/selection")
 async def set_provider_selection(data: ProviderSelectionWrite, db: AsyncSession = Depends(get_db)):
     try:
+        if data.provider_id is not None:
+            candidate=await db.get(ProviderConfig,data.provider_id)
+            if candidate is None or not candidate.enabled or _credential_status(candidate)!="ready":
+                raise HTTPException(409,detail={"code":"PROVIDER_UNAVAILABLE","message":"Only an enabled ready provider can be selected."})
         eligible=exists(select(ProviderConfig.id).where(ProviderConfig.id==data.provider_id,ProviderConfig.enabled.is_(True),ProviderConfig.secret_change_pending.is_(False)))
         result=await db.execute(update(ProviderSelection).where(ProviderSelection.singleton_id==1,ProviderSelection.selection_revision==data.expected_selection_revision,ProviderSelection.selection_revision<9007199254740991,True if data.provider_id is None else eligible).values(provider_id=data.provider_id,selection_revision=ProviderSelection.selection_revision+1,updated_at=datetime.now(timezone.utc)))
         if result.rowcount!=1:

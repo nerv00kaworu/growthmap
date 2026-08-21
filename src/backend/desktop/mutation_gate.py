@@ -18,6 +18,13 @@ class DesktopMutationGateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if not desktop_mode() or request.method in SAFE_METHODS or (request.method,request.url.path) in EXTRACTION_MUTATION_ALLOWLIST:
             return await call_next(request)
+        # This is not a public path allowlist: only Electron main's live,
+        # unsealed per-sidecar capability may cross the read-only gate.
+        path=request.url.path
+        hydration_path=(path=="/api/desktop/secrets/hydration/seal" or (path.startswith("/api/desktop/secrets/") and path.endswith("/hydrate")))
+        if hydration_path:
+            from desktop.hydration_auth import valid as valid_hydration
+            if valid_hydration(request): return await call_next(request)
         recovery_marker=os.getenv("GROWTHMAP_UPDATE_PENDING_FILE")
         recovery_locked=bool(recovery_marker and Path(recovery_marker).exists())
         entitlement=effective_entitlement()

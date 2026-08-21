@@ -3,7 +3,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Optional, Any, Literal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from models.content_blocks import ContentBlockType
 
 
@@ -279,6 +279,14 @@ from models.provider_authority import MAX_PROVIDER_REVISION
 
 APP_SECRET_ENV_PREFIX = "GROWTHMAP_LLM_KEY_"
 APP_SECRET_ENV_PATTERN = re.compile(r"^GROWTHMAP_LLM_KEY_[A-Z0-9_]{1,96}$")
+MAX_PROVIDER_CREDENTIAL_CHARS = 16384
+MAX_PROVIDER_CREDENTIAL_BYTES = 32768
+
+
+def validate_provider_credential(value: str) -> str:
+    if not isinstance(value, str) or not value or "\0" in value or len(value) > MAX_PROVIDER_CREDENTIAL_CHARS or len(value.encode("utf-8")) > MAX_PROVIDER_CREDENTIAL_BYTES:
+        raise ValueError("INVALID_PROVIDER_CREDENTIAL")
+    return value
 
 
 def validate_app_secret_env_key(value: str) -> str:
@@ -337,15 +345,15 @@ class ProviderModelUpdate(BaseModel):
 
 
 class ProviderSecretRecovery(BaseModel):
-    model_config = {"extra": "forbid"}
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     operation: Literal["set", "delete"]
     api_key: Optional[str] = None
 
     @model_validator(mode="after")
     def desired_state_is_explicit(self):
-        if self.operation == "set" and (not self.api_key or "\x00" in self.api_key):
-            raise ValueError("api_key is required for set recovery")
+        if self.operation == "set":
+            validate_provider_credential(self.api_key)
         if self.operation == "delete" and self.api_key is not None:
             raise ValueError("api_key must be omitted for delete recovery")
         return self
@@ -366,7 +374,7 @@ class ProviderConfigOut(BaseModel):
     updated_at: datetime
     revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     secret_change_pending: bool
-    credential_status: Literal["ready", "recovery_required"]
+    credential_status: Literal["ready", "unavailable", "recovery_required"]
     is_default: bool
     selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
 
@@ -375,7 +383,9 @@ class ProviderConfigOut(BaseModel):
     def derive_credential_status(cls, value):
         if not isinstance(value, dict):
             value={name:getattr(value,name) for name in cls.model_fields if name not in {"credential_status","is_default","selection_revision"}}
-        return value | {"credential_status": "recovery_required" if value.get("secret_change_pending") else "ready"}
+        if "credential_status" not in value:
+            value=value | {"credential_status": "recovery_required" if value.get("secret_change_pending") else "unavailable"}
+        return value
 
 
     model_config = {"from_attributes": True}

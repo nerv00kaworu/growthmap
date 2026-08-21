@@ -25,6 +25,11 @@ class CaptureProvider:
 def create_fixture(client):
     project = client.post("/api/projects", json={"name":"Neutral project","description":"Neutral description","goal":"Neutral goal"}).json()
     provider = client.post("/api/providers", json={"name":"Capture","provider_type":"mock","model_name":"capture"}).json()
+    selected = client.put("/api/providers/selection", json={"provider_id":provider["id"], "expected_selection_revision":provider["selection_revision"]})
+    assert selected.status_code == 200, selected.text
+    stale = client.put("/api/providers/selection", json={"provider_id":provider["id"], "expected_selection_revision":provider["selection_revision"]})
+    assert stale.status_code == 409 and stale.json()["detail"]["code"] == "LLM_SELECTION_STALE"
+    provider = {**provider, "selection_revision":selected.json()["selection_revision"]}
     node = client.get(f"/api/nodes/{project['root_node_id']}").json()
     patched = client.patch(f"/api/nodes/{node['id']}", json={
         "expected_project_revision": project["revision"], "expected_revision": node["revision"],
@@ -62,9 +67,9 @@ def test_markdown_and_spec_endpoints_support_three_locales_and_omitted_is_tradit
 
 
 def test_ai_request_models_omitted_locale_remains_traditional():
-    assert ai_routes.ExpandRequest(node_id="n", provider_id="p", provider_revision=1).locale == "zh-TW"
-    assert ai_routes.DeepenRequest(node_id="n", provider_id="p", provider_revision=1).locale == "zh-TW"
-    assert ai_routes.ChatRequest(node_id="n", provider_id="p", provider_revision=1, message="m").locale == "zh-TW"
+    assert ai_routes.ExpandRequest(node_id="n", provider_id="p", provider_revision=1, selection_revision=1).locale == "zh-TW"
+    assert ai_routes.DeepenRequest(node_id="n", provider_id="p", provider_revision=1, selection_revision=1).locale == "zh-TW"
+    assert ai_routes.ChatRequest(node_id="n", provider_id="p", provider_revision=1, selection_revision=1, message="m").locale == "zh-TW"
 
 
 def test_expand_deepen_chat_capture_complete_framework_localization(monkeypatch):
@@ -73,7 +78,7 @@ def test_expand_deepen_chat_capture_complete_framework_localization(monkeypatch)
     with TestClient(app) as client:
         for locale in ("en", "zh-CN"):
             project, provider = create_fixture(client)
-            base = {"node_id":project["root_node_id"], "provider_id":provider["id"], "provider_revision":provider["revision"]}
+            base = {"node_id":project["root_node_id"], "provider_id":provider["id"], "provider_revision":provider["revision"], "selection_revision":provider["selection_revision"]}
             calls.clear()
             assert client.post("/api/ai/expand", json={**base,"locale":locale,"count":1,"instruction":"Neutral instruction"}).status_code == 200
             assert client.post("/api/ai/deepen", json={**base,"locale":locale,"instruction":"Neutral instruction"}).status_code == 200

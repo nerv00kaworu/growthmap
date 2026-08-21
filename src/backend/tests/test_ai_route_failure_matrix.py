@@ -49,8 +49,8 @@ def context():
     return {"children":[],"siblings":[],"ancestor_path":[],"current":{"title":"x","summary":""}}
 
 ROUTES=[
- ("expand", routes.expand_node, lambda: routes.ExpandRequest(node_id="node",provider_id="provider",provider_revision=1)),
- ("deepen", routes.deepen_node, lambda: routes.DeepenRequest(node_id="node",provider_id="provider",provider_revision=1)),
+ ("expand", routes.expand_node, lambda: routes.ExpandRequest(node_id="node",provider_id="provider",provider_revision=1,selection_revision=1)),
+ ("deepen", routes.deepen_node, lambda: routes.DeepenRequest(node_id="node",provider_id="provider",provider_revision=1,selection_revision=1)),
 ]
 FAILURES=[
  ("timeout",lambda:httpx.ReadTimeout(SECRET),504,"LLM_TIMEOUT"),

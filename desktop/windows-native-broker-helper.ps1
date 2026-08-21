@@ -1,0 +1,92 @@
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 3
+$Protocol=1
+$MaxLine=65536
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class GrowthMapBrokerNative {
+ [StructLayout(LayoutKind.Sequential)] public struct FILETIME { public uint Low,High; }
+ [StructLayout(LayoutKind.Sequential)] public struct Info { public uint Attributes; public FILETIME Creation,Access,Write; public uint VolumeSerial,SizeHigh,SizeLow,NumberOfLinks,FileIndexHigh,FileIndexLow; }
+ [DllImport("kernel32.dll",SetLastError=true)] public static extern bool GetFileInformationByHandle(SafeFileHandle h,out Info i);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFinalPathNameByHandleW(SafeFileHandle h,StringBuilder p,uint n,uint f);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern SafeFileHandle CreateFileW(string p,uint a,uint s,IntPtr x,uint d,uint f,IntPtr t);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle h,int c,IntPtr i,uint n);
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool FlushFileBuffers(SafeFileHandle h);
+ public static Info GetInfo(SafeFileHandle h){Info i;if(!GetFileInformationByHandle(h,out i))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return i;}
+ public static string FinalPath(SafeFileHandle h){var b=new StringBuilder(32768);uint n=GetFinalPathNameByHandleW(h,b,(uint)b.Capacity,0);if(n==0||n>=b.Capacity)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return b.ToString();}
+ public static SafeFileHandle OpenOwner(string p){var h=CreateFileW(p,0x80010000,1,IntPtr.Zero,3,0x00200000,IntPtr.Zero);if(h.IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());return h;}
+ public static void Rename(SafeFileHandle h,string target){byte[] n=Encoding.Unicode.GetBytes(target);int head=20;IntPtr p=Marshal.AllocHGlobal(head+n.Length+2);try{for(int x=0;x<head+n.Length+2;x++)Marshal.WriteByte(p,x,0);Marshal.WriteIntPtr(p,8,IntPtr.Zero);Marshal.WriteInt32(p,16,n.Length);Marshal.Copy(n,0,IntPtr.Add(p,head),n.Length);if(!SetFileInformationByHandle(h,3,p,(uint)(head+n.Length+2)))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}finally{Marshal.FreeHGlobal(p);}}
+ public static void FlushDirectory(string p){using(var h=CreateFileW(p,0x40000000,7,IntPtr.Zero,3,0x22000000,IntPtr.Zero)){if(h.IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());if(!FlushFileBuffers(h))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}}
+}
+'@
+$TestFault=if($env:NODE_ENV-eq'test' -and $env:GROWTHMAP_BROKER_TEST_FAULT-in@('open','rename','flush')){$env:GROWTHMAP_BROKER_TEST_FAULT}else{''}
+$TestCrashPhase=if($env:NODE_ENV-eq'test' -and $env:GROWTHMAP_BROKER_TEST_CRASH_PHASE-in@('after-old-rename-directory-flush','after-old-quarantine-directory-flush')){$env:GROWTHMAP_BROKER_TEST_CRASH_PHASE}else{''}
+function Test-Crash([string]$phase){if($TestCrashPhase-ne$phase){return};$p=$env:GROWTHMAP_BROKER_TEST_CRASH_SENTINEL;if([string]::IsNullOrWhiteSpace($p)-or-not[IO.Path]::IsPathRooted($p)-or$p.StartsWith('\\')){throw 'request'};$d=[IO.Path]::GetDirectoryName($p);[IO.Directory]::CreateDirectory($d)|Out-Null;$b=[Text.Encoding]::UTF8.GetBytes($phase);$s=[IO.FileStream]::new($p,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read);try{$s.Write($b,0,$b.Length);$s.Flush($true)}finally{$s.Dispose()};NFlush $d;[Environment]::FailFast('GrowthMap allowlisted native test cutpoint')}
+function NOpen([string]$p){if($TestFault-eq'open'){throw 'injected-open'};[GrowthMapBrokerNative]::OpenOwner($p)}
+function NRename($h,[string]$p){if($TestFault-eq'rename'){throw 'injected-rename'};[GrowthMapBrokerNative]::Rename($h,$p)}
+function NFlush([string]$p){if($TestFault-eq'flush'){throw 'injected-flush'};[GrowthMapBrokerNative]::FlushDirectory($p)}
+function Canon([string]$p){if([string]::IsNullOrWhiteSpace($p)-or$p.Length-gt32767){throw 'path'};$f=[IO.Path]::GetFullPath($p);if(-not[IO.Path]::IsPathRooted($f)-or$f.StartsWith('\\')-or$f.StartsWith('\\?\')-or$f.StartsWith('\\.\')){throw 'boundary'};$f.TrimEnd([IO.Path]::DirectorySeparatorChar)}
+function Info($h){$i=[GrowthMapBrokerNative]::GetInfo($h);if(($i.Attributes-band 0x450)-ne0-or$i.NumberOfLinks-ne1-or$i.VolumeSerial-eq0-or($i.FileIndexHigh-eq0-and$i.FileIndexLow-eq0)){throw 'unsafe'};$i}
+function Final($h){$p=[GrowthMapBrokerNative]::FinalPath($h);if($p.StartsWith('\\?\UNC\')){throw 'network'};if($p.StartsWith('\\?\')){$p=$p.Substring(4)};Canon $p}
+function Evidence($s){$s.Position=0;$sha=[Security.Cryptography.SHA256]::Create();try{$h=$sha.ComputeHash($s)}finally{$sha.Dispose()};$s.Position=0;@{sha256=[BitConverter]::ToString($h).Replace('-','').ToLowerInvariant();size=[int64]$s.Length}}
+function Identity($i,[string]$p){@{platform='win32';path=$p;volumeSerial=('{0:X8}'-f$i.VolumeSerial);fileIndex=('{0:X8}{1:X8}'-f$i.FileIndexHigh,$i.FileIndexLow)}}
+function Same($a,$b){$a.VolumeSerial-eq$b.VolumeSerial-and$a.FileIndexHigh-eq$b.FileIndexHigh-and$a.FileIndexLow-eq$b.FileIndexLow}
+function Validate-Path([string]$p){$cur=[IO.Path]::GetDirectoryName($p);while($cur){if(([IO.File]::GetAttributes($cur)-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'reparse'};$par=[IO.Directory]::GetParent($cur);if($null-eq$par){break};$cur=$par.FullName}}
+function Validate-Acl([string]$p){
+ Validate-Path $p;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$trusted=@($me,'S-1-5-18','S-1-5-32-544')
+ $danger=[Int64]([Security.AccessControl.FileSystemRights]::WriteData-bor[Security.AccessControl.FileSystemRights]::CreateFiles-bor[Security.AccessControl.FileSystemRights]::CreateDirectories-bor[Security.AccessControl.FileSystemRights]::AppendData-bor[Security.AccessControl.FileSystemRights]::Write-bor[Security.AccessControl.FileSystemRights]::Modify-bor[Security.AccessControl.FileSystemRights]::FullControl-bor[Security.AccessControl.FileSystemRights]::Delete-bor[Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles-bor[Security.AccessControl.FileSystemRights]::ChangePermissions-bor[Security.AccessControl.FileSystemRights]::TakeOwnership)
+ foreach($x in @([IO.Path]::GetDirectoryName($p),$p)){$item=Get-Item -LiteralPath $x -Force;if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){throw 'reparse'};$acl=$item.GetAccessControl([Security.AccessControl.AccessControlSections]::Access-bor[Security.AccessControl.AccessControlSections]::Owner);try{$owner=([Security.Principal.NTAccount]$acl.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{$owner=([Security.Principal.SecurityIdentifier]$acl.Owner).Value};if($owner-notin$trusted){throw 'owner'};foreach($r in $acl.Access){$rsid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value;$rights=[Int64]$r.FileSystemRights;if($rsid-notin$trusted-and$r.AccessControlType-eq[Security.AccessControl.AccessControlType]::Allow-and((($rights-band$danger)-ne0)-or(($rights-band[Int64]0x40000000)-ne0)-or(($rights-band[Int64]0x10000000)-ne0))){throw 'acl'}}}
+}
+function Match-Evidence($a,$b){$null-ne$a-and$a.sha256-eq$b.sha256-and[int64]$a.size-eq[int64]$b.size}
+function Read-LineBounded($r){$b=[Text.StringBuilder]::new();while($true){$c=$r.Read();if($c-lt0){if($b.Length-eq0){return $null};throw 'eof'};if($c-eq10){return $b.ToString().TrimEnd([char]13)};if($b.Length-ge$MaxLine){throw 'bounds'};[void]$b.Append([char]$c)}}
+function Send($w,$v){$w.WriteLine(($v|ConvertTo-Json -Compress -Depth 8));$w.Flush()}
+function Response($w,$id,$result){Send $w @{protocolVersion=$Protocol;id=$id;ok=$true;result=$result}}
+function Error-Response($w,$id,[string]$code,[string]$stage){Send $w @{protocolVersion=$Protocol;id=$id;ok=$false;error=@{code=$code;stage=$stage}}}
+function Public-Stage([string]$s){if($s-in@('busy-evidence','busy-transaction','state','target','acl','evidence','path','boundary','derived','identity','final','named','owner','reparse','network','unsafe','request','action','command','injected-open','injected-rename','injected-flush')){return $s};return 'state'}
+function Close-Tx(){if(-not$script:tx){return};$x=$script:tx;$script:tx=$null;foreach($v in @($x.ls,$x.ns,$x.lh,$x.nh)){if($v){try{$v.Dispose()}catch{}}}}
+$pipe=$null;$reader=$null;$writer=$null;$evidenceHandles=@{};$script:tx=$null
+try{
+ $name=$env:GROWTHMAP_BROKER_PIPE;$nonce=$env:GROWTHMAP_BROKER_NONCE
+ if($name-notmatch'^[0-9a-f]{32}$'-or$nonce-notmatch'^[0-9a-f]{64}$'){throw 'env'}
+ $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+ $security=[IO.Pipes.PipeSecurity]::new();$rights=[IO.Pipes.PipeAccessRights]::ReadWrite-bor[IO.Pipes.PipeAccessRights]::CreateNewInstance
+ $security.AddAccessRule([IO.Pipes.PipeAccessRule]::new($sid,$rights,[Security.AccessControl.AccessControlType]::Allow));$security.SetAccessRuleProtection($true,$false)
+ $pipe=[IO.Pipes.NamedPipeServerStream]::new($name,[IO.Pipes.PipeDirection]::InOut,1,[IO.Pipes.PipeTransmissionMode]::Byte,[IO.Pipes.PipeOptions]::Asynchronous-bor[IO.Pipes.PipeOptions]::WriteThrough,65536,65536,$security)
+ [Console]::Error.WriteLine('SERVER_CREATED')
+ [Console]::Error.WriteLine('WAIT_CLIENT')
+ $ar=$pipe.BeginWaitForConnection($null,$null);if(-not$ar.AsyncWaitHandle.WaitOne(30000)){throw 'accept-timeout'};$pipe.EndWaitForConnection($ar)
+ [Console]::Error.WriteLine('CLIENT_CONNECTED')
+ $reader=[IO.StreamReader]::new($pipe,[Text.UTF8Encoding]::new($false),$false,4096,$true);$writer=[IO.StreamWriter]::new($pipe,[Text.UTF8Encoding]::new($false),4096,$true);$writer.NewLine="`n";$writer.AutoFlush=$true
+ Send $writer @{protocolVersion=$Protocol;id=0;command='hello';nonce=$nonce}
+ [Console]::Error.WriteLine('HELLO_SENT')
+ $first=Read-LineBounded $reader
+ $hello=$first|ConvertFrom-Json
+ if ($hello.protocolVersion -ne $Protocol -or $hello.id -ne 1 -or $hello.command -ne 'hello' -or $hello.nonce -ne $nonce -or $hello.payload.challenge -notmatch '^[0-9a-f]{64}$') { throw 'auth' }
+ $acl=@($security.GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier])|ForEach-Object{@{sid=$_.IdentityReference.Value;rights=[int]$_.PipeAccessRights;type=$_.AccessControlType.ToString()}})
+ Response $writer 1 @{protocolVersion=$Protocol;challenge=[string]$hello.payload.challenge;serverNonce=$nonce;ownerSid=$sid.Value;acl=$acl}
+ while($true){$line=Read-LineBounded $reader;if($null-eq$line){break};$q=$line|ConvertFrom-Json;$id=[int]$q.id
+  $keys=@($q.PSObject.Properties.Name|Sort-Object);if(($keys-join'|')-ne'command|id|nonce|payload|protocolVersion'-or$q.protocolVersion-ne$Protocol-or$id-lt2-or$q.nonce-ne$nonce-or$q.command-isnot[string]-or$null-eq$q.payload-or$q.payload-isnot[pscustomobject]){throw 'protocol'}
+  try{switch([string]$q.command){
+   'open-evidence' {$t=[string]$q.payload.token;if($evidenceHandles.ContainsKey($t)){throw 'busy-evidence'};if($script:tx){throw 'busy-transaction'};if($t-notmatch'^[0-9a-f]{32}$'){throw 'request'};$p=Canon([string]$q.payload.path);Validate-Acl $p;$s=[IO.FileStream]::new($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read);$i=Info $s.SafeFileHandle;if((Final $s.SafeFileHandle)-ine$p){$s.Dispose();throw 'final'};$evidenceHandles[$t]=@{path=$p;stream=$s;info=$i};Response $writer $id @{identity=(Identity $i $p);evidence=(Evidence $s)};continue}
+   'assert-evidence' {$t=[string]$q.payload.token;if(-not$evidenceHandles.ContainsKey($t)){throw 'state'};$x=$evidenceHandles[$t];$i=Info $x.stream.SafeFileHandle;if(-not(Same $i $x.info)-or(Final $x.stream.SafeFileHandle)-ine$x.path){throw 'identity'};$fresh=[IO.FileStream]::new($x.path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read);try{$fi=Info $fresh.SafeFileHandle;if(-not(Same $fi $x.info)){throw 'named'}}finally{$fresh.Dispose()};Response $writer $id @{identity=(Identity $i $x.path);evidence=(Evidence $x.stream)};continue}
+   'close-evidence' {$t=[string]$q.payload.token;if($evidenceHandles.ContainsKey($t)){$x=$evidenceHandles[$t];$evidenceHandles.Remove($t);try{$x.stream.Dispose()}catch{}};Response $writer $id @{closed=$true};continue}
+   'prepare-install' {if($evidenceHandles.Count){throw 'busy-evidence'};if($script:tx){throw 'busy-transaction'};$p=$q.payload;$live=Canon([string]$p.live);$staging=Canon([string]$p.staging);$old=Canon([string]$p.old);$capture=Canon([string]$p.capture);$tid=[string]$p.transactionId;if($tid-notmatch'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'-or$old-ine($live+'.gm-old-'+$tid)-or$staging-ine($live+'.gm-new-'+$tid)-or$capture-ine($staging+'.capture')-or[IO.Path]::GetDirectoryName($live)-ine[IO.Path]::GetDirectoryName($staging)-or[IO.File]::Exists($old)-or[IO.Directory]::Exists($old)-or[IO.File]::Exists($capture)-or[IO.Directory]::Exists($capture)){throw 'derived'};Validate-Acl $live;Validate-Acl $staging;$lh=NOpen $live;$nh=NOpen $staging;$ls=[IO.FileStream]::new($lh,[IO.FileAccess]::Read,4096,$false);$ns=[IO.FileStream]::new($nh,[IO.FileAccess]::Read,4096,$false);$li=Info $lh;$ni=Info $nh;$le=Evidence $ls;$ne=Evidence $ns;if($p.expectedOld-and-not(Match-Evidence $p.expectedOld $le)-or-not(Match-Evidence $p.expectedNew $ne)){throw 'evidence'};$script:tx=@{id=$tid;live=$live;staging=$staging;old=$old;lh=$lh;nh=$nh;ls=$ls;ns=$ns;li=$li;ni=$ni;oldEvidence=$le;newEvidence=$ne;installed=$false;quarantined=$false;rolledBack=$false};Response $writer $id @{old=@{identity=(Identity $li $live);evidence=$le};new=@{identity=(Identity $ni $staging);evidence=$ne}};continue}
+   'commit-install' {if(-not$script:tx-or$script:tx.id-ne$q.payload.transactionId-or$script:tx.installed){throw 'state'};if($TestFault-in@('rename','flush')){throw ('injected-'+$TestFault)};NRename $script:tx.lh $script:tx.old;NFlush ([IO.Path]::GetDirectoryName($script:tx.live));Test-Crash 'after-old-rename-directory-flush';NRename $script:tx.nh $script:tx.live;NFlush ([IO.Path]::GetDirectoryName($script:tx.live));$script:tx.installed=$true;Response $writer $id @{phase='installed-durable';old=@{identity=(Identity $script:tx.li $script:tx.old);evidence=(Evidence $script:tx.ls)};live=@{identity=(Identity $script:tx.ni $script:tx.live);evidence=(Evidence $script:tx.ns)}};continue}
+   'assert-installed' {if(-not$script:tx-or-not$script:tx.installed-or$script:tx.quarantined-or$script:tx.rolledBack){throw 'state'};if((Final $script:tx.lh)-ine$script:tx.old-or(Final $script:tx.nh)-ine$script:tx.live){throw 'identity'};Response $writer $id @{old=(Evidence $script:tx.ls);live=(Evidence $script:tx.ns)};continue}
+   'quarantine-old' {if(-not$script:tx-or-not$script:tx.installed-or$script:tx.quarantined-or$script:tx.rolledBack){throw 'state'};$to=$script:tx.old+'.quarantine';if([IO.File]::Exists($to)-or[IO.Directory]::Exists($to)){throw 'target'};NRename $script:tx.lh $to;NFlush ([IO.Path]::GetDirectoryName($to));Test-Crash 'after-old-quarantine-directory-flush';$script:tx.quarantined=$true;Response $writer $id @{path=$to;evidence=(Evidence $script:tx.ls)};continue}
+   'rollback-installed' {if(-not$script:tx-or-not$script:tx.installed-or$script:tx.quarantined-or$script:tx.rolledBack){throw 'state'};$failed=$script:tx.live+'.gm-failed-'+$script:tx.id;if([IO.File]::Exists($failed)-or[IO.Directory]::Exists($failed)){throw 'target'};NRename $script:tx.nh $failed;NRename $script:tx.lh $script:tx.live;NFlush ([IO.Path]::GetDirectoryName($script:tx.live));$script:tx.rolledBack=$true;Response $writer $id @{phase='rollback-durable';failed=$failed;live=@{identity=(Identity $script:tx.li $script:tx.live);evidence=(Evidence $script:tx.ls)}};continue}
+   'recover' {if($evidenceHandles.Count){throw 'busy-evidence'};if($script:tx){throw 'busy-transaction'};$p=$q.payload;$db=Canon([string]$p.databasePath);$tid=[string]$p.transactionId;if($tid-notmatch'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'){throw 'request'};$old=$db+'.gm-old-'+$tid;$failed=$db+'.gm-failed-'+$tid;$quarantine=$old+'.quarantine';switch([string]$p.action){'rollback-live-to-failed'{$from=$db;$to=$failed};'rollback-old-to-live'{$from=$old;$to=$db};'cleanup-old-to-quarantine'{$from=$old;$to=$quarantine};default{throw 'action'}};if([IO.Path]::GetDirectoryName($from)-ine[IO.Path]::GetDirectoryName($to)-or[IO.File]::Exists($to)-or[IO.Directory]::Exists($to)){throw 'target'};Validate-Acl $from;$h=[GrowthMapBrokerNative]::OpenOwner($from);try{$s=[IO.FileStream]::new($h,[IO.FileAccess]::Read,4096,$false);try{$i=Info $h;if((Final $h)-ine$from){throw 'final'};$e=Evidence $s;if(-not(Match-Evidence $p.expected $e)){throw 'evidence'};NRename $h $to;NFlush ([IO.Path]::GetDirectoryName($to));if([string]$p.action-eq'cleanup-old-to-quarantine'){Test-Crash 'after-old-quarantine-directory-flush'};if((Final $h)-ine$to){throw 'final'};Response $writer $id @{phase='rename-durable';record=@{identity=(Identity $i $to);evidence=(Evidence $s)}}}finally{$s.Dispose()}}finally{$h.Dispose()};continue}
+   'close-transaction' {Close-Tx;Response $writer $id @{closed=$true};continue}
+   'broker-status' {if($env:NODE_ENV-ne'test'-or$env:GROWTHMAP_BROKER_TEST_STATUS-ne'1'){throw 'command'};Response $writer $id @{evidenceCount=[int]$evidenceHandles.Count;transaction=[bool]$script:tx};continue}
+   'hang' {if($env:NODE_ENV-ne'test'-or[string]::IsNullOrWhiteSpace($env:GROWTHMAP_BROKER_TEST_HANG_PID_FILE)){throw 'command'};$c=Start-Process -FilePath powershell.exe -ArgumentList @('-NoLogo','-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 300') -WindowStyle Hidden -PassThru;[IO.File]::WriteAllText($env:GROWTHMAP_BROKER_TEST_HANG_PID_FILE,[string]$c.Id);Wait-Process -Id $c.Id;continue}
+   'shutdown' {foreach($x in @($evidenceHandles.Values)){try{$x.stream.Dispose()}catch{}};$evidenceHandles.Clear();Close-Tx;Response $writer $id @{shutdown=$true};break}
+   'hello' {throw 'hello-replay'}
+   default {throw 'command'}
+  }}catch{$raw=[string]$_.Exception.Message;Error-Response $writer $id 'NATIVE_BROKER_REJECTED' (Public-Stage $raw);if($raw-in@('protocol','auth')){throw}}
+  if($q.command-eq'shutdown'){break}
+ }
+}catch{}finally{foreach($x in @($evidenceHandles.Values)){try{$x.stream.Dispose()}catch{}};$evidenceHandles.Clear();Close-Tx;if($reader){$reader.Dispose()};if($writer){$writer.Dispose()};if($pipe){$pipe.Dispose()}}

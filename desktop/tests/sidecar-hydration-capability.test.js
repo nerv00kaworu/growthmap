@@ -1,0 +1,2 @@
+const test=require('node:test'),assert=require('node:assert/strict'),{createHydrationCapability}=require('../sidecar-hydration-capability');
+test('every writable child attempt receives a fresh capability and read-only receives none',()=>{let n=0;const random=()=>Buffer.alloc(32,++n),a=createHydrationCapability(true,random),b=createHydrationCapability(true,random);assert.match(a,/^[A-Za-z0-9_-]{43}$/);assert.notEqual(a,b);assert.equal(createHydrationCapability(false,()=>{throw Error('must not generate')}),'')});

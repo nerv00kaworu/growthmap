@@ -2,6 +2,9 @@
 import os
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -95,6 +98,18 @@ app = FastAPI(
     version="0.1.0-authoring.2",
     lifespan=lifespan,
 )
+
+@app.exception_handler(RequestValidationError)
+async def credential_request_validation(request: Request, error: RequestValidationError):
+    # Credential bodies are secret-bearing, so never serialize Pydantic's input.
+    # Every other endpoint retains FastAPI's standard field-level 422 contract.
+    path = request.url.path
+    credential_route = request.method in {"PUT", "POST"} and __import__("re").fullmatch(
+        r"/api/desktop/secrets/[^/]+(?:/hydrate|/recover)?", path
+    )
+    if credential_route:
+        return JSONResponse(status_code=422, content={"detail": {"code": "INVALID_PROVIDER_CREDENTIAL", "message": "Provider credential is invalid"}})
+    return await request_validation_exception_handler(request, error)
 
 # Added before other middleware so every desktop route, including readiness and
 # static assets, requires the per-launch unguessable token.

@@ -42,7 +42,7 @@
   "integrity": {
     "src/frontend/package.json": "9fbb9ef6f3f02a84a6b894408c302b558c11d1fa80bcc7a2fbcbe90c405f7849",
     "src/frontend/package-lock.json": "1d7df74d3a098b9f7e1df974226db2884f8ff2f07fde55a7ce67371fd9b2298f",
-    "desktop/package.json": "2204f6ee048967804cd774416093b59a7292b5ef5b5fcaf104aa0f3a2b3d6c60",
+    "desktop/package.json": "3336dfc1d5a29065df2c08120a03171354afa90cea28d68702348c54cff51888",
     "desktop/package-lock.json": "8135b77c80174b879fc41b140381a3252fbd209a5cb7b38ee0a2a536d511b409",
     "RELEASE-MANIFEST.json": "3251fbb3f5c93a92d41fe7edb267d0a06c83b8df63a8c7422d4472b533f3ad94",
     "release/WINDOWS-R29-CANDIDATE-CHECKLIST.md": "feab6553fda5c67eb0e5e2697fdd7aea120bdbe9faed6e04f3fd62d07080ba43",
@@ -56,15 +56,15 @@
     ".github/workflows/scripts/resolve-local-asar.ps1": "b0e0eb6477054720c088a5df2871f839bfd66e6c5e79a633125519f90183b760",
     "release/verify-windows-r29-candidate.cjs": "d30ff2be8e3d5a0ad0c3d918975d567828d2610c9a1e8f81e880ebf3819c4710",
     "desktop/tests/contracts.test.js": "66195181bf3f793b05c27d502dd4b33de21edf949dacccc4053e837508e8a1dc",
-    "src/backend/tests/test_provider_selection_authority.py": "3f940020b4c00420fd54b8c1b79ecbba9d91ea8894341365e04bed0a9cc34b14",
+    "src/backend/tests/test_provider_selection_authority.py": "de6046e8e04a4892d5f9951c43369f8eca14f9abc64ca23527fc8947c9cfec51",
     "src/backend/tests/test_provider_selection_authority_stdlib.py": "8371776abffc9cb27960b73fa676db96f09ff46c6dfe2ae3f0f329e83786fc01",
     "src/backend/tests/test_provider_selection_schema_contract_stdlib.py": "4f1d8dc89fc4a84dff2abaafd1339790ba2f55bce3b7371a35d7534458906849",
-    "desktop/generated/csp-script-hashes.json": "0a35d5b681b984b8e577d9348af60e83ee719e679b7811db8786a41809e74e16",
+    "desktop/generated/csp-script-hashes.json": "9be99a3ed104ab94060002339b3c245a1085a2af6d0cd3301bf4250846808249",
     "src/backend/db/schema_contract.py": "f9b434e8d4aefc2a1ab558260991b5ceb2220faaec50b987c3621b2b5ecdea8e",
     "src/backend/db/migrations.py": "731849e25e565b72a449b212a0cccd7a909899484131c1819b96a08184cceb80",
     "desktop/scripts/create-e2e-fixture.py": "2b9af4ee87f57f16afc15e4fcde83c288325013db231fbbceea7710763c42f57",
-    "desktop/tests/database-manager.test.js": "5043397e4e6471d88dae64dbb338f0332ea00c92f3958e0900b102be5ae0c9e4",
+    "desktop/tests/database-manager.test.js": "4a20933b072c10532d1df992ab470caba8f1f83b71fb634e38c33afa8ff2c305",
     "src/backend/desktop/database_maintenance.py": "e4867836030163f44d7751ccefbf67d5482c6fed2ab55521639bcc800e6cb596",
-    "src/backend/tests/test_database_maintenance.py": "2117e46270d7627de794b04c45c510d5ebaaa92bdc7654104329f81eaf384d66"
+    "src/backend/tests/test_database_maintenance.py": "24668c40b0d6cb43b3cf17a844f359d79183ad8686f904dba56c73269ece19d1"
   }
 }

@@ -15,5 +15,9 @@ def delete(provider_id: str) -> None:
 def get(provider_id: str) -> str | None:
     return _secrets.get(provider_id)
 
+def has(provider_id: str) -> bool:
+    """Project process-local readiness without exposing credential material."""
+    return provider_id in _secrets
+
 def desktop_mode() -> bool:
     return os.getenv("GROWTHMAP_DESKTOP_MODE") == "1"

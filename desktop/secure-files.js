@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const fsIdentity=Symbol('windowsFileIdentity');
 const WINDOWS_DIR_FSYNC_UNSUPPORTED=new Set(['EPERM','EINVAL','ENOTSUP','EOPNOTSUPP']);
+function trustedPowerShell(env=process.env){const root=env.SystemRoot||env.WINDIR;if(typeof root!=='string'||!path.win32.isAbsolute(root))throw Error('Windows PowerShell path unavailable');return path.win32.join(root,'System32','WindowsPowerShell','v1.0','powershell.exe')}
 const WINDOWS_POLICY=String.raw`
 $ErrorActionPreference='Stop'
 Add-Type -TypeDefinition @'
@@ -38,9 +39,9 @@ foreach($p in $q.paths){
 }
 @{identities=$out}|ConvertTo-Json -Compress -Depth 4
 `;
-function nativeWindowsPolicy(paths,runner=spawnSync,containerOnly=false){
+function nativeWindowsPolicy(paths,runner=spawnSync,containerOnly=false,env=process.env){
  const encoded=Buffer.from(WINDOWS_POLICY,'utf16le').toString('base64');
- const r=runner('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({paths,...(containerOnly?{containerOnly:true}:{})}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
+ const r=runner(trustedPowerShell(env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({paths,...(containerOnly?{containerOnly:true}:{})}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
  if(r.error||r.status!==0)throw Error('Windows native secret-path policy unavailable or unsafe');
  let value;try{value=JSON.parse(r.stdout)}catch{throw Error('Windows native secret-path policy unavailable or unsafe')}
  if(!value||!Array.isArray(value.identities)||value.identities.length!==paths.length)throw Error('Windows native secret-path policy unavailable or unsafe');
@@ -50,7 +51,7 @@ function applyWindowsPrivateAcl(target,options={}){
  const script=String.raw`$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;public static class GMPrivateDacl{[DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern bool SetFileSecurity(string p,uint i,byte[] d);public static void Set(string p,byte[] d){if(!SetFileSecurity(p,0x80000004,d))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}}
 '@;$q=[Console]::In.ReadToEnd()|ConvertFrom-Json;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User;$trusted=@($me.Value,'S-1-5-18','S-1-5-32-544');$i=Get-Item -LiteralPath $q.path -Force;if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'};$a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner);try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value};if($ownerSid -notin $trusted){throw 'owner'};$inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None};$a.SetAccessRuleProtection($true,$false);$seen=@{};foreach($r in @($a.Access)){$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]);if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}};foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))};[GMPrivateDacl]::Set([string]$q.path,$a.GetSecurityDescriptorBinaryForm())`;
- const encoded=Buffer.from(script,'utf16le').toString('base64'),r=(options.windowsRunner||spawnSync)('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({path:target}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
+ const encoded=Buffer.from(script,'utf16le').toString('base64'),r=(options.windowsRunner||spawnSync)(trustedPowerShell(options.env||process.env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({path:target}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
  if(r.error||r.status!==0)throw Error('Windows private secret path initialization failed');
 }
 function bootstrapWindowsPrivateRoot(parent,directory,io=fs,options={}){
@@ -68,12 +69,15 @@ function secureFiles(trustedRoot,directory,io=fs,options={}){
  trustedRoot=path.resolve(trustedRoot);directory=path.resolve(directory);
  const relative=path.relative(trustedRoot,directory);
  if(relative==='..'||relative.startsWith(`..${path.sep}`)||path.isAbsolute(relative))throw Error('Secret directory escapes trusted root');
- const platform=options.platform||process.platform,hooks=options.hooks||{},windowsPolicy=options.windowsPolicy||nativeWindowsPolicy;
+ const platform=options.platform||process.platform,hooks=options.hooks||{},windowsPolicy=options.windowsPolicy||nativeWindowsPolicy,maxReadBytes=options.maxReadBytes||1024*1024;
  const checkPosix=(s,kind)=>{if(s.isSymbolicLink()||(kind==='dir'?!s.isDirectory():!s.isFile())||s.uid!==process.geteuid()||(s.mode&0o077)!==0)throw Error(`Unsafe secret ${kind}`)};
  const verifyComponent=(p,kind='dir')=>{const s=io.lstatSync(p);if(platform==='win32'){if(s.isSymbolicLink()||(kind==='dir'?!s.isDirectory():!s.isFile()))throw Error(`Unsafe secret ${kind}`);const ids=windowsPolicy([p],options.windowsRunner);if(!Array.isArray(ids)||ids.length!==1||typeof ids[0]!=='string')throw Error('Windows native secret-path identity unavailable');s[fsIdentity]=ids[0]}else checkPosix(s,kind);return s};
  const components=()=>relative?relative.split(path.sep).filter(Boolean):[];
  const verifyDir=()=>{
-  if(platform==='win32'&&trustedRoot===directory&&!io.existsSync(trustedRoot))bootstrapWindowsPrivateRoot(path.dirname(trustedRoot),trustedRoot,io,{windowsPolicy,windowsRunner:options.windowsRunner});
+  if(trustedRoot===directory&&!io.existsSync(trustedRoot)){
+   if(platform==='win32')bootstrapWindowsPrivateRoot(path.dirname(trustedRoot),trustedRoot,io,{windowsPolicy,windowsRunner:options.windowsRunner});
+   else{const parent=path.dirname(trustedRoot),before=io.lstatSync(parent);if(before.isSymbolicLink()||!before.isDirectory()||before.uid!==process.geteuid()||(before.mode&0o022)!==0)throw Error('Unsafe secret container');try{io.mkdirSync(trustedRoot,{mode:0o700})}catch(e){if(e.code!=='EEXIST')throw e;}const after=io.lstatSync(parent);if(before.dev!==after.dev||before.ino!==after.ino)throw Error('Secret container replaced during initialization');verifyComponent(trustedRoot);}
+  }
   let current=trustedRoot;verifyComponent(current);
   for(const component of components()){
    const parentBefore=verifyComponent(current);current=path.join(current,component);
@@ -86,7 +90,7 @@ function secureFiles(trustedRoot,directory,io=fs,options={}){
  };
  const safe=name=>{if(!/^[A-Za-z0-9-]{1,80}\.(?:bin|recover)$/.test(name))throw Error('Unsafe secret filename');return path.join(directory,name)};
  const stableParent=(before,stage)=>{hooks[stage]?.(directory);const after=verifyDir();if(identity(before,platform)!==identity(after,platform))throw Error('Secret parent replaced')};
- const read=name=>{const parent=verifyDir(),flags=io.constants.O_RDONLY|(io.constants.O_NOFOLLOW||0),fd=io.openSync(safe(name),flags);try{const before=io.fstatSync(fd);if(platform==='win32'){if(!before.isFile())throw Error('Unsafe secret file');const ids=windowsPolicy([safe(name)],options.windowsRunner);if(!Array.isArray(ids)||ids.length!==1||typeof ids[0]!=='string')throw Error('Windows native secret-path identity unavailable');before[fsIdentity]=ids[0]}else checkPosix(before,'file');if(before.nlink!==1)throw Error('Unsafe secret file');const data=io.readFileSync(fd),after=io.fstatSync(fd);if(platform==='win32'){const ids=windowsPolicy([safe(name)],options.windowsRunner);if(!Array.isArray(ids)||ids.length!==1||typeof ids[0]!=='string')throw Error('Windows native secret-path identity unavailable');after[fsIdentity]=ids[0]}if(identity(before,platform)!==identity(after,platform)||before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw Error('Unstable secret file');stableParent(parent,'beforeReadReturn');return data}finally{io.closeSync(fd)}};
+ const read=name=>{const parent=verifyDir(),flags=io.constants.O_RDONLY|(io.constants.O_NOFOLLOW||0),fd=io.openSync(safe(name),flags);try{const before=io.fstatSync(fd);if(platform==='win32'){if(!before.isFile())throw Error('Unsafe secret file');const ids=windowsPolicy([safe(name)],options.windowsRunner);if(!Array.isArray(ids)||ids.length!==1||typeof ids[0]!=='string')throw Error('Windows native secret-path identity unavailable');before[fsIdentity]=ids[0]}else checkPosix(before,'file');if(before.nlink!==1)throw Error('Unsafe secret file');if(before.size<0||before.size>maxReadBytes)throw Error('Secret file is too large');const data=io.readFileSync(fd);if(data.length>maxReadBytes)throw Error('Secret file is too large');const after=io.fstatSync(fd);if(platform==='win32'){const ids=windowsPolicy([safe(name)],options.windowsRunner);if(!Array.isArray(ids)||ids.length!==1||typeof ids[0]!=='string')throw Error('Windows native secret-path identity unavailable');after[fsIdentity]=ids[0]}if(identity(before,platform)!==identity(after,platform)||before.size!==after.size||before.mtimeMs!==after.mtimeMs)throw Error('Unstable secret file');stableParent(parent,'beforeReadReturn');return data}finally{io.closeSync(fd)}};
  const syncDir=()=>{const parent=verifyDir(),fd=io.openSync(directory,'r');try{try{io.fsyncSync(fd)}catch(e){if(platform!=='win32'||!WINDOWS_DIR_FSYNC_UNSUPPORTED.has(e.code))throw e}}finally{io.closeSync(fd)}stableParent(parent,'afterDirSync')};
  const write=(name,data)=>{const parent=verifyDir(),target=safe(name),tmp=`${target}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,fd=io.openSync(tmp,io.constants.O_CREAT|io.constants.O_EXCL|io.constants.O_WRONLY,0o600);try{if(platform==='win32'&&process.platform==='win32')applyWindowsPrivateAcl(tmp,{windowsRunner:options.windowsRunner});io.writeFileSync(fd,data);io.fsyncSync(fd)}finally{io.closeSync(fd)}try{stableParent(parent,'beforeRename');verifyComponent(tmp,'file');io.renameSync(tmp,target);stableParent(parent,'afterRename');verifyComponent(target,'file');syncDir()}catch(e){try{io.unlinkSync(tmp)}catch{}throw e}};
  const remove=name=>{const parent=verifyDir(),target=safe(name);try{read(name)}catch(e){if(e.code==='ENOENT')return;throw e}stableParent(parent,'beforeUnlink');io.unlinkSync(target);stableParent(parent,'afterUnlink');syncDir()};

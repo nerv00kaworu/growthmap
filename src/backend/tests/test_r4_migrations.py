@@ -23,6 +23,8 @@ async def db(tmp_path, sql=OLD):
         # These focused migration fixtures model a legacy database whose
         # ordinary ORM surface is otherwise complete.
         for table,columns in ORM_READ_COLUMNS.items():
+            if table == "provider_selection":
+                continue  # v0/v1 fixture: the v12 migration creates exact authority.
             present={row[1] for row in (await conn.execute(text(f'pragma table_info({table})'))).all()}
             for name,expected in columns.items():
                 if name not in present:

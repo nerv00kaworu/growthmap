@@ -5,17 +5,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update
 from db.database import get_db
 from models.models import ProviderConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, field_validator
 from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document, verify_revocation_assertion, strict_json_loads, stable_json_file
 from desktop.startup_verdict import effective_entitlement, verdict_mode
 from desktop.secrets import put, delete
+from desktop.hydration_auth import require as require_hydration, seal as seal_hydration
 from api.provider_authority import change_external_secret, recover_external_secret
-from models.schemas import ProviderSecretRecovery
+from models.schemas import ProviderSecretRecovery, validate_provider_credential
 router = APIRouter(prefix="/desktop")
-class SecretIn(BaseModel): api_key: str
+class SecretIn(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+    api_key: str
+    @field_validator("api_key")
+    @classmethod
+    def credential_bound(cls, value: str) -> str:
+        return validate_provider_credential(value)
+class HydrateSecretIn(SecretIn): pass
 class LicenseIn(BaseModel): document: dict
 class RevocationIn(BaseModel): document: dict
 class TrialStartIn(BaseModel): started_at: str; installation_id: str
+@router.put("/secrets/{provider_id}/hydrate", status_code=204)
+async def hydrate_secret(provider_id: str, body: HydrateSecretIn, request: Request, db: AsyncSession = Depends(get_db)):
+    """Restore process-local state without changing provider revision/transition state."""
+    require_hydration(request)
+    provider = await db.get(ProviderConfig, provider_id)
+    if not provider:
+        raise HTTPException(404, "Provider not found")
+    if provider.provider_type == "mock":
+        raise HTTPException(400, detail={"code":"PROVIDER_CREDENTIAL_NOT_REQUIRED","message":"Mock provider does not use an API key"})
+    if provider.secret_change_pending:
+        raise HTTPException(409, detail={"code":"PROVIDER_CREDENTIAL_RECOVERY_REQUIRED","message":"Credential recovery is required before hydration"})
+    put(provider_id, body.api_key)
+
+@router.post("/secrets/hydration/seal", status_code=204)
+async def seal_secret_hydration(request: Request):
+    seal_hydration(request)
+
 @router.put("/secrets/{provider_id}", status_code=204)
 async def set_secret(provider_id: str, body: SecretIn, db: AsyncSession = Depends(get_db)):
     provider = await db.get(ProviderConfig, provider_id)

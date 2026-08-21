@@ -28,25 +28,43 @@ with TestClient(app,raise_server_exceptions=False) as c:
  project=c.post('/api/projects',headers=h,json={'name':'secret-test'}).json()
  provider=c.post('/api/providers',headers=h,json={'name':'fixture','provider_type':'openai_compatible','endpoint':'http://fixture.invalid','secret_env_key':'GROWTHMAP_LLM_KEY_FIXTURE','model_name':'fixture','capabilities':[],'cost_level':'none','enabled':True}).json()
  pid=provider['id']
+ assert provider['credential_status']=='unavailable'
+ selection_revision=provider['selection_revision']
+ assert c.put('/api/providers/selection',headers=h,json={'provider_id':pid,'expected_selection_revision':selection_revision}).status_code==409
  # Inherited env-only key is deliberately ignored in desktop mode.
- missing=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
- assert missing.status_code==400 and 'LLM_CONFIGURATION_ERROR' in missing.text,missing.text
+ missing=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision})
+ assert missing.status_code==409 and 'LLM_SELECTION_CHANGED' in missing.text,missing.text
  before=provider['revision']
  saved=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'memory-key'})
  assert saved.status_code==204,saved.text
  provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert provider['revision']==before+1,(before,provider['revision'])
- tested=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
+ assert provider['credential_status']=='ready'
+ selected=c.put('/api/providers/selection',headers=h,json={'provider_id':pid,'expected_selection_revision':provider['selection_revision']})
+ assert selected.status_code==200,selected.text
+ selection_revision=selected.json()['selection_revision']
+ tested=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision})
  assert tested.status_code==200 and tested.json()['ok'] is True, tested.text
- expanded=c.post('/api/ai/expand',headers=h,json={'node_id':project['root_node_id'],'provider_id':pid,'provider_revision':provider['revision'],'count':1})
+ expanded=c.post('/api/ai/expand',headers=h,json={'node_id':project['root_node_id'],'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision,'count':1})
  # Resolver/provider consumed the memory key without making a network request.
  assert expanded.status_code==200 and expanded.json()['suggestions'][0]['title']=='fixture child', expanded.text
+ # A sidecar restart loses process memory. Projection becomes unavailable until
+ # the desktop hydrates through the revision-neutral startup endpoint.
+ import desktop.secrets as memory
+ memory.delete(pid)
+ unavailable=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert unavailable['credential_status']=='unavailable'
+ assert unavailable['revision']==provider['revision']
+ hydrated=c.put(f'/api/desktop/secrets/{pid}/hydrate',headers={**h,'X-GrowthMap-Hydration-Capability':'H'*43},json={'api_key':'memory-key'})
+ assert hydrated.status_code==204,hydrated.text
+ rehydrated=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
+ assert rehydrated['credential_status']=='ready' and rehydrated['revision']==provider['revision']
  before=provider['revision']
  deleted=c.delete(f'/api/desktop/secrets/{pid}',headers=h)
  assert deleted.status_code==204,deleted.text
  provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert provider['revision']==before+1,(before,provider['revision'])
- removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision']})
+ removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision})
  assert removed.status_code==400 and 'LLM_CONFIGURATION_ERROR' in removed.text
  # A failed store exposes only safe pending state and is explicitly recoverable
  import desktop.routes as dr
@@ -57,7 +75,7 @@ with TestClient(app,raise_server_exceptions=False) as c:
  assert failed.status_code==500 and 'memory-key' not in failed.text
  pending=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert pending['secret_change_pending'] is True and pending['credential_status']=='recovery_required'
- assert c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':pending['revision']}).status_code==409
+ assert c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':pending['revision'],'selection_revision':selection_revision}).status_code==409
  stale=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision']-1,'operation':'set','api_key':'***'})
  assert stale.status_code==409
  dr.put=original
@@ -65,7 +83,14 @@ with TestClient(app,raise_server_exceptions=False) as c:
  assert recovered.status_code==204,recovered.text
  ready=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert ready['revision']==pending['revision'] and ready['secret_change_pending'] is False
+ assert ready['credential_status']=='ready'
+ # Hydration cannot bypass the transition latch.
+ dr.put=fail
+ failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***'})
+ assert failed.status_code==500
+ blocked=c.put(f'/api/desktop/secrets/{pid}/hydrate',headers={**h,'X-GrowthMap-Hydration-Capability':'H'*43},json={'api_key':'***'})
+ assert blocked.status_code==409 and 'PROVIDER_CREDENTIAL_RECOVERY_REQUIRED' in blocked.text
 '''
-    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'54e8b06bfded81a38763b02f2056c887ea2ed62225ab51a807a663ade5d79ab8','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
+    env={**os.environ,'GROWTHMAP_DESKTOP_MODE':'1','GROWTHMAP_FRESH_INSTALL':'1','GROWTHMAP_SESSION_TOKEN':'test-session-token','GROWTHMAP_HYDRATION_CAPABILITY':'H'*43,'GROWTHMAP_STARTUP_VERDICT_MODE':'fresh','GROWTHMAP_STARTUP_VERDICT_NONCE':'NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN','GROWTHMAP_STARTUP_VERDICT_MAC':'54e8b06bfded81a38763b02f2056c887ea2ed62225ab51a807a663ade5d79ab8','GROWTHMAP_LLM_KEY_FIXTURE':'env-must-be-ignored','DATABASE_URL':f"sqlite+aiosqlite:///{tmp_path/'secret.db'}",'GROWTHMAP_LICENSE_FILE':str(tmp_path/'license.json'),'GROWTHMAP_TRIAL_STATE_FILE':str(tmp_path/'trial.json')}
     result=subprocess.run([sys.executable,'-c',script],env=env,text=True,capture_output=True)
     assert result.returncode==0,result.stdout+result.stderr
