@@ -3,36 +3,34 @@ import test from "node:test";
 import { reorderBlockAuthoritatively } from "./block-reorder";
 
 const rows = [{ id: "a", order_index: 0 }, { id: "b", order_index: 1 }];
+const owner = { project: { id: "p", revision: 2 }, node: { id: "n", revision: 2 }, blocks: [{ id: "b", order_index: 0 }, { id: "a", order_index: 1 }] };
 
-test("adjacent reorder sends exactly one PATCH then authoritative GET", async () => {
+test("adjacent reorder sends one PATCH, reads complete owner, then publishes once", async () => {
   const calls: string[] = [];
-  const authoritative = [{ id: "b", order_index: 0 }, { id: "a", order_index: 1 }];
-  const result = await reorderBlockAuthoritatively(
-    rows, 0, 1,
+  const result = await reorderBlockAuthoritatively(rows, 0, 1,
     async (id, index) => { calls.push(`PATCH:${id}:${index}`); },
-    async () => { calls.push("GET"); return authoritative; },
-  );
-  assert.deepEqual(calls, ["PATCH:a:1", "GET"]);
-  assert.equal(result, authoritative);
+    async () => { calls.push("GET:owner"); return owner; },
+    value => { calls.push("PUBLISH"); assert.equal(value, owner); },
+    () => calls.push("INVALIDATE"));
+  assert.deepEqual(calls, ["PATCH:a:1", "GET:owner", "PUBLISH"]);
+  assert.deepEqual(result, { moved: true, blocks: owner.blocks });
 });
 
-test("failed PATCH never sends a second PATCH or GET; caller can reload coherently", async () => {
+test("committed PATCH plus partial readback failure invalidates and never retries PATCH", async () => {
   const calls: string[] = [];
-  await assert.rejects(() => reorderBlockAuthoritatively(
-    rows, 0, 1,
-    async (id, index) => { calls.push(`PATCH:${id}:${index}`); throw new Error("conflict"); },
-    async () => { calls.push("GET"); return rows; },
-  ), /conflict/);
-  assert.deepEqual(calls, ["PATCH:a:1"]);
-  // NodeContent's error path performs one authoritative reload, not another PATCH.
-  calls.push("GET:error-reload");
-  assert.deepEqual(calls, ["PATCH:a:1", "GET:error-reload"]);
+  await assert.rejects(() => reorderBlockAuthoritatively(rows, 0, 1,
+    async (id, index) => { calls.push(`PATCH:${id}:${index}`); },
+    async () => { calls.push("GET:owner"); throw new Error("node unavailable"); },
+    () => calls.push("PUBLISH"), () => calls.push("INVALIDATE")),
+  /CONTENT_REORDER_SAVED_REFRESH_FAILED/);
+  assert.deepEqual(calls, ["PATCH:a:1", "GET:owner", "INVALIDATE"]);
 });
 
-test("boundary move is a local no-op with no request", async () => {
-  let calls = 0;
-  const result = await reorderBlockAuthoritatively(rows, 0, -1,
-    async () => { calls += 1; }, async () => { calls += 1; return rows; });
-  assert.equal(calls, 0);
-  assert.equal(result, rows);
+test("failed PATCH neither reads nor publishes nor invalidates", async () => {
+  const calls: string[] = [];
+  await assert.rejects(() => reorderBlockAuthoritatively(rows, 0, 1,
+    async () => { calls.push("PATCH"); throw new Error("conflict"); },
+    async () => { calls.push("GET"); return owner; },
+    () => calls.push("PUBLISH"), () => calls.push("INVALIDATE")), /conflict/);
+  assert.deepEqual(calls, ["PATCH"]);
 });

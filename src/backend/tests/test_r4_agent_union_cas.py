@@ -194,3 +194,34 @@ def test_forward_created_node_dependents_preserve_results_and_never_500():
   update=batch(c,h,p2,'new-update',[{'op':'create_node','id':'88888888-8888-4888-8888-888888888883','title':'new'}, {'op':'update_node','node_id':'88888888-8888-4888-8888-888888888883','expected_revision':1,'fields':{'summary':'no'}}])
   assert update.status_code==422 and update.json()['detail']=='Cannot update a not-yet-created node'
   assert c.get(f"/api/projects/{p['id']}").json()['revision']==p2['revision']
+
+def test_agent_block_ordering_sparse_multi_insert_cross_node_revisions_replay_and_rollback(monkeypatch):
+ from api import content_ordering
+ from db.database import async_session
+ from models.models import ContentBlock
+ from sqlalchemy import select
+ import asyncio
+ with TestClient(app,raise_server_exceptions=False) as c:
+  p,root,h=setup(c)
+  other=c.post(f"/api/projects/{p['id']}/nodes",json={'expected_project_revision':p['revision'],'expected_parent_revision':root['revision'],'title':'other','parent_id':root['id']}).json();p,root=state(c,p,root)
+  # A hostile sparse singleton is canonicalized immediately.
+  first=batch(c,h,p,'agent-sparse',[{'op':'create_content_block','node_id':root['id'],'expected_node_revision':root['revision'],'order_index':7,'content':{'body':'first'}}]);assert first.status_code==200,first.text
+  assert [x['order_index'] for x in c.get(f"/api/nodes/{root['id']}/blocks").json()]==[0]
+  p,root=state(c,p,root)
+  # Damage existing order without revisions, then apply same-node creates in caller order.
+  async def damage():
+   async with async_session() as db:
+    row=(await db.execute(select(ContentBlock).where(ContentBlock.node_id==root['id']))).scalar_one();row.order_index=9;await db.commit()
+  asyncio.run(damage());before_other=c.get(f"/api/nodes/{other['id']}").json();before=c.get(f"/api/nodes/{root['id']}/blocks").json()[0]
+  ops=[{'op':'create_content_block','node_id':root['id'],'expected_node_revision':root['revision'],'order_index':0,'content':{'body':'a'}},{'op':'create_content_block','node_id':root['id'],'expected_node_revision':root['revision'],'order_index':1,'content':{'body':'b'}}]
+  made=batch(c,h,p,'agent-multi',ops);assert made.status_code==200,made.text
+  rows=c.get(f"/api/nodes/{root['id']}/blocks").json();assert [x['order_index'] for x in rows]==[0,1,2] and [x['content']['body'] for x in rows]==['a','b','first']
+  old=next(x for x in rows if x['id']==before['id']);assert old['revision']==before['revision']+1
+  assert all(x['revision']==1 for x in rows if x['id']!=before['id']) and c.get(f"/api/nodes/{other['id']}").json()==before_other
+  assert batch(c,h,p,'agent-multi',ops).json()==made.json()
+  # Inject a late ordering failure: project/node/blocks/receipt all roll back.
+  p,root=state(c,p,root);snapshot=c.get(f"/api/nodes/{root['id']}/blocks").json();real=content_ordering.set_block_order
+  def fail(block,index): real(block,index);raise RuntimeError('injected')
+  monkeypatch.setattr(content_ordering,'set_block_order',fail)
+  bad=batch(c,h,p,'agent-order-rollback',[{'op':'create_content_block','node_id':root['id'],'expected_node_revision':root['revision'],'order_index':0,'content':{'body':'never'}}]);assert bad.status_code==500
+  assert c.get(f"/api/projects/{p['id']}").json()['revision']==p['revision'] and c.get(f"/api/nodes/{root['id']}/blocks").json()==snapshot

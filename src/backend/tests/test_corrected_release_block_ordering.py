@@ -4,7 +4,7 @@ import asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from api import routes
+from api import content_ordering
 from db.database import async_session
 from main import app
 from models.models import ContentBlock
@@ -153,7 +153,7 @@ def test_injected_mid_shift_failure_rolls_back_all_revisions_and_order(monkeypat
         before_rows = blocks(client, node)
         before_project, before_node = revisions(client, p["id"], node)
         moving = before_rows[-1]
-        real = routes._set_block_order
+        real = content_ordering.set_block_order
         calls = 0
         def fail_second(block, index):
             nonlocal calls
@@ -161,8 +161,29 @@ def test_injected_mid_shift_failure_rolls_back_all_revisions_and_order(monkeypat
             real(block, index)
             if calls == 2:
                 raise RuntimeError("injected shift failure")
-        monkeypatch.setattr(routes, "_set_block_order", fail_second)
+        monkeypatch.setattr(content_ordering, "set_block_order", fail_second)
         response = patch(client, p["id"], node, moving, 0)
         assert response.status_code == 500
         assert blocks(client, node) == before_rows
         assert revisions(client, p["id"], node) == (before_project, before_node)
+
+
+def test_duplicate_legacy_list_and_subtree_match_canonical_mutation_order():
+    with TestClient(app) as client:
+        p = project(client, "stable reads")
+        node = p["root_node_id"]
+        made = [create(client, p["id"], node, title) for title in "abc"]
+        async def duplicate():
+            async with async_session() as db:
+                rows = list((await db.execute(select(ContentBlock).where(ContentBlock.node_id == node)
+                                               .order_by(ContentBlock.created_at, ContentBlock.id))).scalars())
+                for row in rows:
+                    row.order_index = 5
+                await db.commit()
+        asyncio.run(duplicate())
+        listed = blocks(client, node)
+        subtree = client.get(f"/api/nodes/{node}/subtree").json()["content_blocks"]
+        expected_ids = [row["id"] for row in listed]
+        assert [row["id"] for row in subtree] == expected_ids
+        create(client, p["id"], node, "end")
+        assert [row["id"] for row in blocks(client, node)[:3]] == expected_ids

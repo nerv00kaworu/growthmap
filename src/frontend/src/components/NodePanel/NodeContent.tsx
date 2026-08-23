@@ -266,21 +266,35 @@ export function NodeContent({
     try {
       // The backend atomically moves the whole interval and owns sibling revisions.
       // Send exactly one PATCH, then replace local state with authoritative order.
-      const authoritative = await reorderBlockAuthoritatively(
+      const result = await reorderBlockAuthoritatively(
         blocks, index, direction,
         (blockId, orderIndex) => api.updateBlock(blockId, { order_index: orderIndex }),
-        () => api.getBlocks(selectedNode.id) as Promise<ContentBlockItem[]>,
+        async () => {
+          const projectId = selectedNode.project_id;
+          const [project, node, authoritativeBlocks] = await Promise.all([
+            api.getProject(projectId, false),
+            api.getNode(selectedNode.id, false),
+            api.getBlocks(selectedNode.id, false),
+          ]);
+          return { project, node, blocks: authoritativeBlocks as ContentBlockItem[] };
+        },
+        ({ project, node, blocks: rows }) => {
+          api.rememberResponse([project, node, rows]);
+          setBlocks(rows);
+        },
+        () => api.invalidateBlockOwner(selectedNode.id),
       );
-      setBlocks(authoritative);
-      await refreshTree();
-    } catch (error) {
-      try {
-        const authoritative = await api.getBlocks(selectedNode.id);
-        setBlocks(authoritative as ContentBlockItem[]);
-      } catch {
-        // Keep the last coherent state if authoritative reload is unavailable.
+      if (result.moved) {
+        // Owner CAS and blocks are already coherent. A broader tree refresh is
+        // best-effort and must not relabel the committed reorder as a failure.
+        try { await refreshTree(); } catch { /* coherent owner snapshot remains valid */ }
       }
-      alert(u(`調整內容區塊順序失敗：${error instanceof Error ? error.message : "未知錯誤"}`,`调整内容区块顺序失败：${error instanceof Error ? error.message : "未知错误"}`,`Failed to reorder content blocks: ${error instanceof Error ? error.message : "Unknown error"}`));
+    } catch (error) {
+      if (error instanceof Error && error.message === "CONTENT_REORDER_SAVED_REFRESH_FAILED") {
+        alert(u("內容順序已儲存，但重新載入失敗；請重新整理後再編輯。", "内容顺序已保存，但重新加载失败；请刷新后再编辑。", "Content order was saved, but reload failed. Refresh before editing again."));
+      } else {
+        alert(u(`調整內容區塊順序失敗：${error instanceof Error ? error.message : "未知錯誤"}`,`调整内容区块顺序失败：${error instanceof Error ? error.message : "未知错误"}`,`Failed to reorder content blocks: ${error instanceof Error ? error.message : "Unknown error"}`));
+      }
     }
   };
 

@@ -167,6 +167,13 @@ function nodeExpected(nodeId: string) {
   return { expected_project_revision: projectExpected(row.projectId), expected_revision: row.revision };
 }
 
+function invalidateBlockOwner(nodeId: string): void {
+  const node = revisionCache.nodes.get(nodeId);
+  if (node) revisionCache.projects.delete(node.projectId);
+  revisionCache.nodes.delete(nodeId);
+  for (const [id, block] of revisionCache.blocks) if (block.nodeId === nodeId) revisionCache.blocks.delete(id);
+}
+
 function blockExpected(blockId: string) {
   const block = revisionCache.blocks.get(blockId);
   if (!block) throw new Error("Block revision unavailable; refresh and retry");
@@ -224,6 +231,7 @@ function blockExpected(blockId: string) {
   listProjects: (rememberResponse = true) => request<Project[]>("/projects", undefined, rememberResponse),
   getProject: (projectId: string, rememberResponse = true) => request<Project>(`/projects/${projectId}`, undefined, rememberResponse),
   rememberResponse: (value: unknown) => remember(value),
+  invalidateBlockOwner,
   createProject: (data: { name: string; description?: string; goal?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
   updateProject: (projectId: string, data: Partial<Pick<Project, "status">> & { expected_project_revision?: number }) =>
@@ -232,7 +240,7 @@ function blockExpected(blockId: string) {
 
   // Nodes
   getSubtree: (nodeId: string, rememberResponse = true) => request<GNode>(`/nodes/${nodeId}/subtree`, undefined, rememberResponse),
-  getNode: (nodeId: string) => request<GNode>(`/nodes/${nodeId}`),
+  getNode: (nodeId: string, rememberResponse = true) => request<GNode>(`/nodes/${nodeId}`, undefined, rememberResponse),
   createNode: (projectId: string, data: { expected_project_revision?: number; expected_parent_revision?: number; title: string; parent_id?: string; branch_id?: string; node_type?: string; summary?: string }) => {
     const parent = data.parent_id ? revisionCache.nodes.get(data.parent_id) : undefined;
     if (data.parent_id && !parent) throw new Error("Parent revision unavailable; refresh and retry");
@@ -268,8 +276,8 @@ function blockExpected(blockId: string) {
     request(`/nodes/${parentId}/promote-child/${childId}`, { method: "POST", body: JSON.stringify({ expected_project_revision: expectedProjectRevision, expected_revision: expectedRevision }) }),
 
   // Content blocks
-  getBlocks: (nodeId: string) =>
-    request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number }[]>(`/nodes/${nodeId}/blocks`),
+  getBlocks: (nodeId: string, rememberResponse = true) =>
+    request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number }[]>(`/nodes/${nodeId}/blocks`, undefined, rememberResponse),
   createBlock: (nodeId: string, data: { expected_project_revision?: number; expected_node_revision?: number; block_type: string; content: Record<string, string> }) => {
     const node = nodeExpected(nodeId);
     return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision, ...data }) });

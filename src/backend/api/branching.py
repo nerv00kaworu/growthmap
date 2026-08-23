@@ -67,7 +67,7 @@ async def deep_copy_branch(
     blocks_by_node: dict[str, list[ContentBlock]] = {}
     blocks = (await db.execute(select(ContentBlock).where(
         ContentBlock.node_id.in_(subtree)
-    ).order_by(ContentBlock.node_id, ContentBlock.order_index, ContentBlock.id))).scalars().all()
+    ).order_by(ContentBlock.node_id, ContentBlock.order_index, ContentBlock.created_at, ContentBlock.id))).scalars().all()
     for block in blocks:
         blocks_by_node.setdefault(str(block.node_id), []).append(block)
 
@@ -86,11 +86,11 @@ async def deep_copy_branch(
             created_by=actor, last_edited_by=old.last_edited_by or actor,
             position_x=old.position_x, position_y=old.position_y, revision=1,
         ))
-        for old_block in blocks_by_node.get(old_id, ()):
+        for order_index, old_block in enumerate(blocks_by_node.get(old_id, ())):
             db.add(ContentBlock(
                 id=str(uuid.uuid4()), node_id=id_map[old_id],
                 block_type=old_block.block_type, content=deepcopy(old_block.content),
-                order_index=old_block.order_index, created_by=actor, revision=1,
+                order_index=order_index, created_by=actor, revision=1,
             ))
 
     # Materialize Branch/nodes/blocks before edge FKs. This remains inside the

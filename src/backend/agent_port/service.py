@@ -6,6 +6,7 @@ from sqlalchemy import select,update
 from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 from api.branching import deep_copy_branch
+from api.content_ordering import insert_blocks
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 
@@ -238,6 +239,7 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     if touched_node_ids:
         existing_touched=(await db.execute(select(Node).where(Node.id.in_(touched_node_ids)))).scalars().all()
     ordered_results=[None]*len(ops)
+    block_insertions: dict[str, list[tuple[ContentBlock, int | None]]] = {}
     for op_index in execution_order:
         op=ops[op_index];kind=op["op"]
         if kind=="create_node":
@@ -253,12 +255,17 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
         elif kind=="create_edge":
             e=Edge(id=op["id"],project_id=project.id,from_node_id=op["from_node_id"],to_node_id=op["to_node_id"],relation_type=op["relation_type"],weight=op["weight"],note=op["note"],is_mainline=False,revision=1);db.add(e);ordered_results[op_index]={"op":kind,"id":e.id,"revision":1}
         elif kind=="create_content_block":
-            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1);db.add(b);ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
+            b=ContentBlock(id=op["id"],node_id=op["node_id"],block_type=op["block_type"],content=op["content"],order_index=op["order_index"],created_by=actor or grant.agent_identity,revision=1)
+            block_insertions.setdefault(op["node_id"],[]).append((b,op["order_index"]));ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
         else:
             b=await deep_copy_branch(db,project_id=project.id,source_node_id=op["source_node_id"],name=op["name"].strip(),description=op["description"],branch_id=op["id"],actor=actor or grant.agent_identity)
             ordered_results[op_index]={"op":kind,"id":b.id,"revision":1}
+    changed_block_siblings=[]
+    for node_id,insertions in block_insertions.items():
+        changed_block_siblings.extend(await insert_blocks(db,node_id,insertions))
+        db.add_all([block for block,_requested in insertions])
     results=ordered_results
-    bump(existing_touched)
+    bump([*existing_touched,*changed_block_siblings])
     response={"receipt_id":str(uuid.uuid4()),"project_id":project.id,"project_revision":project.revision,"results":results,"request_digest":req_digest}
     db.add(AgentReceipt(id=response["receipt_id"],grant_id=grant_id,project_id=project.id,idempotency_key=key,request_digest=req_digest,action_type="batch",status="applied",response=response))
     db.add(ActionLog(project_id=project.id,actor_type="human" if actor else "agent",actor_id=actor or grant.agent_identity,action_type="agent_batch_applied",payload={"receipt_id":response["receipt_id"],"operation_count":len(ops),"request_digest":req_digest}))

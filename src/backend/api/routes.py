@@ -23,6 +23,7 @@ from models.content_blocks import CONTENT_BLOCK_TYPES
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, has as has_memory_secret, put as put_memory_secret, delete as delete_memory_secret
 from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
+from api.content_ordering import ordered_blocks as _ordered_blocks, rewrite_dense as _rewrite_dense, insert_blocks as _insert_blocks
 from api.branching import deep_copy_branch
 from api.provider_authority import guarded_provider_update, change_external_secret, recover_external_secret
 from models.schemas import (
@@ -70,27 +71,6 @@ def touch_project(project: Project | None):
 def ordinary_main_nodes(project_id: str):
     """Canonical ordinary-project projection; branch views are explicit."""
     return select(Node).where(Node.project_id == project_id, Node.branch_id.is_(None))
-
-
-async def _ordered_blocks(db: AsyncSession, node_id: str) -> list[ContentBlock]:
-    """Return one node's stable canonical ordering, including legacy tie-breaks."""
-    return list((await db.execute(
-        select(ContentBlock).where(ContentBlock.node_id == node_id)
-        .order_by(ContentBlock.order_index, ContentBlock.created_at, ContentBlock.id)
-    )).scalars().all())
-
-
-def _set_block_order(block: ContentBlock, index: int) -> None:
-    """Narrow write seam kept separate so transaction rollback is injectable/testable."""
-    block.order_index = index
-
-
-def _rewrite_block_order(blocks: list[ContentBlock], touched: TouchedEntities) -> None:
-    """Write dense order and touch exactly the existing rows whose order changed."""
-    for index, block in enumerate(blocks):
-        if block.order_index != index:
-            _set_block_order(block, index)
-            touched.add(block)
 
 
 async def _validate_block_authority(db: AsyncSession, node: Node, project_id: str) -> None:
@@ -504,8 +484,10 @@ async def approve_agent_artifact(artifact_id: str, data: AgentArtifactReview, db
             setattr(target, key, artifact.payload[key])
         target.last_edited_by = "agent"
     else:
-        block_count = (await db.execute(select(func.count()).select_from(ContentBlock).where(ContentBlock.node_id == target.id))).scalar() or 0
-        db.add(ContentBlock(node_id=target.id, block_type=artifact.payload["block_type"], content=artifact.payload["content"], order_index=block_count, created_by="agent"))
+        new_block = ContentBlock(node_id=target.id, block_type=artifact.payload["block_type"], content=artifact.payload["content"], order_index=0, created_by="agent")
+        changed = await _insert_blocks(db, target.id, [(new_block, None)])
+        bump_existing(*changed)
+        db.add(new_block)
     artifact.status = "applied"
     artifact.review_note = data.review_note
     artifact.reviewed_at = datetime.now(timezone.utc)
@@ -939,7 +921,7 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
         child_map:dict[str,list[str]]={};edge_meta={}
         for row in edge_rows:
             child_map.setdefault(str(row["from_node_id"]),[]).append(str(row["to_node_id"]));edge_meta[str(row["to_node_id"])]={"edge_id":str(row["id"]),"edge_revision":1,"is_mainline":bool(row["is_mainline"])}
-        block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"),{"project_id":nodes[node_id]["project_id"]})).mappings().all()
+        block_rows=(await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index,created_at,id"),{"project_id":nodes[node_id]["project_id"]})).mappings().all()
         blocks={}
         for row in block_rows:
             item=dict(row);item["content"]=json.loads(item["content"]) if isinstance(item["content"],str) else (item["content"] or {});item["revision"]=1;blocks.setdefault(str(row["node_id"]),[]).append(item)
@@ -995,7 +977,7 @@ async def get_subtree(node_id: str, db: AsyncSession = Depends(get_db)):
     nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
 
     blocks_result = await db.execute(
-        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index)
+        select(ContentBlock).where(ContentBlock.node_id.in_(subtree_ids)).order_by(ContentBlock.node_id, ContentBlock.order_index, ContentBlock.created_at, ContentBlock.id)
     )
     blocks_by_node_id: dict[str, list[dict]] = {}
     for block in blocks_result.scalars().all():
@@ -1413,9 +1395,9 @@ async def get_branch_roots(project_id: str, db: AsyncSession = Depends(get_db)):
 @router.get("/nodes/{node_id}/blocks", response_model=list[ContentBlockOut])
 async def list_blocks(node_id: str, db: AsyncSession = Depends(get_db)):
     if os.getenv("GROWTHMAP_DB_QUERY_ONLY") == "1":
-        rows=(await db.execute(__import__("sqlalchemy").text("SELECT id,node_id,block_type,content,order_index,created_by,created_at,updated_at FROM content_blocks WHERE node_id=:node_id ORDER BY order_index"),{"node_id":node_id})).mappings().all();return [{**dict(row),"content":json.loads(row["content"]) if isinstance(row["content"],str) else (row["content"] or {}),"revision":1} for row in rows]
+        rows=(await db.execute(__import__("sqlalchemy").text("SELECT id,node_id,block_type,content,order_index,created_by,created_at,updated_at FROM content_blocks WHERE node_id=:node_id ORDER BY order_index,created_at,id"),{"node_id":node_id})).mappings().all();return [{**dict(row),"content":json.loads(row["content"]) if isinstance(row["content"],str) else (row["content"] or {}),"revision":1} for row in rows]
     result = await db.execute(
-        select(ContentBlock).where(ContentBlock.node_id == node_id).order_by(ContentBlock.order_index)
+        select(ContentBlock).where(ContentBlock.node_id == node_id).order_by(ContentBlock.order_index, ContentBlock.created_at, ContentBlock.id)
     )
     return result.scalars().all()
 
@@ -1430,16 +1412,13 @@ async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession 
     await claim_project_revision(db, project_id, data.expected_project_revision)
     await _validate_block_authority(db, node, project_id)
 
-    ordered = await _ordered_blocks(db, node_id)
-    target_index = len(ordered) if data.order_index is None else max(0, min(data.order_index, len(ordered)))
     block = ContentBlock(
         node_id=node_id,
         **data.model_dump(exclude={"expected_project_revision", "expected_node_revision", "order_index"}),
-        order_index=target_index,
+        order_index=data.order_index or 0,
     )
-    ordered.insert(target_index, block)
     touched = TouchedEntities()
-    _rewrite_block_order(ordered, touched)
+    touched.add(*(await _insert_blocks(db, node_id, [(block, data.order_index)])))
     touched.add(node)
     touched.apply()
     db.add(block)
@@ -1477,7 +1456,7 @@ async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession
     for key, value in changes.items():
         setattr(moving, key, value)
     touched = TouchedEntities()
-    _rewrite_block_order(ordered, touched)
+    touched.add(*_rewrite_dense(ordered))
     # Existing PATCH semantics claim target/node once even for a same-index/no-op.
     touched.add(moving, node)
     touched.apply()
@@ -1506,7 +1485,7 @@ async def delete_block(block_id: str, data: NodeEntityRevisionRequest, db: Async
         raise HTTPException(409, "Content block ownership changed")
     survivors = [item for item in ordered if str(item.id) != str(block.id)]
     touched = TouchedEntities()
-    _rewrite_block_order(survivors, touched)
+    touched.add(*_rewrite_dense(survivors))
     touched.add(node)
     touched.apply()
     await db.delete(block)
@@ -2027,17 +2006,15 @@ async def _import_project_json_committed(data: dict, db: AsyncSession):
         )
         db.add(new_edge)
 
-    for b in blocks_data:
+    imported_blocks: dict[str, list[tuple[int, int, dict]]] = {}
+    for input_index, b in enumerate(blocks_data):
         node_id_mapped = id_map.get(b.get("node_id", ""))
-        if not node_id_mapped:
-            continue
-        new_block = ContentBlock(
-            node_id=node_id_mapped,
-            block_type=b.get("block_type", "note"),
-            content=b.get("content", {}),
-            order_index=b.get("order_index", 0),
-        )
-        db.add(new_block)
+        if node_id_mapped:
+            imported_blocks.setdefault(node_id_mapped, []).append((b.get("order_index", 0), input_index, b))
+    for node_id_mapped, rows in imported_blocks.items():
+        for order_index, (_requested, _input_index, b) in enumerate(sorted(rows)):
+            db.add(ContentBlock(node_id=node_id_mapped, block_type=b.get("block_type", "note"),
+                                content=b.get("content", {}), order_index=order_index))
 
     db.add(ActionLog(
         project_id=new_project.id,
