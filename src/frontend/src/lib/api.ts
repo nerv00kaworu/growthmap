@@ -87,7 +87,7 @@ const revisionCache = {
   projects: new Map<string, number>(),
   nodes: new Map<string, { projectId: string; revision: number }>(),
   edges: new Map<string, { projectId: string; revision: number }>(),
-  blocks: new Map<string, { nodeId: string; revision: number }>(),
+  blocks: new Map<string, { nodeId: string; projectId?: string; revision: number }>(),
   branches: new Map<string, { projectId: string; revision: number }>(),
 };
 
@@ -117,7 +117,16 @@ function remember(value: unknown): void {
     }
     if (typeof row.root_node_id === "string") setProjectRevision(id, revision);
     else if (typeof row.from_node_id === "string" && typeof row.project_id === "string") setEntityRevision(revisionCache.edges, id, { projectId: row.project_id, revision });
-    else if (typeof row.node_id === "string" && typeof row.block_type === "string") setEntityRevision(revisionCache.blocks, id, { nodeId: row.node_id, revision });
+    else if (typeof row.node_id === "string" && typeof row.block_type === "string") {
+      const existing = revisionCache.blocks.get(id);
+      const currentNode = revisionCache.nodes.get(row.node_id);
+      // A delayed response may arrive after the same node id was rebound to a
+      // different project. Preserve established block ownership; never relabel.
+      const projectId = existing?.projectId ?? currentNode?.projectId;
+      if (!existing || revision > existing.revision) {
+        revisionCache.blocks.set(id, { nodeId: row.node_id, projectId, revision });
+      }
+    }
     else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") setEntityRevision(revisionCache.branches, id, { projectId: row.project_id, revision });
     else if (typeof row.project_id === "string" && typeof row.node_type === "string") setEntityRevision(revisionCache.nodes, id, { projectId: row.project_id, revision });
   }
@@ -171,6 +180,9 @@ function invalidateBlockOwner(nodeId: string, projectId?: string): void {
   const node = revisionCache.nodes.get(nodeId);
   if (projectId) {
     revisionCache.projects.delete(projectId);
+    for (const [id, block] of revisionCache.blocks) {
+      if (block.nodeId === nodeId && block.projectId === projectId) revisionCache.blocks.delete(id);
+    }
     // A delayed token must not erase a newer owner reusing the same node id.
     if (!node || node.projectId !== projectId) return;
   }
@@ -182,9 +194,10 @@ function invalidateBlockOwner(nodeId: string, projectId?: string): void {
 function blockExpected(blockId: string) {
   const block = revisionCache.blocks.get(blockId);
   if (!block) throw new Error("Block revision unavailable; refresh and retry");
+  if (!block.projectId) throw new Error("Block owner unavailable; refresh and retry");
   const node = revisionCache.nodes.get(block.nodeId);
-  if (!node) throw new Error("Node revision unavailable; refresh and retry");
-  return { expected_project_revision: projectExpected(node.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
+  if (!node || node.projectId !== block.projectId) throw new Error("Block owner changed; refresh and retry");
+  return { expected_project_revision: projectExpected(block.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
 }
 
 
