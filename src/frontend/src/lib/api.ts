@@ -90,6 +90,14 @@ const revisionCache = {
   blocks: new Map<string, { nodeId: string; projectId?: string; revision: number }>(),
   branches: new Map<string, { projectId: string; revision: number }>(),
 };
+const blockOwnerGenerations = new Map<string, number>();
+type BlockResponseCustody = { projectId: string; nodeId: string; blockId?: string; generation: number };
+const ownerKey = (projectId: string, nodeId: string) => `${projectId}\u0000${nodeId}`;
+const ownerGeneration = (projectId: string, nodeId: string) => blockOwnerGenerations.get(ownerKey(projectId, nodeId)) ?? 0;
+function supersedeBlockOwner(projectId: string, nodeId: string): void {
+  const key = ownerKey(projectId, nodeId);
+  blockOwnerGenerations.set(key, ownerGeneration(projectId, nodeId) + 1);
+}
 
 function setProjectRevision(id: string, revision: number): void {
   const current = revisionCache.projects.get(id);
@@ -128,13 +136,26 @@ function remember(value: unknown): void {
       }
     }
     else if (typeof row.source_node_id === "string" && typeof row.project_id === "string") setEntityRevision(revisionCache.branches, id, { projectId: row.project_id, revision });
-    else if (typeof row.project_id === "string" && typeof row.node_type === "string") setEntityRevision(revisionCache.nodes, id, { projectId: row.project_id, revision });
+    else if (typeof row.project_id === "string" && typeof row.node_type === "string") {
+      const existing = revisionCache.nodes.get(id);
+      if ((!existing || revision > existing.revision) && existing && existing.projectId !== row.project_id) supersedeBlockOwner(existing.projectId, id);
+      setEntityRevision(revisionCache.nodes, id, { projectId: row.project_id, revision });
+    }
   }
   Object.values(row).forEach(remember);
 }
 
 
-async function request<T>(path: string, options?: RequestInit, rememberResponse = true, aiEnvelope = false): Promise<T> {
+function blockResponseCustodyIsCurrent(custody: BlockResponseCustody): boolean {
+  if (ownerGeneration(custody.projectId, custody.nodeId) !== custody.generation) return false;
+  const node = revisionCache.nodes.get(custody.nodeId);
+  if (!node || node.projectId !== custody.projectId) return false;
+  if (!custody.blockId) return true;
+  const block = revisionCache.blocks.get(custody.blockId);
+  return !!block && block.nodeId === custody.nodeId && block.projectId === custody.projectId;
+}
+
+async function request<T>(path: string, options?: RequestInit, rememberResponse = true, aiEnvelope = false, blockCustody?: BlockResponseCustody): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
@@ -160,7 +181,9 @@ async function request<T>(path: string, options?: RequestInit, rememberResponse 
   }
   if (res.status === 204) return undefined as T;
   const value = await res.json() as T;
-  if (rememberResponse) remember(value);
+  // Mutation ownership belongs to the dispatch context, never to whichever
+  // project happens to own the node id when the response settles.
+  if (rememberResponse && (!blockCustody || blockResponseCustodyIsCurrent(blockCustody))) remember(value);
   return value;
 }
 
@@ -179,6 +202,7 @@ function nodeExpected(nodeId: string) {
 function invalidateBlockOwner(nodeId: string, projectId?: string): void {
   const node = revisionCache.nodes.get(nodeId);
   if (projectId) {
+    supersedeBlockOwner(projectId, nodeId);
     revisionCache.projects.delete(projectId);
     for (const [id, block] of revisionCache.blocks) {
       if (block.nodeId === nodeId && block.projectId === projectId) revisionCache.blocks.delete(id);
@@ -186,7 +210,10 @@ function invalidateBlockOwner(nodeId: string, projectId?: string): void {
     // A delayed token must not erase a newer owner reusing the same node id.
     if (!node || node.projectId !== projectId) return;
   }
-  if (node) revisionCache.projects.delete(node.projectId);
+  if (node) {
+    supersedeBlockOwner(node.projectId, nodeId);
+    revisionCache.projects.delete(node.projectId);
+  }
   revisionCache.nodes.delete(nodeId);
   for (const [id, block] of revisionCache.blocks) if (block.nodeId === nodeId) revisionCache.blocks.delete(id);
 }
@@ -197,7 +224,10 @@ function blockExpected(blockId: string) {
   if (!block.projectId) throw new Error("Block owner unavailable; refresh and retry");
   const node = revisionCache.nodes.get(block.nodeId);
   if (!node || node.projectId !== block.projectId) throw new Error("Block owner changed; refresh and retry");
-  return { expected_project_revision: projectExpected(block.projectId), expected_node_revision: node.revision, expected_revision: block.revision };
+  return {
+    expected: { expected_project_revision: projectExpected(block.projectId), expected_node_revision: node.revision, expected_revision: block.revision },
+    custody: { projectId: block.projectId, nodeId: block.nodeId, blockId, generation: ownerGeneration(block.projectId, block.nodeId) } satisfies BlockResponseCustody,
+  };
 }
 
 
@@ -297,13 +327,18 @@ function blockExpected(blockId: string) {
   getBlocks: (nodeId: string, rememberResponse = true) =>
     request<{ id: string; node_id: string; block_type: string; content: Record<string, string>; order_index: number; revision: number }[]>(`/nodes/${nodeId}/blocks`, undefined, rememberResponse),
   createBlock: (nodeId: string, data: { expected_project_revision?: number; expected_node_revision?: number; block_type: string; content: Record<string, string> }) => {
-    const node = nodeExpected(nodeId);
-    return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: node.expected_project_revision, expected_node_revision: node.expected_revision, ...data }) });
+    const node = revisionCache.nodes.get(nodeId);
+    if (!node) throw new Error("Node revision unavailable; refresh and retry");
+    const expected = nodeExpected(nodeId);
+    const custody: BlockResponseCustody = { projectId: node.projectId, nodeId, generation: ownerGeneration(node.projectId, nodeId) };
+    return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: expected.expected_project_revision, expected_node_revision: expected.expected_revision, ...data }) }, true, false, custody);
   },
-  updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) =>
-    request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...blockExpected(blockId), ...data }) }),
+  updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) => {
+    const { expected, custody } = blockExpected(blockId);
+    return request(`/blocks/${blockId}`, { method: "PATCH", body: JSON.stringify({ ...expected, ...data }) }, true, false, custody);
+  },
   deleteBlock: (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
-    const expected = blockExpected(blockId);
+    const { expected } = blockExpected(blockId);
     return request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify({ ...expected, expected_project_revision: expectedProjectRevision ?? expected.expected_project_revision, expected_node_revision: expectedNodeRevision ?? expected.expected_node_revision, expected_revision: expectedRevision ?? expected.expected_revision }) });
   },
 
