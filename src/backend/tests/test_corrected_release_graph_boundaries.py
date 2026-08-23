@@ -32,6 +32,8 @@ async def execute_with_foreign_keys_disabled(*statements):
         finally:
             await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             await connection.commit()
+            foreign_keys = await connection.exec_driver_sql("PRAGMA foreign_keys")
+            assert foreign_keys.scalar_one() == 1
 
 def project_revision(client, project_id):
     return client.get(f"/api/projects/{project_id}").json()["revision"]
@@ -316,6 +318,8 @@ def test_successful_delete_preserves_unrelated_edges_and_logs_exactly():
 
 
 @pytest.mark.parametrize("case",[
+    "two_roots","parallel_inbound","wrong_edge_project","external_source",
+    "self_loop","disconnected_cycle","unknown_status","null_status",
     "absent_branch","wrong_project_branch","empty_branch_attachment","missing_source",
     "foreign_project_source","wrong_branch_source","edge_project_mismatch_inbound",
     "edge_project_mismatch_outbound","pure_cycle","multiple_disconnected_components",
@@ -349,7 +353,31 @@ def test_malformed_branch_authority_matrix_is_zero_mutation(case):
                     Edge.relation_type=="child_of",
                 ))).scalars().one()
                 db.add(ActionLog(project_id=project["id"],node_id=child["id"],actor_type="human",action_type=f"reject-{case}",payload={"case":case}))
-                if case=="wrong_project_branch":
+                if case=="two_roots":
+                    db.add(Node(project_id=project["id"],branch_id=branch["id"],title="second root"))
+                elif case=="parallel_inbound":
+                    db.add(Edge(project_id=project["id"],from_node_id=root["id"],to_node_id=child["id"],relation_type="child_of"))
+                elif case=="wrong_edge_project":
+                    edge.project_id=other["id"]
+                elif case=="external_source":
+                    db.add(Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=child["id"],relation_type="child_of"))
+                elif case=="self_loop":
+                    loop=Node(project_id=project["id"],branch_id=branch["id"],title="loop")
+                    db.add(loop);await db.flush()
+                    db.add(Edge(project_id=project["id"],from_node_id=loop.id,to_node_id=loop.id,relation_type="child_of"))
+                elif case=="disconnected_cycle":
+                    left=Node(project_id=project["id"],branch_id=branch["id"],title="left")
+                    right=Node(project_id=project["id"],branch_id=branch["id"],title="right")
+                    db.add_all([left,right]);await db.flush()
+                    db.add_all([
+                        Edge(project_id=project["id"],from_node_id=left.id,to_node_id=right.id,relation_type="child_of"),
+                        Edge(project_id=project["id"],from_node_id=right.id,to_node_id=left.id,relation_type="child_of"),
+                    ])
+                elif case in {"unknown_status","null_status"}:
+                    from sqlalchemy import update
+                    status="hostile" if case=="unknown_status" else None
+                    await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status=status))
+                elif case=="wrong_project_branch":
                     branch_row=await db.get(Branch,branch["id"]);branch_row.project_id=other["id"]
                 elif case=="empty_branch_attachment":
                     empty=Branch(project_id=project["id"],name="initially-empty",source_node_id=project["root_node_id"])
@@ -387,9 +415,18 @@ def test_malformed_branch_authority_matrix_is_zero_mutation(case):
 
         asyncio.run(seed())
         before=asyncio.run(authority_snapshot())
-        response=delete_node(client,project["id"],target)
-        assert response.status_code==409,(case,response.text)
-        assert asyncio.run(authority_snapshot())==before
+        try:
+            response=delete_node(client,project["id"],target)
+            assert response.status_code==409,(case,response.text)
+            assert asyncio.run(authority_snapshot())==before
+        finally:
+            if case in {"unknown_status","null_status"}:
+                async def restore_status():
+                    from sqlalchemy import update
+                    async with async_session() as db:
+                        await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status="active"))
+                        await db.commit()
+                asyncio.run(restore_status())
 
 
 def test_large_legal_subtree_delete_is_exact_and_preserves_unrelated_authority():
