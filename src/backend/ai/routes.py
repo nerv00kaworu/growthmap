@@ -257,6 +257,7 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
     frame = _framework(req.locale)
     user_prompt = _prompt_payload(
         ctx,
+        mode_key=req.mode,
         mode=get_expand_mode_prompt(req.mode, req.locale),
         requested_count=req.count,
         existing_children={"label": frame["children"], "titles": existing_children},

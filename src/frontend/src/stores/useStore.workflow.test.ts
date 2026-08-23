@@ -293,7 +293,7 @@ test("branch selection clears pending update delete reparent undo and undo stays
       if(kind==="delete") api.deleteNode=(()=>pending.promise) as typeof api.deleteNode;
       if(kind==="reparent") globalThis.fetch=(()=>pending.promise) as typeof fetch;
       const operation=kind==="update"?useStore.getState().updateNode("child",{title:"old"}):kind==="delete"?useStore.getState().deleteNode("child"):useStore.getState().reparentNode("child","parent");
-      assert.equal(useStore.getState().undoStack.length,1); await useStore.getState().selectBranch(branch); assert.deepEqual(useStore.getState().undoStack,[]);
+      assert.equal(useStore.getState().undoStack.length,0); await useStore.getState().selectBranch(branch); assert.deepEqual(useStore.getState().undoStack,[]);
       if(kind==="reparent") pending.resolve({ok:true,status:200,text:async()=>""} as never); else pending.resolve(kind==="update"?({...child,title:"old"} as never):undefined as never);
       await operation; useStore.getState().undo(); assert.equal(useStore.getState().rootNode?.title,"branch tree"); assert.equal(useStore.getState().toast,null); assert.deepEqual(useStore.getState().undoStack,[]);
     }
@@ -367,3 +367,57 @@ test("real cache losing project subtree stale-high cannot alter current owner mu
 test("real cache losing branch list stale-high cannot replace winning branch revision",async()=>{const of=globalThis.fetch,restoreApi=useFreshApiClient();api.rememberResponse(project);api.rememberResponse(root);const old=deferred<Response>();const branch={id:"branch",project_id:"p",source_node_id:"root",name:"branch",status:"active",created_at:"",updated_at:"",revision:4};let calls=0,posted:Record<string,unknown>={};globalThis.fetch=(async(input,init)=>{const url=String(input);if(url.endsWith("/projects/p/branches"))return ++calls===1?old.promise:response([branch]);if(url.endsWith("/branches/branch/merge")){posted=JSON.parse(String(init?.body));return response({ok:true})}if(url.endsWith("/nodes/root/subtree"))return response(root);throw Error(url)}) as typeof fetch;try{reset({branches:[],currentBranch:null});const losing=useStore.getState().loadBranches("p"),winning=useStore.getState().loadBranches("p");await winning;old.resolve(response([{...branch,revision:99}]));await losing;await useStore.getState().mergeBranch("branch","root");assert.deepEqual([posted.expected_project_revision,posted.expected_revision,posted.expected_target_revision],[7,4,3])}finally{globalThis.fetch=of;restoreApi();}});
 
 test("real cache losing branch subtree high node revision cannot poison next block",async()=>{const of=globalThis.fetch,restoreApi=useFreshApiClient();api.rememberResponse(project);api.rememberResponse(root);const one={id:"one",project_id:"p",source_node_id:"root",name:"one",revision:4},two={...one,id:"two",revision:2,selectionRevision:2};const old=deferred<Response>();let posted:Record<string,unknown>={};globalThis.fetch=(async(input,init)=>{const url=String(input);if(url.endsWith("/branches/one/subtree"))return old.promise;if(url.endsWith("/branches/two/subtree"))return response({branch:two,tree:{...root,revision:5}});if(url.endsWith("/nodes/root/blocks")){posted=JSON.parse(String(init?.body));return response({id:"block",node_id:"root",block_type:"paragraph",content:{},order_index:0,revision:1,selectionRevision:1})}throw Error(url)}) as typeof fetch;try{reset({branches:[one,two],currentBranch:null});const losing=useStore.getState().selectBranch(one as never);await Promise.resolve();await useStore.getState().selectBranch(two as never);old.resolve(response({branch:{...one,revision:99},tree:{...root,revision:99}}));await losing;await api.createBlock("root",{block_type:"paragraph",content:{body:"x"}});assert.deepEqual([posted.expected_project_revision,posted.expected_node_revision],[7,5])}finally{globalThis.fetch=of;restoreApi();}});
+
+test("undo of a newly created child performs durable inverse before publishing", async () => {
+  const originalCreate = api.createNode, originalDelete = api.deleteNode, originalProject = api.getProject, originalSubtree = api.getSubtree;
+  let deleted: unknown[] | null = null;
+  api.createNode = (async () => ({ ...root, id: "child", title: "child", revision: 1, authoritative_project_revision: 8, authoritative_parent_id: "root", authoritative_parent_revision: 4 })) as typeof api.createNode;
+  api.deleteNode = (async (...args: unknown[]) => { deleted = args; }) as typeof api.deleteNode;
+  api.getProject = (async () => ({ ...project, revision: 9 })) as typeof api.getProject;
+  api.getSubtree = (async () => ({ ...root, children: [] })) as typeof api.getSubtree;
+  try {
+    reset({ rootNode: { ...root, children: [] }, currentBranch: null, undoStack: [] });
+    await useStore.getState().addChildNode("root", "child");
+    await useStore.getState().undo();
+    assert.deepEqual(deleted, ["child", 8, 1]);
+    assert.equal(useStore.getState().rootNode?.children?.length, 0);
+    assert.equal(useStore.getState().undoStack.length, 0);
+  } finally { api.createNode = originalCreate; api.deleteNode = originalDelete; api.getProject = originalProject; api.getSubtree = originalSubtree; }
+});
+
+test("failed durable undo keeps entry and reloads coherent durable state", async () => {
+  const originalCreate = api.createNode, originalDelete = api.deleteNode, originalProject = api.getProject, originalSubtree = api.getSubtree;
+  const child = { ...root, id: "child", title: "child", revision: 1 };
+  api.createNode = (async () => ({ ...child, authoritative_project_revision: 8, authoritative_parent_id: "root", authoritative_parent_revision: 4 })) as typeof api.createNode;
+  api.deleteNode = (async () => { throw new Error("inverse failed"); }) as typeof api.deleteNode;
+  api.getProject = (async () => ({ ...project, revision: 8 })) as typeof api.getProject;
+  api.getSubtree = (async () => ({ ...root, children: [child] })) as typeof api.getSubtree;
+  try {
+    reset({ currentBranch: null, error: null, toast: null, undoStack: [] });
+    await useStore.getState().addChildNode("root", "child");
+    await useStore.getState().undo();
+    assert.equal(useStore.getState().rootNode?.children?.[0].id, "child");
+    assert.equal(useStore.getState().undoStack.length, 1);
+    assert.match(useStore.getState().error ?? "", /inverse failed/);
+  } finally { api.createNode = originalCreate; api.deleteNode = originalDelete; api.getProject = originalProject; api.getSubtree = originalSubtree; }
+});
+
+test("unsupported mutations preserve executable undo on failure and clear it only after commit", async () => {
+  const originalUpdate=api.updateNode,originalDelete=api.deleteNode,originalCreate=api.createNode;
+  const child={...root,id:"child",revision:2,children:[]} as GNode;
+  const inverse={rootNode:root,description:"create",projectId:"p",branchId:null,projectGeneration:0,branchGeneration:0,inverse:{kind:"delete-created-node" as const,nodeId:"older",nodeRevision:1,projectRevision:7}};
+  try {
+    for (const kind of ["update","delete","ai"] as const) {
+      reset({rootNode:{...root,children:[child]},currentBranch:null,undoStack:[inverse],expandTargetNodeId:"root",expandSuggestions:[{title:"ai",summary:"",node_type:"idea"}]});
+      if(kind==="update")api.updateNode=(async()=>{throw new Error("precommit")}) as typeof api.updateNode;
+      if(kind==="delete")api.deleteNode=(async()=>{throw new Error("precommit")}) as typeof api.deleteNode;
+      if(kind==="ai")api.createNode=(async()=>{throw new Error("precommit")}) as typeof api.createNode;
+      await (kind==="update"?useStore.getState().updateNode("child",{title:"x"}):kind==="delete"?useStore.getState().deleteNode("child"):useStore.getState().acceptSuggestion(0)).catch(()=>undefined);
+      assert.equal(useStore.getState().undoStack.length,1);
+    }
+    reset({rootNode:{...root,children:[child]},currentBranch:null,undoStack:[inverse]});
+    api.updateNode=(async()=>({...child,title:"saved"})) as typeof api.updateNode;
+    await useStore.getState().updateNode("child",{title:"saved"});
+    assert.equal(useStore.getState().undoStack.length,0);
+  } finally {api.updateNode=originalUpdate;api.deleteNode=originalDelete;api.createNode=originalCreate;}
+});

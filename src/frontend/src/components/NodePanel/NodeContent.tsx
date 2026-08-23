@@ -263,20 +263,21 @@ export function NodeContent({
     if (nextIndex < 0 || nextIndex >= blocks.length) return;
 
     const current = blocks[index];
-    const target = blocks[nextIndex];
     const nextBlocks = [...blocks];
     [nextBlocks[index], nextBlocks[nextIndex]] = [nextBlocks[nextIndex], nextBlocks[index]];
 
     setBlocks(nextBlocks.map((block, order_index) => ({ ...block, order_index })));
 
     try {
-      await Promise.all([
-        api.updateBlock(current.id, { order_index: nextIndex }),
-        api.updateBlock(target.id, { order_index: index }),
-      ]);
+      // Backend owns interval shifting and sibling revisions: exactly one PATCH.
+      await api.updateBlock(current.id, { order_index: nextIndex });
+      const authoritative = await api.getBlocks(selectedNode.id);
+      setBlocks(authoritative as ContentBlockItem[]);
       await refreshTree();
     } catch (error) {
-      setBlocks(blocks);
+      // The PATCH may have committed while readback failed. Reload before presenting.
+      try { setBlocks(await api.getBlocks(selectedNode.id) as ContentBlockItem[]); }
+      catch { setBlocks(blocks); }
       alert(u(`調整內容區塊順序失敗：${error instanceof Error ? error.message : "未知錯誤"}`,`调整内容区块顺序失败：${error instanceof Error ? error.message : "未知错误"}`,`Failed to reorder content blocks: ${error instanceof Error ? error.message : "Unknown error"}`));
     }
   };

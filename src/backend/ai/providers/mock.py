@@ -12,8 +12,11 @@ class MockProvider(LLMProvider):
         if "content_blocks" in system:
             return json.dumps(self._deepen(locale), ensure_ascii=False)
         if "suggest" in system.lower() or "子節點" in system or "子节点" in system:
-            mode = "focused" if "focused" in user.lower() else "challenge" if "challenge" in user.lower() else "explore"
-            count = max(1, min(8, int(__import__("json").loads(user).get("requested_count", 3))))
+            payload = json.loads(user)
+            mode = payload.get("mode_key", "explore")
+            if mode not in {"focused", "explore", "challenge"}:
+                mode = "explore"
+            count = max(1, min(8, int(payload.get("requested_count", 3))))
             return json.dumps(self._expand(locale, mode)[:count], ensure_ascii=False)
         replies={"en":"This is a Mock-mode response. Configure an API key to receive a live AI response.","zh-CN":"这是 Mock 模式的回复。配置 API Key 后即可获得真实 AI 回复。","zh-TW":"這是 Mock 模式的回覆。設定 API Key 後即可獲得真實 AI 回應。"}
         return replies[locale]

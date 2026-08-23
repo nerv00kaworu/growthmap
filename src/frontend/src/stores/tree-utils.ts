@@ -3,6 +3,7 @@ import type { GNode } from "@/lib/types";
 export interface UndoEntry {
   rootNode: GNode;
   description: string;
+  inverse?: { kind: "delete-created-node"; nodeId: string; nodeRevision: number; projectRevision: number };
   projectId: string;
   branchId: string | null;
   projectGeneration: number;

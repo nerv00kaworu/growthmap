@@ -65,7 +65,7 @@ interface GrowthMapStore {
   refreshTree: () => Promise<"refreshed" | "superseded">;
   promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
   reparentNode: (nodeId: string, newParentId: string) => Promise<void>;
-  undo: () => void;
+  undo: () => Promise<void>;
   setSearchQuery: (q: string) => void;
   setToast: (msg: string | null) => void;
 
@@ -271,6 +271,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (outcome.superseded) return;
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return; }
     const newNode = outcome.value!;
+    set({ undoStack: [] });
     const child: GNode = {
       id: newNode.id,
       title: newNode.title,
@@ -302,7 +303,17 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       revision: newNode.revision || 1,
     };
     const updated = applyCreateRevisions(set, currentProject, insertChild(rootNode, parentId, child), newNode);
-    set({ rootNode: updated, undoStack: newUndoStack });
+    // This create advances project/parent CAS and invalidates all older inverses.
+    const durableUndoStack = [{
+      ...newUndoStack[0],
+      inverse: {
+        kind: "delete-created-node" as const,
+        nodeId: newNode.id,
+        nodeRevision: newNode.revision || 1,
+        projectRevision: newNode.authoritative_project_revision ?? currentProject.revision + 1,
+      },
+    }];
+    set({ rootNode: updated, undoStack: durableUndoStack });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -310,21 +321,17 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   updateNode: async (nodeId, data) => {
-    const { rootNode, undoStack, currentProject, currentBranch } = get();
+    const { rootNode, currentProject, currentBranch } = get();
     const existing = rootNode ? findNode(rootNode, nodeId) : null;
     if (!currentProject || !existing) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
-    if (rootNode) {
-      const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui('更新節點','更新节点','Update node'), owner);
-      set({ undoStack: newUndoStack });
-    }
     if (!ownsOperation(owner)) return;
     try {
       const saved = await api.updateNode(nodeId, { ...data, expected_project_revision: currentProject.revision, expected_revision: existing.revision });
       if (!ownsOperation(owner) || !rootNode) return;
       const updated = patchNode(rootNode, nodeId, saved);
       advanceProjectRevision(set, currentProject);
-      set({ rootNode: updated });
+      set({ rootNode: updated, undoStack: [] });
       const { selectedNodeId } = get();
       if (selectedNodeId) set({ selectedNode: findNode(updated, selectedNodeId) });
     } catch (error) {
@@ -333,15 +340,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   deleteNode: async (nodeId) => {
-    const { rootNode, undoStack, selectedNodeId, currentProject, currentBranch } = get();
+    const { rootNode, selectedNodeId, currentProject, currentBranch } = get();
     const existing = rootNode ? findNode(rootNode, nodeId) : null;
     if (!currentProject || !existing) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
-    if (rootNode) {
-      const node = findNode(rootNode, nodeId);
-      const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui(`刪除節點: ${node?.title || nodeId}`,`删除节点: ${node?.title || nodeId}`,`Delete node: ${node?.title || nodeId}`), owner);
-      set({ undoStack: newUndoStack });
-    }
     if (!ownsOperation(owner)) return;
     try {
       await api.deleteNode(nodeId, currentProject.revision, existing.revision);
@@ -349,7 +351,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       advanceProjectRevision(set, currentProject);
       if (!rootNode) return;
       const updated = removeNode(rootNode, nodeId);
-      set({ rootNode: updated });
+      set({ rootNode: updated, undoStack: [] });
       if (selectedNodeId === nodeId) set({ selectedNodeId: null, selectedNode: null });
       else if (selectedNodeId) set({ selectedNode: findNode(updated, selectedNodeId) });
     } catch (error) {
@@ -418,12 +420,10 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   reparentNode: async (nodeId, newParentId) => {
-    const { rootNode, undoStack, currentProject, currentBranch } = get();
+    const { rootNode, currentProject, currentBranch } = get();
     if (!rootNode || !currentProject) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
     const node = findNode(rootNode, nodeId);
-    const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui(`移動節點: ${node?.title || nodeId}`,`移动节点: ${node?.title || nodeId}`,`Move node: ${node?.title || nodeId}`), owner);
-    set({ undoStack: newUndoStack });
     const newParent = findNode(rootNode, newParentId);
     const oldParent = (() => {
       const walk = (candidate: GNode): GNode | null => candidate.children?.some((child) => child.id === nodeId)
@@ -446,24 +446,36 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     }
     if (!ownsOperation(owner)) return;
     advanceProjectRevision(set, currentProject);
+    set({ undoStack: [] });
     try {
       const result = await get().refreshTree();
-      if (result === "refreshed" && ownsOperation(owner)) set({ undoStack: newUndoStack, error: null, toast: ui('✅ 節點已移動','✅ 节点已移动','✅ Node moved') });
+      if (result === "refreshed" && ownsOperation(owner)) set({ error: null, toast: ui('✅ 節點已移動','✅ 节点已移动','✅ Node moved') });
     } catch {
       if (ownsOperation(owner)) set({ undoStack: [], error: null, toast: ui('✅ 節點已移動；最新畫面載入失敗，請重新載入專案','✅ 节点已移动；最新画面加载失败，请重新加载项目','✅ Node moved; the latest view could not load, so reload the project.') });
     }
   },
 
-  undo: () => {
+  undo: async () => {
     const { undoStack } = get();
     if (undoStack.length === 0) return;
     const [entry, ...rest] = undoStack;
     const owner = { projectId: entry.projectId, branchId: entry.branchId, projectGeneration: entry.projectGeneration, branchGeneration: entry.branchGeneration };
     if (!ownsOperation(owner)) { set({ undoStack: [] }); return; }
-    set({ rootNode: entry.rootNode, undoStack: rest, toast: ui(`已復原: ${entry.description}`,`已恢复: ${entry.description}`,`Restored: ${entry.description}`) });
-    const { selectedNodeId } = get();
-    if (selectedNodeId) {
-      set({ selectedNode: findNode(entry.rootNode, selectedNodeId) });
+    if (!entry.inverse) {
+      set({ error: ui('這項操作無法安全地持久復原，畫面未變更','此操作无法安全地持久撤销，画面未更改','This operation cannot be durably undone; the view was not changed.') });
+      return;
+    }
+    try {
+      await api.deleteNode(entry.inverse.nodeId, entry.inverse.projectRevision, entry.inverse.nodeRevision);
+      if (!ownsOperation(owner)) return;
+      set({ undoStack: rest, error: null });
+      await get().refreshTree();
+      if (!ownsOperation(owner)) return;
+      set({ toast: ui(`已復原: ${entry.description}`,`已撤销: ${entry.description}`,`Undone: ${entry.description}`) });
+    } catch (error) {
+      if (!ownsOperation(owner)) return;
+      try { await get().refreshTree(); } catch { /* keep the last coherent renderer snapshot */ }
+      if (ownsOperation(owner)) set({ error: (error as Error).message, toast: ui('復原失敗；已保留／重新載入目前資料','撤销失败；已保留/重新加载当前数据','Undo failed; current durable data was kept/reloaded.') });
     }
   },
 
@@ -644,7 +656,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptSuggestion: async (index) => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, currentBranch, rootNode, undoStack } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, currentBranch, rootNode } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
     const ownedRoot = rootNode;
@@ -652,8 +664,6 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       && Boolean(findNode(ownedRoot, expandTargetNodeId))
       && Boolean(get().rootNode && findNode(get().rootNode!, expandTargetNodeId));
     if (!stillOwned()) return;
-    const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui('接受 AI 建議','接受 AI 建议','Accept AI suggestion'), owner);
-    set({ undoStack: newUndoStack });
     const s = expandSuggestions[index];
     const outcome = await runMutationWithConflict(
       () => api.createNode(currentProject.id, {
@@ -670,6 +680,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (outcome.superseded) return;
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return; }
     const newNode = outcome.value!;
+    set({ undoStack: [] });
     const child: GNode = {
       ...newNode,
       summary: newNode.summary || "",
@@ -706,7 +717,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptAllSuggestions: async () => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, currentBranch, rootNode, undoStack } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, currentBranch, rootNode } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
     const owner = captureOperationOwner(currentProject.id, currentBranch?.id ?? null);
     const ownedRoot = rootNode;
@@ -715,8 +726,6 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       && Boolean(get().rootNode && findNode(get().rootNode!, expandTargetNodeId));
     if (!stillOwned()) return;
     if (!confirm(ui(`確定採用全部 ${expandSuggestions.length} 個 AI 分支建議？`,`确定采用全部 ${expandSuggestions.length} 个 AI 分支建议吗？`,`Accept all ${expandSuggestions.length} AI branch suggestions?`))) return;
-    const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui('接受全部 AI 建議','接受全部 AI 建议','Accept all AI suggestions'), owner);
-    set({ undoStack: newUndoStack });
     let tree = rootNode;
     const pending = expandSuggestions.map((suggestion, token) => ({ suggestion, token }));
     let committed = 0;
@@ -750,6 +759,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         return;
       }
       committed += 1;
+      if (committed === 1) set({ undoStack: [] });
       if (!stillOwned()) return;
       const remaining = pending.filter((candidate) => candidate.token > item.token).map((candidate) => candidate.suggestion);
       set({ expandSuggestions: remaining.length ? remaining : null });
@@ -805,10 +815,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   acceptDeepenSummary: async (providedContext) => {
     const context = providedContext ?? captureDeepenContext();
     if (!context || !ownsDeepenContext(context)) return "superseded";
-    const { rootNode, undoStack } = get();
+    const { rootNode } = get();
     if (!rootNode) return "failed";
-    const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui('接受 AI 摘要建議','接受 AI 摘要建议','Accept AI summary suggestion'), context.owner);
-    set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.updateNode(context.targetId, { summary: context.summary } as Partial<GNode>),
       () => get().refreshTree(),
@@ -818,6 +826,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (outcome.superseded) return "superseded";
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return "conflict"; }
     if (!ownsDeepenContext(context)) return "superseded";
+    set({ undoStack: [] });
     const updated = patchNode(rootNode, context.targetId, outcome.value!);
     set({ rootNode: updated, selectedNode: get().selectedNodeId ? findNode(updated, get().selectedNodeId!) : null });
     try {
@@ -834,7 +843,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   acceptDeepenBlock: async (index, providedContext) => {
     const context = providedContext ?? captureDeepenContext();
     if (!context || !ownsDeepenContext(context)) return "superseded";
-    const { deepenResult, rootNode, undoStack } = get();
+    const { deepenResult, rootNode } = get();
     if (!deepenResult || !rootNode) return "superseded";
     const block = providedContext ? context.blocks[index] : context.blocks[index];
     if (!block) return "failed";
@@ -845,8 +854,6 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       .filter((candidate) => !retired.has(candidate.token))
       .findIndex((candidate) => candidate.token === block.token);
     if (liveIndex < 0 || !deepenResult.content_blocks[liveIndex]) return "superseded";
-    const newUndoStack = pushOwnedUndo(undoStack, rootNode, ui(`接受 AI 內容區塊: ${block.title}`,`接受 AI 内容区块: ${block.title}`,`Accept AI content block: ${block.title}`), context.owner);
-    set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.createBlock(context.targetId, {
         block_type: block.block_type,
@@ -859,6 +866,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     if (outcome.superseded) return "superseded";
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return "conflict"; }
     if (!ownsDeepenContext(context)) return "superseded";
+    set({ undoStack: [] });
     const created = outcome.value!;
     const target = findNode(rootNode, context.targetId);
     const updated = patchNode(rootNode, context.targetId, { content_blocks: [...(target?.content_blocks || []), created] } as Partial<GNode>);
