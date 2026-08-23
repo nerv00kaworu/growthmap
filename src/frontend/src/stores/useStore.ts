@@ -150,8 +150,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   addChildNode: async (parentId, title, nodeType) => {
     const { currentProject, rootNode } = get();
     if (!currentProject || !rootNode) return;
-    const { undoStack } = get();
-    const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`);
+    const { undoStack, currentBranch } = get();
+    const newUndoStack = pushUndo(undoStack, rootNode, `新增子節點: ${title}`, { projectId: currentProject.id, branchId: currentBranch?.id ?? null });
     const outcome = await runMutationWithConflict(
       () => api.createNode(currentProject.id, {
         title,
@@ -195,7 +195,11 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       revision: newNode.revision || 1,
     };
     const updated = applyCreateRevisions(set, currentProject, insertChild(rootNode, parentId, child), newNode);
-    set({ rootNode: updated, undoStack: newUndoStack });
+    set({ rootNode: updated, undoStack: [{
+      ...newUndoStack[0],
+      inverse: { kind: "delete-created-node", nodeId: newNode.id, nodeRevision: newNode.revision || 1,
+        projectRevision: newNode.authoritative_project_revision ?? currentProject.revision + 1 },
+    }] });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -203,18 +207,14 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   updateNode: async (nodeId, data) => {
-    const { rootNode, undoStack, currentProject } = get();
+    const { rootNode, currentProject } = get();
     const existing = rootNode ? findNode(rootNode, nodeId) : null;
     if (!currentProject || !existing) return;
-    if (rootNode) {
-      const newUndoStack = pushUndo(undoStack, rootNode, `更新節點`);
-      set({ undoStack: newUndoStack });
-    }
     const saved = await api.updateNode(nodeId, { ...data, expected_project_revision: currentProject.revision, expected_revision: existing.revision });
     if (!rootNode) return;
     const updated = patchNode(rootNode, nodeId, saved);
     advanceProjectRevision(set, currentProject);
-    set({ rootNode: updated });
+    set({ rootNode: updated, undoStack: [] });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -222,19 +222,14 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   deleteNode: async (nodeId) => {
-    const { rootNode, undoStack, selectedNodeId, currentProject } = get();
+    const { rootNode, selectedNodeId, currentProject } = get();
     const existing = rootNode ? findNode(rootNode, nodeId) : null;
     if (!currentProject || !existing) return;
-    if (rootNode) {
-      const node = findNode(rootNode, nodeId);
-      const newUndoStack = pushUndo(undoStack, rootNode, `刪除節點: ${node?.title || nodeId}`);
-      set({ undoStack: newUndoStack });
-    }
     await api.deleteNode(nodeId, currentProject.revision, existing.revision);
     advanceProjectRevision(set, currentProject);
     if (!rootNode) return;
     const updated = removeNode(rootNode, nodeId);
-    set({ rootNode: updated });
+    set({ rootNode: updated, undoStack: [] });
     if (selectedNodeId === nodeId) {
       set({ selectedNodeId: null, selectedNode: null });
     } else if (selectedNodeId) {
@@ -272,11 +267,9 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   reparentNode: async (nodeId, newParentId) => {
-    const { rootNode, undoStack } = get();
+    const { rootNode } = get();
     if (!rootNode) return;
     const node = findNode(rootNode, nodeId);
-    const newUndoStack = pushUndo(undoStack, rootNode, `移動節點: ${node?.title || nodeId}`);
-    set({ undoStack: newUndoStack });
     try {
       const currentProject = get().currentProject;
       const newParent = findNode(rootNode, newParentId);
@@ -295,20 +288,27 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       });
       if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
       advanceProjectRevision(set, currentProject);
+      set({ undoStack: [] });
       await get().refreshTree();
     } catch (e: unknown) {
       set({ error: (e as Error).message });
     }
   },
 
-  undo: () => {
-    const { undoStack } = get();
+  undo: async () => {
+    const { undoStack, currentProject, currentBranch } = get();
     if (undoStack.length === 0) return;
     const [entry, ...rest] = undoStack;
-    set({ rootNode: entry.rootNode, undoStack: rest, toast: `已復原: ${entry.description}` });
-    const { selectedNodeId } = get();
-    if (selectedNodeId) {
-      set({ selectedNode: findNode(entry.rootNode, selectedNodeId) });
+    if (!currentProject || entry.projectId !== currentProject.id || entry.branchId !== (currentBranch?.id ?? null)) { set({ undoStack: [] }); return; }
+    if (!entry.inverse) { set({ error: "這項操作無法安全地持久復原，畫面未變更" }); return; }
+    try {
+      await api.deleteNode(entry.inverse.nodeId, entry.inverse.projectRevision, entry.inverse.nodeRevision);
+      set({ undoStack: rest, error: null });
+      await get().refreshTree();
+      set({ toast: `已復原: ${entry.description}` });
+    } catch (error) {
+      try { await get().refreshTree(); } catch { /* preserve coherent snapshot */ }
+      set({ error: (error as Error).message, toast: "復原失敗；已保留／重新載入目前資料" });
     }
   },
 
@@ -440,10 +440,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptSuggestion: async (index) => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 建議`);
-    set({ undoStack: newUndoStack });
     const s = expandSuggestions[index];
     const outcome = await runMutationWithConflict(
       () => api.createNode(currentProject.id, {
@@ -474,6 +472,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const remaining = expandSuggestions.filter((_, i) => i !== index);
     set({
       rootNode: updated,
+      undoStack: [],
       expandSuggestions: remaining.length > 0 ? remaining : null,
       toast: `✅ 已建立 AI 建議節點「${s.title}」`,
     });
@@ -494,11 +493,9 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptAllSuggestions: async () => {
-    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode, undoStack } = get();
+    const { expandSuggestions, expandTargetNodeId, currentProject, rootNode } = get();
     if (!expandSuggestions || !expandTargetNodeId || !currentProject || !rootNode) return;
     if (!confirm(`確定採用全部 ${expandSuggestions.length} 個 AI 分支建議？`)) return;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受全部 AI 建議`);
-    set({ undoStack: newUndoStack });
     let tree = rootNode;
     for (const s of expandSuggestions) {
       const outcome = await runMutationWithConflict(
@@ -533,7 +530,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       tree = insertChild(tree, expandTargetNodeId, child);
     }
     await get().refreshTree();
-    set({ expandSuggestions: null, toast: `✅ 已建立 ${expandSuggestions.length} 個 AI 建議節點` });
+    set({ undoStack: [], expandSuggestions: null, toast: `✅ 已建立 ${expandSuggestions.length} 個 AI 建議節點` });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(tree, selectedNodeId) });
@@ -553,11 +550,9 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptDeepenSummary: async () => {
-    const { deepenResult, rootNode, undoStack } = get();
+    const { deepenResult, rootNode } = get();
     if (!deepenResult || !rootNode) return;
     const targetId = deepenResult.target_node_id;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 摘要建議`);
-    set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.updateNode(targetId, { summary: deepenResult.enriched_summary } as Partial<GNode>),
       () => get().refreshTree(),
@@ -565,7 +560,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     );
     if (outcome.conflict) { set({ conflict: outcome.conflict, error: outcome.conflict.message }); return; }
     const updated = patchNode(rootNode, targetId, outcome.value!);
-    set({ rootNode: updated, toast: "✅ 已套用 AI 摘要建議" });
+    set({ rootNode: updated, undoStack: [], toast: "✅ 已套用 AI 摘要建議" });
     const { selectedNodeId } = get();
     if (selectedNodeId) {
       set({ selectedNode: findNode(updated, selectedNodeId) });
@@ -573,13 +568,11 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   acceptDeepenBlock: async (index) => {
-    const { deepenResult, rootNode, undoStack } = get();
+    const { deepenResult, rootNode } = get();
     if (!deepenResult || !rootNode) return;
     const block = deepenResult.content_blocks[index];
     if (!block) return;
     const targetId = deepenResult.target_node_id;
-    const newUndoStack = pushUndo(undoStack, rootNode, `接受 AI 內容區塊: ${block.title}`);
-    set({ undoStack: newUndoStack });
     const outcome = await runMutationWithConflict(
       () => api.createBlock(targetId, {
         block_type: block.block_type,
@@ -598,6 +591,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     const remainingBlocks = deepenResult.content_blocks.filter((_, i) => i !== index);
     set({
       rootNode: updated,
+      undoStack: [],
       deepenResult: remainingBlocks.length > 0 ? { ...deepenResult, content_blocks: remainingBlocks } : null,
       toast: "✅ 已寫入 AI 內容區塊",
     });

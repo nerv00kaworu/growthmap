@@ -166,20 +166,15 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
 
     existing_children = [c["title"] for c in ctx["children"]]
     existing_siblings = [s["title"] for s in ctx["siblings"]]
-    dedup_block = ""
-    if existing_children:
-        dedup_block += f"\n已有子節點（禁止重複）：{', '.join(existing_children)}"
-    if existing_siblings:
-        dedup_block += f"\n已有兄弟節點（禁止重複）：{', '.join(existing_siblings)}"
-
-    user_prompt = f"""專案上下文：
-{json.dumps(ctx, ensure_ascii=False, indent=2)}
-{dedup_block}
-
-{get_expand_mode_prompt(req.mode)}
-
-請為節點「{ctx['current_node']['title']}」生成 {req.count} 個**不重複**的子節點建議。
-{"使用者指示：" + req.instruction if req.instruction else ""}"""
+    user_prompt = json.dumps({
+        "context": ctx,
+        "mode_key": req.mode,
+        "mode": get_expand_mode_prompt(req.mode),
+        "requested_count": req.count,
+        "existing_children": existing_children,
+        "existing_siblings": existing_siblings,
+        "instruction": req.instruction,
+    }, ensure_ascii=False, indent=2)
 
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, db)

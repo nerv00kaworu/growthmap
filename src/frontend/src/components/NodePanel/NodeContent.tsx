@@ -257,17 +257,16 @@ export function NodeContent({
     if (nextIndex < 0 || nextIndex >= blocks.length) return;
 
     const current = blocks[index];
-    const target = blocks[nextIndex];
     const nextBlocks = [...blocks];
     [nextBlocks[index], nextBlocks[nextIndex]] = [nextBlocks[nextIndex], nextBlocks[index]];
 
     setBlocks(nextBlocks.map((block, order_index) => ({ ...block, order_index })));
 
     try {
-      await Promise.all([
-        api.updateBlock(current.id, { order_index: nextIndex }),
-        api.updateBlock(target.id, { order_index: index }),
-      ]);
+      // Backend owns interval shifting and sibling revisions: exactly one PATCH.
+      await api.updateBlock(current.id, { order_index: nextIndex });
+      const authoritative = await api.getBlocks(selectedNode.id);
+      setBlocks(authoritative as ContentBlockItem[]);
       await refreshTree();
     } catch (error) {
       setBlocks(blocks);

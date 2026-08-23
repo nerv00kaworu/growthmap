@@ -3,6 +3,7 @@ import os, subprocess, sys
 def test_desktop_api_secret_memory_only_lifecycle(tmp_path):
     script=r'''
 import ai.routes
+import json
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from main import app
@@ -12,7 +13,20 @@ class CapturingProvider(LLMProvider):
  def name(self): return 'fixture'
  async def complete(self,system,user,model=None,temperature=.7,max_tokens=2000):
   assert self.api_key=='memory-key'
-  if 'project context' in user.lower() or '專案上下文' in user:
+  try:
+   payload=json.loads(user)
+  except (json.JSONDecodeError,TypeError):
+   payload=None
+  required={'context','mode_key','mode','requested_count','existing_children','existing_siblings','instruction'}
+  is_expand=(isinstance(payload,dict) and set(payload)==required
+   and isinstance(payload['context'],dict)
+   and isinstance(payload['mode_key'],str)
+   and isinstance(payload['mode'],str)
+   and isinstance(payload['requested_count'],int) and not isinstance(payload['requested_count'],bool)
+   and isinstance(payload['existing_children'],list) and all(isinstance(value,str) for value in payload['existing_children'])
+   and isinstance(payload['existing_siblings'],list) and all(isinstance(value,str) for value in payload['existing_siblings'])
+   and (payload['instruction'] is None or isinstance(payload['instruction'],str)))
+  if is_expand:
    return '[{"title":"fixture child","summary":"fixture summary","node_type":"idea"}]'
   return 'OK'
 def fake_provider(config):

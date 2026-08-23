@@ -70,3 +70,119 @@ class AgentPortV1(unittest.TestCase):
   a=self.grant().json();b=self.grant().json();p=self.client.get("/agent/v1/project",headers=self.auth(a["token"])).json();n=self.client.get(f"/api/nodes/{self.root}").json();statuses=[]
   for i,g in enumerate((a,b)):statuses.append(self.client.post("/agent/v1/batch",headers=self.auth(g["token"]),json={"expected_project_revision":p["revision"],"idempotency_key":f"writer-{i}","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":str(i)}}]}).status_code)
   self.assertEqual(sorted(statuses),[200,409])
+
+ def test_branch_graph_rejects_cross_project_cross_branch_and_malformed_root(self):
+  from sqlalchemy import update
+  from db.database import async_session
+  from models.models import AgentGrant,Edge
+  def branch():
+   p,n=self.revisions()
+   made=self.client.post(f"/api/projects/{self.pid}/branches",json={"expected_project_revision":p["revision"],"source_node_id":self.root,"name":"scope"})
+   self.assertEqual(made.status_code,201,made.text)
+   row=made.json();tree=self.client.get(f"/api/branches/{row['id']}/subtree").json()["tree"]
+   return row,tree
+  for case in ("cross-project","cross-branch","malformed-root"):
+   scoped_branch,scope_root=branch()
+   made=self.grant("read",{"branch_root_id":scope_root["id"]}).json()
+   other=self.client.post("/api/projects",json={"name":f"foreign-{case}"}).json()
+   if case=="cross-project": target=other["root_node_id"]
+   elif case=="cross-branch":
+    second,second_root=branch();target=second_root["id"]
+   else: target=None
+   async def corrupt():
+    async with async_session() as db:
+     if target:
+      db.add(Edge(project_id=self.pid,from_node_id=scope_root["id"],to_node_id=target,relation_type="child_of"))
+     else:
+      await db.execute(update(AgentGrant).where(AgentGrant.id==made["id"]).values(branch_root_id=other["root_node_id"]))
+     await db.commit()
+   asyncio.run(corrupt())
+   graph=self.client.get("/agent/v1/graph",headers=self.auth(made["token"]))
+   self.assertEqual(graph.status_code,409,(case,graph.text))
+   self.assertNotIn(other["id"],graph.text)
+ def test_explicit_node_and_branch_scopes_validate_complete_graph_and_branch_ownership(self):
+  from sqlalchemy import update
+  from db.database import async_session
+  from models.models import Edge,Node
+  def make_node(title,parent=None,branch_id=None):
+   p=self.client.get(f"/api/projects/{self.pid}").json()
+   parent=parent or self.root;n=self.client.get(f"/api/nodes/{parent}").json()
+   body={"title":title,"parent_id":parent,"expected_project_revision":p["revision"],"expected_parent_revision":n["revision"]}
+   if branch_id:body["branch_id"]=branch_id
+   made=self.client.post(f"/api/projects/{self.pid}/nodes",json=body);self.assertEqual(made.status_code,201,made.text);return made.json()
+  def make_branch(name):
+   p,n=self.revisions();made=self.client.post(f"/api/projects/{self.pid}/branches",json={"expected_project_revision":p["revision"],"source_node_id":self.root,"name":name});self.assertEqual(made.status_code,201,made.text)
+   row=made.json();return row,self.client.get(f"/api/branches/{row['id']}/subtree").json()["tree"]
+  async def edges(rows):
+   async with async_session() as db:
+    for source,target,project in rows:db.add(Edge(project_id=project,from_node_id=source,to_node_id=target,relation_type="child_of"))
+    await db.commit()
+  def rejected(root,case):
+   grant=self.grant("read",{"node_scope_id":root}).json();response=self.client.get("/agent/v1/graph",headers=self.auth(grant["token"]));self.assertEqual(response.status_code,409,(case,response.text))
+
+  # Build all canonical branch fixtures before inserting hostile graph rows.
+  branch,branch_root=make_branch("other-scope")
+  valid_branch,valid_branch_root=make_branch("valid-branch");valid_child=make_node("valid-branch-child",valid_branch_root["id"],valid_branch["id"])
+  foreign=self.client.post("/api/projects",json={"name":"foreign-node-scope"}).json()
+  foreign_branch=self.client.post(f"/api/projects/{foreign['id']}/branches",json={"expected_project_revision":foreign["revision"],"source_node_id":foreign["root_node_id"],"name":"foreign-owner"}).json()
+
+  # Valid explicit node grant remains singleton even though its closure is validated.
+  valid=make_node("valid-node");valid_grant=self.grant("read",{"node_scope_id":valid["id"]}).json()
+  graph=self.client.get("/agent/v1/graph",headers=self.auth(valid_grant["token"]));self.assertEqual(graph.status_code,200,graph.text);self.assertEqual({n["id"] for n in graph.json()["nodes"]},{valid["id"]})
+
+  self_cycle=make_node("self-cycle");asyncio.run(edges([(self_cycle["id"],self_cycle["id"],self.pid)]));rejected(self_cycle["id"],"self-cycle")
+  parallel=make_node("parallel");parallel_child=make_node("parallel-child",parallel["id"]);asyncio.run(edges([(parallel["id"],parallel_child["id"],self.pid)]));rejected(parallel["id"],"parallel")
+  diamond=make_node("diamond");left=make_node("left",diamond["id"]);right=make_node("right",diamond["id"]);shared=make_node("shared",left["id"]);asyncio.run(edges([(right["id"],shared["id"],self.pid)]));rejected(diamond["id"],"repeated")
+  external=make_node("external-root");external_child=make_node("external-child",external["id"]);outside=make_node("outside-parent");asyncio.run(edges([(outside["id"],external_child["id"],self.pid)]));rejected(external["id"],"external second parent")
+  deep=make_node("different-depth");deep_left=make_node("deep-left",deep["id"]);deep_right=make_node("deep-right",deep["id"]);deep_shared=make_node("deep-shared",deep_left["id"]);deep_mid=make_node("deep-mid",deep_right["id"]);asyncio.run(edges([(deep_mid["id"],deep_shared["id"],self.pid)]));rejected(deep["id"],"different-depth repeated")
+  cross_project=make_node("cross-project");asyncio.run(edges([(cross_project["id"],foreign["root_node_id"],self.pid)]));rejected(cross_project["id"],"cross-project")
+  cross_branch=make_node("cross-branch");asyncio.run(edges([(cross_branch["id"],branch_root["id"],self.pid)]));rejected(cross_branch["id"],"cross-branch")
+
+  # Valid explicit branch grant still returns its complete same-branch tree.
+  branch_grant=self.grant("read",{"branch_root_id":valid_branch_root["id"]}).json();graph=self.client.get("/agent/v1/graph",headers=self.auth(branch_grant["token"]));self.assertEqual(graph.status_code,200,graph.text);self.assertTrue({valid_branch_root["id"],valid_child["id"]}.issubset({n["id"] for n in graph.json()["nodes"]}))
+  # An authenticated branch scope fails closed when a same-branch node outside
+  # its closure becomes a second parent of an inside descendant.
+  branch_outside=make_node("branch-outside")
+  async def move_outside_into_branch():
+   async with async_session() as db:
+    await db.execute(update(Node).where(Node.id==branch_outside["id"]).values(branch_id=valid_branch["id"]));await db.commit()
+  asyncio.run(move_outside_into_branch());asyncio.run(edges([(branch_outside["id"],valid_child["id"],self.pid)]))
+  graph=self.client.get("/agent/v1/graph",headers=self.auth(branch_grant["token"]));self.assertEqual(graph.status_code,409,graph.text);self.assertNotIn(branch_outside["id"],graph.text)
+
+  # FK-valid foreign Branch ownership must fail for either explicit root kind.
+  for field in ("node_scope_id","branch_root_id"):
+   victim=make_node(f"foreign-owner-{field}")
+   async def corrupt():
+    async with async_session() as db:
+     await db.execute(update(Node).where(Node.id==victim["id"]).values(branch_id=foreign_branch["id"]));await db.commit()
+   asyncio.run(corrupt());grant=self.grant("read",{field:victim["id"]}).json();response=self.client.get("/agent/v1/graph",headers=self.auth(grant["token"]));self.assertEqual(response.status_code,409,(field,response.text));self.assertNotIn(foreign_branch["id"],response.text)
+ def test_unscoped_project_and_workspace_graphs_project_exact_main_nodes(self):
+  p,n=self.revisions()
+  main_child=self.child("main-visible").json()
+  p,n=self.revisions();made=self.client.post(f"/api/projects/{self.pid}/branches",json={"expected_project_revision":p["revision"],"source_node_id":self.root,"name":"hidden-branch"});self.assertEqual(made.status_code,201,made.text)
+  branch=made.json();branch_root=self.client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+  p=self.client.get(f"/api/projects/{self.pid}").json();bn=self.client.get(f"/api/nodes/{branch_root['id']}").json();branch_child=self.client.post(f"/api/projects/{self.pid}/nodes",json={"expected_project_revision":p["revision"],"expected_parent_revision":bn["revision"],"title":"branch-hidden","parent_id":branch_root["id"],"branch_id":branch["id"]}).json()
+  expected={self.root,main_child["id"]};hidden={branch_root["id"],branch_child["id"]}
+  project_grant=self.grant("read").json();response=self.client.get("/agent/v1/graph",headers=self.auth(project_grant["token"]));self.assertEqual(response.status_code,200,response.text);self.assertEqual({row["id"] for row in response.json()["nodes"]},expected);self.assertTrue(hidden.isdisjoint({row["id"] for row in response.json()["nodes"]}))
+
+ def test_valid_node_scope_graph_returns_exact_allowed_nodes_edges_and_blocks_only(self):
+  from db.database import async_session
+  from models.models import ContentBlock
+  allowed=self.child("allowed-node").json();unrelated=self.child("unrelated-main").json()
+  p,n=self.revisions();made=self.client.post(f"/api/projects/{self.pid}/branches",json={"expected_project_revision":p["revision"],"source_node_id":self.root,"name":"excluded-branch"});self.assertEqual(made.status_code,201,made.text)
+  branch=made.json();branch_root=self.client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+  foreign=self.client.post("/api/projects",json={"name":"foreign-projection"}).json()
+  async def seed_blocks():
+   async with async_session() as db:
+    db.add_all([
+     ContentBlock(node_id=allowed["id"],block_type="note",content={"marker":"allowed"},order_index=0),
+     ContentBlock(node_id=unrelated["id"],block_type="note",content={"marker":"unrelated"},order_index=0),
+     ContentBlock(node_id=branch_root["id"],block_type="note",content={"marker":"branch"},order_index=0),
+     ContentBlock(node_id=foreign["root_node_id"],block_type="note",content={"marker":"foreign"},order_index=0),
+    ]);await db.commit()
+  asyncio.run(seed_blocks())
+  grant=self.grant("read",{"node_scope_id":allowed["id"]}).json();response=self.client.get("/agent/v1/graph",headers=self.auth(grant["token"]));self.assertEqual(response.status_code,200,response.text);body=response.json()
+  self.assertEqual({row["id"] for row in body["nodes"]},{allowed["id"]})
+  self.assertEqual(body["edges"],[])
+  self.assertEqual(len(body["content_blocks"]),1);self.assertEqual(body["content_blocks"][0]["node_id"],allowed["id"]);self.assertEqual(body["content_blocks"][0]["content"],{"marker":"allowed"})
+  omitted={self.root,unrelated["id"],branch_root["id"],foreign["root_node_id"]};self.assertTrue(omitted.isdisjoint({row["id"] for row in body["nodes"]}));self.assertTrue(omitted.isdisjoint({row["node_id"] for row in body["content_blocks"]}))
