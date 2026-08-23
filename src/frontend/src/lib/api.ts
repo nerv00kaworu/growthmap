@@ -169,7 +169,11 @@ function nodeExpected(nodeId: string) {
 
 function invalidateBlockOwner(nodeId: string, projectId?: string): void {
   const node = revisionCache.nodes.get(nodeId);
-  if (projectId) revisionCache.projects.delete(projectId);
+  if (projectId) {
+    revisionCache.projects.delete(projectId);
+    // A delayed token must not erase a newer owner reusing the same node id.
+    if (!node || node.projectId !== projectId) return;
+  }
   if (node) revisionCache.projects.delete(node.projectId);
   revisionCache.nodes.delete(nodeId);
   for (const [id, block] of revisionCache.blocks) if (block.nodeId === nodeId) revisionCache.blocks.delete(id);
