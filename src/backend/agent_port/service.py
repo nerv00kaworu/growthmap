@@ -25,8 +25,9 @@ def bump(entities=()):
     # Existing entities change once per transaction. New entities remain revision 1.
     seen=set()
     for e in entities:
-        if e.id in seen: continue
-        seen.add(e.id);e.revision=(e.revision or 1)+1
+        key=(type(e),str(e.id))
+        if key in seen: continue
+        seen.add(key);e.revision=(e.revision or 1)+1
 
 async def validated_scoped_graph(db,project_id,root_id,limit=5000,allow_external_root_parent=False):
     """Validate an exact project/branch child closure before projecting it."""

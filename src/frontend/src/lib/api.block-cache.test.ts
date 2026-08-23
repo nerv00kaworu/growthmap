@@ -1,34 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createApiClient } from "./api";
+import { reorderBlockAuthoritatively, type OwnerToken } from "../components/NodePanel/block-reorder";
+const response=(v:unknown)=>({ok:true,status:200,json:async()=>v}) as Response;
+const p=(revision:number)=>({id:"p",root_node_id:"n",revision});const n=(revision:number)=>({id:"n",project_id:"p",node_type:"concept",revision});const b=(revision:number)=>({id:"b",node_id:"n",block_type:"note",content:{},order_index:0,revision});
+const token:OwnerToken={projectId:"p",nodeId:"n",generation:1};
 
-const jsonResponse = (value: unknown) => ({ ok: true, status: 200, json: async () => value }) as Response;
-const project = (revision: number) => ({ id: "p", root_node_id: "n", revision });
-const node = (revision: number) => ({ id: "n", project_id: "p", node_type: "concept", revision });
-const block = (revision: number) => ({ id: "b", node_id: "n", block_type: "note", order_index: 0, revision });
+test("real helper partial owner failure invalidates PATCH-auto-remembered authority",async()=>{const api=createApiClient();api.rememberResponse([p(1),n(1),b(1)]);let fetches=0;globalThis.fetch=(async(url,init)=>{fetches++;const path=String(url);if(init?.method==="PATCH")return response(b(2));if(path.endsWith("/projects/p"))return response(p(2));if(path.endsWith("/nodes/n"))throw Error("node failed");return response([b(2)])}) as typeof fetch;await assert.rejects(()=>reorderBlockAuthoritatively([b(1),{...b(1),id:"x",order_index:1}],0,1,token,{current:()=>true},id=>api.updateBlock(id,{order_index:0}),async()=>{const[project,node,blocks]=await Promise.all([api.getProject("p",false),api.getNode("n",false),api.getBlocks("n",false)]);return{project,node,blocks}},x=>api.rememberResponse([x.project,x.node,x.blocks]),x=>api.invalidateBlockOwner(x.nodeId)),/CONTENT_REORDER_SAVED_REFRESH_FAILED/);const before=fetches;assert.throws(()=>api.updateBlock("b",{order_index:0}),/Block revision unavailable/);assert.equal(fetches,before)});
 
-test("failed coherent owner readback invalidation blocks the next stale PATCH", async () => {
-  const api = createApiClient();
-  api.rememberResponse([project(1), node(1), block(1)]);
-  let fetches = 0;
-  globalThis.fetch = (async () => { fetches++; return jsonResponse(block(2)); }) as typeof fetch;
-  await api.updateBlock("b", { order_index: 0 });
-  assert.equal(fetches, 1);
-  api.invalidateBlockOwner("n");
-  assert.throws(() => api.updateBlock("b", { order_index: 0 }), /Block revision unavailable/);
-  assert.equal(fetches, 1, "no stale owner CAS request may leave the client");
-});
-
-test("coherent publish makes the next PATCH use latest project/node/block revisions", async () => {
-  const api = createApiClient();
-  api.rememberResponse([project(1), node(1), block(1)]);
-  const bodies: unknown[] = [];
-  globalThis.fetch = (async (_url, init) => {
-    bodies.push(JSON.parse(String(init?.body)));
-    return jsonResponse(block(bodies.length + 1));
-  }) as typeof fetch;
-  await api.updateBlock("b", { order_index: 0 });
-  api.rememberResponse([project(2), node(2), block(2)]);
-  await api.updateBlock("b", { order_index: 0 });
-  assert.deepEqual(bodies[1], { expected_project_revision: 2, expected_node_revision: 2, expected_revision: 2, order_index: 0 });
-});
+test("real helper coherent publication feeds latest CAS to next PATCH",async()=>{const api=createApiClient();api.rememberResponse([p(1),n(1),b(1)]);const bodies:any[]=[];globalThis.fetch=(async(url,init)=>{const path=String(url);if(init?.method==="PATCH"){bodies.push(JSON.parse(String(init.body)));return response(b(bodies.length+1))}if(path.endsWith("/projects/p"))return response(p(2));if(path.endsWith("/nodes/n"))return response(n(2));return response([b(2)])}) as typeof fetch;await reorderBlockAuthoritatively([b(1),{...b(1),id:"x",order_index:1}],0,1,token,{current:()=>true},(id,i)=>api.updateBlock(id,{order_index:i}),async()=>{const[project,node,blocks]=await Promise.all([api.getProject("p",false),api.getNode("n",false),api.getBlocks("n",false)]);return{project,node,blocks}},x=>api.rememberResponse([x.project,x.node,x.blocks]),x=>api.invalidateBlockOwner(x.nodeId));await api.updateBlock("b",{order_index:0});assert.deepEqual(bodies[1],{expected_project_revision:2,expected_node_revision:2,expected_revision:2,order_index:0})});

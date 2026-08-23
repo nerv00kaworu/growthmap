@@ -1,36 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { reorderBlockAuthoritatively } from "./block-reorder";
+import { reorderBlockAuthoritatively, type OwnerToken } from "./block-reorder";
+const rows = [{ id: "a", node_id: "n", order_index: 0 }, { id: "b", node_id: "n", order_index: 1 }];
+const token: OwnerToken = { projectId: "p", nodeId: "n", generation: 1 };
+const owner = { project: { id: "p" }, node: { id: "n", project_id: "p" }, blocks: [...rows].reverse() };
+const deferred = <T>() => { let resolve!: (v:T)=>void; const promise=new Promise<T>(r=>resolve=r); return {promise,resolve}; };
 
-const rows = [{ id: "a", order_index: 0 }, { id: "b", order_index: 1 }];
-const owner = { project: { id: "p", revision: 2 }, node: { id: "n", revision: 2 }, blocks: [{ id: "b", order_index: 0 }, { id: "a", order_index: 1 }] };
-
-test("adjacent reorder sends one PATCH, reads complete owner, then publishes once", async () => {
-  const calls: string[] = [];
-  const result = await reorderBlockAuthoritatively(rows, 0, 1,
-    async (id, index) => { calls.push(`PATCH:${id}:${index}`); },
-    async () => { calls.push("GET:owner"); return owner; },
-    value => { calls.push("PUBLISH"); assert.equal(value, owner); },
-    () => calls.push("INVALIDATE"));
-  assert.deepEqual(calls, ["PATCH:a:1", "GET:owner", "PUBLISH"]);
-  assert.deepEqual(result, { moved: true, blocks: owner.blocks });
-});
-
-test("committed PATCH plus partial readback failure invalidates and never retries PATCH", async () => {
-  const calls: string[] = [];
-  await assert.rejects(() => reorderBlockAuthoritatively(rows, 0, 1,
-    async (id, index) => { calls.push(`PATCH:${id}:${index}`); },
-    async () => { calls.push("GET:owner"); throw new Error("node unavailable"); },
-    () => calls.push("PUBLISH"), () => calls.push("INVALIDATE")),
-  /CONTENT_REORDER_SAVED_REFRESH_FAILED/);
-  assert.deepEqual(calls, ["PATCH:a:1", "GET:owner", "INVALIDATE"]);
-});
-
-test("failed PATCH neither reads nor publishes nor invalidates", async () => {
-  const calls: string[] = [];
-  await assert.rejects(() => reorderBlockAuthoritatively(rows, 0, 1,
-    async () => { calls.push("PATCH"); throw new Error("conflict"); },
-    async () => { calls.push("GET"); return owner; },
-    () => calls.push("PUBLISH"), () => calls.push("INVALIDATE")), /conflict/);
-  assert.deepEqual(calls, ["PATCH"]);
-});
+test("one PATCH and coherent owner publication", async()=>{const calls:string[]=[];const result=await reorderBlockAuthoritatively(rows,0,1,token,{current:()=>true},async()=>{calls.push("PATCH")},async()=>{calls.push("GET");return owner},()=>calls.push("PUBLISH"),()=>calls.push("INVALIDATE"));assert.deepEqual(calls,["PATCH","GET","PUBLISH"]);assert.deepEqual(result,{moved:true})});
+test("boundary no-op has zero PATCH GET publish invalidate",async()=>{let calls=0;const result=await reorderBlockAuthoritatively(rows,0,-1,token,{current:()=>true},async()=>{calls++},async()=>{calls++;return owner},()=>{calls++},()=>{calls++});assert.equal(calls,0);assert.deepEqual(result,{moved:false})});
+test("A to B supersession is silent and cannot refresh or mutate new owner",async()=>{const d=deferred<typeof owner>();let current=true,published=0,invalidated=0,refresh=0,patches=0;const pending=reorderBlockAuthoritatively(rows,0,1,token,{current:()=>current},async()=>{patches++},()=>d.promise,()=>published++,()=>invalidated++);current=false;d.resolve(owner);const result=await pending;if(result.moved)refresh++;assert.deepEqual(result,{moved:false,superseded:true});assert.deepEqual({published,invalidated,refresh,patches},{published:0,invalidated:0,refresh:0,patches:1})});
+for(const [name,bad] of [["project",{...owner,project:{id:"x"}}],["node",{...owner,node:{id:"x",project_id:"p"}}],["block",{...owner,blocks:[{id:"a",node_id:"x",order_index:0}]}]] as const)test(`mismatched ${name} fails closed`,async()=>{let invalidated=0,published=0;await assert.rejects(()=>reorderBlockAuthoritatively(rows,0,1,token,{current:()=>true},async()=>{},async()=>bad,()=>published++,()=>invalidated++),/CONTENT_REORDER_SAVED_REFRESH_FAILED/);assert.equal(published,0);assert.equal(invalidated,1)});

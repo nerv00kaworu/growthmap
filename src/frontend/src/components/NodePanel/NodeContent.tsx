@@ -2,7 +2,7 @@
 import { useI18n } from "@/i18n/provider";
 import { msg } from "@/i18n/ui";
 
-import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { api } from "@/lib/api";
 import type { GNode, NodeEditDraft, NodeFormalFieldKey } from "@/lib/types";
 import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
@@ -259,15 +259,25 @@ export function NodeContent({
     setShowBranchReview(false);
   };
 
+  const selectionRef = useRef({ projectId: selectedNode.project_id, nodeId: selectedNode.id, generation: 0 });
+  if (selectionRef.current.projectId !== selectedNode.project_id || selectionRef.current.nodeId !== selectedNode.id) {
+    selectionRef.current = { projectId: selectedNode.project_id, nodeId: selectedNode.id, generation: selectionRef.current.generation + 1 };
+  }
+
   const moveBlock = async (index: number, direction: -1 | 1) => {
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= blocks.length) return;
 
+    const token = { ...selectionRef.current };
+    const gate = { current: (candidate: typeof token) =>
+      candidate.projectId === selectionRef.current.projectId
+      && candidate.nodeId === selectionRef.current.nodeId
+      && candidate.generation === selectionRef.current.generation };
     try {
       // The backend atomically moves the whole interval and owns sibling revisions.
       // Send exactly one PATCH, then replace local state with authoritative order.
       const result = await reorderBlockAuthoritatively(
-        blocks, index, direction,
+        blocks, index, direction, token, gate,
         (blockId, orderIndex) => api.updateBlock(blockId, { order_index: orderIndex }),
         async () => {
           const projectId = selectedNode.project_id;
@@ -282,9 +292,9 @@ export function NodeContent({
           api.rememberResponse([project, node, rows]);
           setBlocks(rows);
         },
-        () => api.invalidateBlockOwner(selectedNode.id),
+        initiating => api.invalidateBlockOwner(initiating.nodeId),
       );
-      if (result.moved) {
+      if (result.moved && gate.current(token)) {
         // Owner CAS and blocks are already coherent. A broader tree refresh is
         // best-effort and must not relabel the committed reorder as a failure.
         try { await refreshTree(); } catch { /* coherent owner snapshot remains valid */ }

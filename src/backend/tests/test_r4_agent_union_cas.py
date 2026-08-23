@@ -225,3 +225,18 @@ def test_agent_block_ordering_sparse_multi_insert_cross_node_revisions_replay_an
   monkeypatch.setattr(content_ordering,'set_block_order',fail)
   bad=batch(c,h,p,'agent-order-rollback',[{'op':'create_content_block','node_id':root['id'],'expected_node_revision':root['revision'],'order_index':0,'content':{'body':'never'}}]);assert bad.status_code==500
   assert c.get(f"/api/projects/{p['id']}").json()['revision']==p['revision'] and c.get(f"/api/nodes/{root['id']}/blocks").json()==snapshot
+
+def test_agent_block_node_cross_type_id_collision_bumps_both_exactly_once():
+ from db.database import async_session
+ from models.models import ContentBlock
+ import asyncio
+ with TestClient(app) as c:
+  p,node,h=setup(c)
+  async def seed():
+   async with async_session() as db:
+    db.add(ContentBlock(id=node['id'],node_id=node['id'],block_type='note',content={'body':'old'},order_index=0,revision=1));await db.commit()
+  asyncio.run(seed())
+  result=batch(c,h,p,'cross-type-id',[{'op':'create_content_block','node_id':node['id'],'expected_node_revision':node['revision'],'order_index':0,'content':{'body':'new'}}]);assert result.status_code==200,result.text
+  project2,node2=state(c,p,node);rows=c.get(f"/api/nodes/{node['id']}/blocks").json()
+  assert project2['revision']==p['revision']+1 and node2['revision']==node['revision']+1
+  assert [(r['content']['body'],r['order_index'],r['revision']) for r in rows]==[('new',0,1),('old',1,2)]
