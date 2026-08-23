@@ -37,7 +37,8 @@ jobs:
           }
           if (-not (Select-String -Path services/payments/tests/test_sidecar_server.py -Pattern 'AF_UNIX/SO_PEERCRED' -Quiet)) { throw 'Windows skip must document Linux AF_UNIX/SO_PEERCRED boundary' }
       # R14-R24 require an external untracked VPS evidence bundle. The two
-      # production authority modules use fcntl and are Linux-only; all other
+      # production authority modules use fcntl and are Linux-only. The PEM signer
+      # hardening suite asserts Linux ownership/mode/link policy; all other
       # authority/license/signer tests remain in this Windows foundation gate.
       - name: Cross-platform backend tests with fail-closed source partition
         shell: pwsh
@@ -60,6 +61,14 @@ jobs:
           }
           $ignores += '--ignore=tests/test_authority_composition.py'
           $ignores += '--ignore=tests/test_authority_service.py'
+          $signerTest = 'tests/test_pem_signer_hardening.py'
+          $signerSource = 'licensing/pem_signer.py'
+          if (-not (Test-Path $signerTest -PathType Leaf)) { throw "Missing Linux signer hardening test: $signerTest" }
+          if (-not (Select-String -Path $signerTest -SimpleMatch 'os.getuid' -Quiet)) { throw "Linux signer ownership contract drifted: $signerTest" }
+          if (-not (Select-String -Path $signerTest -Pattern '\.(chmod|st_mode)\b' -Quiet)) { throw "Linux signer mode contract drifted: $signerTest" }
+          if (-not (Test-Path $signerSource -PathType Leaf)) { throw "Missing production signer loader: $signerSource" }
+          if (-not (Select-String -Path $signerSource -SimpleMatch 'signer_loader_requires_linux' -Quiet)) { throw "Production signer Linux boundary drifted: $signerSource" }
+          $ignores += "--ignore=$signerTest"
           python -m pytest -q @ignores
       - run: npm ci
         working-directory: src/frontend
