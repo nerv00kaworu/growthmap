@@ -292,7 +292,7 @@ export function NodeContent({
           api.rememberResponse([project, node, rows]);
           setBlocks(rows);
         },
-        initiating => api.invalidateBlockOwner(initiating.nodeId),
+        initiating => api.invalidateBlockOwner(initiating.nodeId, initiating.projectId),
       );
       if (result.moved && gate.current(token)) {
         // Owner CAS and blocks are already coherent. A broader tree refresh is

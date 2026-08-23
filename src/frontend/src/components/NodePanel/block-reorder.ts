@@ -27,12 +27,18 @@ export async function reorderBlockAuthoritatively<T extends OrderedBlock>(
   await update(blocks[index].id, nextIndex);
   try {
     const owner = await reloadOwner();
-    if (!gate.current(token)) return { moved: false, superseded: true };
+    if (!gate.current(token)) {
+      invalidate(token);
+      return { moved: false, superseded: true };
+    }
     if (!matchesOwner(owner, token)) throw new Error("OWNER_MISMATCH");
     publish(owner);
     return { moved: true };
   } catch (error) {
-    if (!gate.current(token)) return { moved: false, superseded: true };
+    if (!gate.current(token)) {
+      invalidate(token);
+      return { moved: false, superseded: true };
+    }
     invalidate(token);
     throw new Error("CONTENT_REORDER_SAVED_REFRESH_FAILED", { cause: error });
   }

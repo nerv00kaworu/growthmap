@@ -167,8 +167,9 @@ function nodeExpected(nodeId: string) {
   return { expected_project_revision: projectExpected(row.projectId), expected_revision: row.revision };
 }
 
-function invalidateBlockOwner(nodeId: string): void {
+function invalidateBlockOwner(nodeId: string, projectId?: string): void {
   const node = revisionCache.nodes.get(nodeId);
+  if (projectId) revisionCache.projects.delete(projectId);
   if (node) revisionCache.projects.delete(node.projectId);
   revisionCache.nodes.delete(nodeId);
   for (const [id, block] of revisionCache.blocks) if (block.nodeId === nodeId) revisionCache.blocks.delete(id);
