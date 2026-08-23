@@ -173,7 +173,7 @@ class ContentBlockCreate(BaseModel):
     expected_node_revision: int
     block_type: ContentBlockType = ContentBlockType.paragraph
     content: Any = {}
-    order_index: int = 0
+    order_index: Optional[int] = None
 
 
 class ContentBlockUpdate(BaseModel):

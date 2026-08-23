@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { GNode, NodeEditDraft, NodeFormalFieldKey } from "@/lib/types";
 import { MATURITY_COLORS, MATURITY_LABELS, type Maturity, NODE_TYPE_ICONS } from "@/lib/types";
 import { useStore } from "@/stores/useStore";
+import { reorderBlockAuthoritatively } from "./block-reorder";
 
 const NODE_TYPES = ["idea", "concept", "task", "question", "decision", "risk", "resource", "note", "module"];
 const FORMAL_TEXT_FIELDS: { key: NodeFormalFieldKey; label: string }[] = [
@@ -262,21 +263,23 @@ export function NodeContent({
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= blocks.length) return;
 
-    const current = blocks[index];
-    const target = blocks[nextIndex];
-    const nextBlocks = [...blocks];
-    [nextBlocks[index], nextBlocks[nextIndex]] = [nextBlocks[nextIndex], nextBlocks[index]];
-
-    setBlocks(nextBlocks.map((block, order_index) => ({ ...block, order_index })));
-
     try {
-      await Promise.all([
-        api.updateBlock(current.id, { order_index: nextIndex }),
-        api.updateBlock(target.id, { order_index: index }),
-      ]);
+      // The backend atomically moves the whole interval and owns sibling revisions.
+      // Send exactly one PATCH, then replace local state with authoritative order.
+      const authoritative = await reorderBlockAuthoritatively(
+        blocks, index, direction,
+        (blockId, orderIndex) => api.updateBlock(blockId, { order_index: orderIndex }),
+        () => api.getBlocks(selectedNode.id) as Promise<ContentBlockItem[]>,
+      );
+      setBlocks(authoritative);
       await refreshTree();
     } catch (error) {
-      setBlocks(blocks);
+      try {
+        const authoritative = await api.getBlocks(selectedNode.id);
+        setBlocks(authoritative as ContentBlockItem[]);
+      } catch {
+        // Keep the last coherent state if authoritative reload is unavailable.
+      }
       alert(u(`調整內容區塊順序失敗：${error instanceof Error ? error.message : "未知錯誤"}`,`调整内容区块顺序失败：${error instanceof Error ? error.message : "未知错误"}`,`Failed to reorder content blocks: ${error instanceof Error ? error.message : "Unknown error"}`));
     }
   };

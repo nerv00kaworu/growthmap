@@ -72,6 +72,34 @@ def ordinary_main_nodes(project_id: str):
     return select(Node).where(Node.project_id == project_id, Node.branch_id.is_(None))
 
 
+async def _ordered_blocks(db: AsyncSession, node_id: str) -> list[ContentBlock]:
+    """Return one node's stable canonical ordering, including legacy tie-breaks."""
+    return list((await db.execute(
+        select(ContentBlock).where(ContentBlock.node_id == node_id)
+        .order_by(ContentBlock.order_index, ContentBlock.created_at, ContentBlock.id)
+    )).scalars().all())
+
+
+def _set_block_order(block: ContentBlock, index: int) -> None:
+    """Narrow write seam kept separate so transaction rollback is injectable/testable."""
+    block.order_index = index
+
+
+def _rewrite_block_order(blocks: list[ContentBlock], touched: TouchedEntities) -> None:
+    """Write dense order and touch exactly the existing rows whose order changed."""
+    for index, block in enumerate(blocks):
+        if block.order_index != index:
+            _set_block_order(block, index)
+            touched.add(block)
+
+
+async def _validate_block_authority(db: AsyncSession, node: Node, project_id: str) -> None:
+    """Revalidate endpoint truth inside the claimed transaction, failing closed."""
+    authoritative_project_id = await db.scalar(select(Node.project_id).where(Node.id == node.id))
+    if authoritative_project_id is None or str(authoritative_project_id) != str(project_id):
+        raise HTTPException(409, "Content block ownership changed")
+
+
 # ─── Provider configurations ───
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -1397,12 +1425,26 @@ async def create_block(node_id: str, data: ContentBlockCreate, db: AsyncSession 
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    project_id = str(node.project_id)
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    block = ContentBlock(node_id=node_id, **data.model_dump(exclude={"expected_project_revision", "expected_node_revision"}))
+    await claim_project_revision(db, project_id, data.expected_project_revision)
+    await _validate_block_authority(db, node, project_id)
+
+    ordered = await _ordered_blocks(db, node_id)
+    target_index = len(ordered) if data.order_index is None else max(0, min(data.order_index, len(ordered)))
+    block = ContentBlock(
+        node_id=node_id,
+        **data.model_dump(exclude={"expected_project_revision", "expected_node_revision", "order_index"}),
+        order_index=target_index,
+    )
+    ordered.insert(target_index, block)
+    touched = TouchedEntities()
+    _rewrite_block_order(ordered, touched)
+    touched.add(node)
+    touched.apply()
     db.add(block)
-    bump_existing(node)
     await auto_advance_maturity(node_id, db)
+    await _validate_block_authority(db, node, project_id)
     await db.commit()
     await db.refresh(block)
     return block
@@ -1414,13 +1456,32 @@ async def update_block(block_id: str, data: ContentBlockUpdate, db: AsyncSession
     if not block:
         raise HTTPException(404, "Block not found")
     node = await db.get(Node, block.node_id)
-    if not node: raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    if not node:
+        raise HTTPException(404, "Node not found")
+    project_id = str(node.project_id)
     check_entity_revision(block, data.expected_revision, kind="block")
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    for k, v in data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_node_revision", "expected_revision"}).items():
-        setattr(block, k, v)
-    bump_existing(block, node)
+    await claim_project_revision(db, project_id, data.expected_project_revision)
+    await _validate_block_authority(db, node, project_id)
+
+    changes = data.model_dump(exclude_unset=True, exclude={"expected_project_revision", "expected_node_revision", "expected_revision"})
+    requested_index = changes.pop("order_index", None)
+    ordered = await _ordered_blocks(db, node.id)
+    moving = next((item for item in ordered if str(item.id) == str(block.id)), None)
+    if moving is None:
+        raise HTTPException(409, "Content block ownership changed")
+    original_index = ordered.index(moving)
+    ordered.remove(moving)
+    target_index = original_index if requested_index is None else max(0, min(requested_index, len(ordered)))
+    ordered.insert(target_index, moving)
+    for key, value in changes.items():
+        setattr(moving, key, value)
+    touched = TouchedEntities()
+    _rewrite_block_order(ordered, touched)
+    # Existing PATCH semantics claim target/node once even for a same-index/no-op.
+    touched.add(moving, node)
+    touched.apply()
+    await _validate_block_authority(db, node, project_id)
     await db.commit()
     await db.refresh(block)
     return block
@@ -1434,11 +1495,22 @@ async def delete_block(block_id: str, data: NodeEntityRevisionRequest, db: Async
     node = await db.get(Node, block.node_id)
     if not node:
         raise HTTPException(404, "Node not found")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+    project_id = str(node.project_id)
     check_entity_revision(block, data.expected_revision, kind="block")
     check_entity_revision(node, data.expected_node_revision, kind="node")
-    bump_existing(node)
+    await claim_project_revision(db, project_id, data.expected_project_revision)
+    await _validate_block_authority(db, node, project_id)
+
+    ordered = await _ordered_blocks(db, node.id)
+    if not any(str(item.id) == str(block.id) for item in ordered):
+        raise HTTPException(409, "Content block ownership changed")
+    survivors = [item for item in ordered if str(item.id) != str(block.id)]
+    touched = TouchedEntities()
+    _rewrite_block_order(survivors, touched)
+    touched.add(node)
+    touched.apply()
     await db.delete(block)
+    await _validate_block_authority(db, node, project_id)
     await db.commit()
 
 

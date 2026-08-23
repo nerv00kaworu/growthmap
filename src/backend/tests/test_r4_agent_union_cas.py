@@ -134,7 +134,7 @@ def test_agent_branch_canonical_copy_provided_id_replay_and_same_batch_ref():
   branch,nodes,blocks,edges=asyncio.run(rows())
   assert branch.status=='active' and branch.revision==1
   assert sorted(n.title for n in nodes)==['child','grand','same batch','union'] and all(n.revision==1 and n.branch_id==bid for n in nodes)
-  assert len(blocks)==1 and blocks[0].content=={'nested':['x']} and blocks[0].order_index==7 and blocks[0].revision==1
+  assert len(blocks)==1 and blocks[0].content=={'nested':['x']} and blocks[0].order_index==0 and blocks[0].revision==1
   assert len(edges)==2 and all(e.relation_type=='child_of' and e.revision==1 for e in edges)
   assert c.get(f"/api/nodes/{root['id']}").json()['revision']==root['revision']
 
