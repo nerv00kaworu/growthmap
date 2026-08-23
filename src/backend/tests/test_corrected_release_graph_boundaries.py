@@ -1,6 +1,8 @@
 """Corrected-release canonical graph projection boundary regressions."""
 import asyncio
+import inspect
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, or_, select
 
@@ -253,10 +255,77 @@ def test_subtree_delete_removes_bound_logs_and_malformed_rollback_preserves_them
         asyncio.run(seed_log(victim["id"],"must-survive-reject"))
         async def corrupt():
             async with async_session() as db:
-                db.add(Edge(project_id=other["id"],from_node_id=other["root_node_id"],to_node_id=victim["id"],relation_type="related_to"));await db.commit()
-        asyncio.run(corrupt());before=asyncio.run(counts())
+                db.add(ActionLog(project_id=other["id"],node_id=victim["id"],actor_type="human",action_type="foreign-bound",payload={"foreign":True}));await db.commit()
+        async def full_snapshot():
+            async with async_session() as db:
+                projects=(await db.execute(select(Project).where(Project.id.in_([project["id"],other["id"]])).order_by(Project.id))).scalars().all()
+                edges=(await db.execute(select(Edge).where(Edge.project_id.in_([project["id"],other["id"]])).order_by(Edge.id))).scalars().all()
+                logs=(await db.execute(select(ActionLog).where(ActionLog.project_id.in_([project["id"],other["id"]])).order_by(ActionLog.id))).scalars().all()
+                return ([(p.id,p.revision,p.updated_at) for p in projects],[(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type,r.payload) for r in logs])
+        asyncio.run(corrupt());before=asyncio.run(full_snapshot())
         assert delete_node(client,project["id"],victim).status_code==409
-        assert asyncio.run(counts())==before
+        assert asyncio.run(full_snapshot())==before
+
+
+def test_successful_delete_preserves_unrelated_edges_and_logs_exactly():
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":"exact delete"}).json();other=client.post("/api/projects",json={"name":"foreign exact"}).json()
+        victim=create_node(client,project["id"],"victim",project["root_node_id"])
+        survivor=create_node(client,project["id"],"survivor",project["root_node_id"])
+        async def seed_and_read(seed=False):
+            async with async_session() as db:
+                if seed:
+                    db.add_all([
+                        Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=survivor["id"],relation_type="related_to"),
+                        ActionLog(project_id=project["id"],node_id=victim["id"],actor_type="human",action_type="remove",payload={}),
+                        ActionLog(project_id=project["id"],node_id=survivor["id"],actor_type="human",action_type="keep-node",payload={}),
+                        ActionLog(project_id=project["id"],node_id=None,actor_type="human",action_type="keep-null",payload={}),
+                        ActionLog(project_id=other["id"],node_id=other["root_node_id"],actor_type="human",action_type="keep-foreign",payload={}),
+                    ]);await db.commit()
+                edges=(await db.execute(select(Edge).where(Edge.project_id.in_([project["id"],other["id"]])).order_by(Edge.id))).scalars().all()
+                logs=(await db.execute(select(ActionLog).where(ActionLog.project_id.in_([project["id"],other["id"]])).order_by(ActionLog.id))).scalars().all()
+                return [(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type,r.payload) for r in logs]
+        before_edges,before_logs=asyncio.run(seed_and_read(True));assert delete_node(client,project["id"],victim).status_code==204
+        after_edges,after_logs=asyncio.run(seed_and_read())
+        expected_edges=[row for row in before_edges if victim["id"] not in (row[2],row[3])]
+        expected_logs=[row for row in before_logs if not (row[1]==project["id"] and row[2]==victim["id"])]
+        assert after_edges==expected_edges;assert after_logs==expected_logs
+
+
+@pytest.mark.parametrize("case",["zero_or_multiple_roots","parallel_inbound","wrong_edge_project","external_source"])
+def test_malformed_branch_authority_matrix_is_zero_mutation(case):
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":f"branch-{case}"}).json()
+        branch=client.post(f"/api/projects/{project['id']}/branches",json={"expected_project_revision":project_revision(client,project["id"]),"source_node_id":project["root_node_id"],"name":"authority"}).json()
+        root=client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+        child=create_node(client,project["id"],"branch-child",root["id"],branch["id"])
+        other=client.post("/api/projects",json={"name":"other authority"}).json()
+        async def corrupt_and_snapshot(seed=False):
+            async with async_session() as db:
+                if seed:
+                    if case=="zero_or_multiple_roots":
+                        db.add(Node(project_id=project["id"],branch_id=branch["id"],title="second root"))
+                    elif case=="parallel_inbound":
+                        db.add(Edge(project_id=project["id"],from_node_id=root["id"],to_node_id=child["id"],relation_type="child_of"))
+                    elif case=="wrong_edge_project":
+                        edge=(await db.execute(select(Edge).where(Edge.from_node_id==root["id"],Edge.to_node_id==child["id"],Edge.relation_type=="child_of"))).scalars().one();edge.project_id=other["id"]
+                    else:
+                        db.add(Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=child["id"],relation_type="child_of"))
+                    await db.commit()
+                p=await db.get(Project,project["id"])
+                edges=(await db.execute(select(Edge).where(or_(Edge.project_id==project["id"],Edge.project_id==other["id"])).order_by(Edge.id))).scalars().all()
+                logs=(await db.execute(select(ActionLog).where(or_(ActionLog.project_id==project["id"],ActionLog.project_id==other["id"])).order_by(ActionLog.id))).scalars().all()
+                nodes=(await db.execute(select(Node).where(Node.project_id==project["id"]).order_by(Node.id))).scalars().all()
+                return p.revision,[(n.id,n.project_id,n.branch_id,n.title) for n in nodes],[(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type) for r in logs]
+        before=asyncio.run(corrupt_and_snapshot(True));response=delete_node(client,project["id"],child)
+        assert response.status_code==409,(case,response.text);assert asyncio.run(corrupt_and_snapshot())==before
+
+
+def test_branch_authority_query_has_no_branch_wide_in_bind_list():
+    source=inspect.getsource(__import__("api.routes",fromlist=["delete_node"]).delete_node)
+    authority=source.split("Aggregate in SQL",1)[1].split("while frontier",1)[0]
+    assert "Node.id.in_(branch" not in authority
+    assert "WHERE n.project_id=:project_id AND n.branch_id=:branch_id" in authority
 
 
 def test_export_json_omits_ambiguous_null_node_logs_but_keeps_main_node_log():
