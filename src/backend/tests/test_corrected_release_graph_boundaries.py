@@ -4,9 +4,34 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, or_, select
 
-from db.database import async_session
+from db.database import async_session, engine
 from main import app
 from models.models import ActionLog, Branch, ContentBlock, Edge, Node, Project
+
+AUTHORITY_MODELS = (Project, Branch, Node, Edge, ActionLog)
+
+async def authority_snapshot():
+    """Exact logical state used to prove rejected/faulted deletes are atomic."""
+    async with async_session() as db:
+        result = []
+        for model in AUTHORITY_MODELS:
+            columns = tuple(model.__table__.columns)
+            rows = (await db.execute(select(model).order_by(model.id))).scalars().all()
+            result.append(tuple(tuple(getattr(row, column.name) for column in columns) for row in rows))
+        return tuple(result)
+
+async def execute_with_foreign_keys_disabled(*statements):
+    """Build an imported/corrupt fixture without weakening the application connection."""
+    async with engine.connect() as connection:
+        await connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        await connection.commit()
+        try:
+            for statement, parameters in statements:
+                await connection.exec_driver_sql(statement, parameters)
+            await connection.commit()
+        finally:
+            await connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            await connection.commit()
 
 def project_revision(client, project_id):
     return client.get(f"/api/projects/{project_id}").json()["revision"]
@@ -291,51 +316,130 @@ def test_successful_delete_preserves_unrelated_edges_and_logs_exactly():
 
 
 @pytest.mark.parametrize("case",[
-    "two_roots","parallel_inbound","wrong_edge_project","external_source",
-    "self_loop","disconnected_cycle","unknown_status","null_status",
+    "absent_branch","wrong_project_branch","empty_branch_attachment","missing_source",
+    "foreign_project_source","wrong_branch_source","edge_project_mismatch_inbound",
+    "edge_project_mismatch_outbound","pure_cycle","multiple_disconnected_components",
 ])
 def test_malformed_branch_authority_matrix_is_zero_mutation(case):
+    """Every imported authority corruption is a 409 with an exact DB rollback."""
     with TestClient(app) as client:
         project=client.post("/api/projects",json={"name":f"branch-{case}"}).json()
-        branch=client.post(f"/api/projects/{project['id']}/branches",json={"expected_project_revision":project_revision(client,project["id"]),"source_node_id":project["root_node_id"],"name":"authority"}).json()
+        other=client.post("/api/projects",json={"name":f"other-{case}"}).json()
+        branch=client.post(f"/api/projects/{project['id']}/branches",json={
+            "expected_project_revision":project_revision(client,project["id"]),
+            "source_node_id":project["root_node_id"],"name":"authority",
+        }).json()
         root=client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
         child=create_node(client,project["id"],"branch-child",root["id"],branch["id"])
-        other=client.post("/api/projects",json={"name":"other authority"}).json()
-        async def corrupt_and_snapshot(seed=False):
+        target=child
+        second_root=None
+        if case=="wrong_branch_source":
+            second=client.post(f"/api/projects/{project['id']}/branches",json={
+                "expected_project_revision":project_revision(client,project["id"]),
+                "source_node_id":project["root_node_id"],"name":"second",
+            }).json()
+            second_root=client.get(f"/api/branches/{second['id']}/subtree").json()["tree"]
+
+        async def seed():
+            nonlocal target
+            edge_id=None
+            async with async_session() as db:
+                edge=(await db.execute(select(Edge).where(
+                    Edge.from_node_id==root["id"],Edge.to_node_id==child["id"],
+                    Edge.relation_type=="child_of",
+                ))).scalars().one()
+                db.add(ActionLog(project_id=project["id"],node_id=child["id"],actor_type="human",action_type=f"reject-{case}",payload={"case":case}))
+                if case=="wrong_project_branch":
+                    branch_row=await db.get(Branch,branch["id"]);branch_row.project_id=other["id"]
+                elif case=="empty_branch_attachment":
+                    empty=Branch(project_id=project["id"],name="initially-empty",source_node_id=project["root_node_id"])
+                    db.add(empty);await db.flush()
+                    victim=Node(project_id=project["id"],branch_id=empty.id,title="later corrupt attachment")
+                    db.add(victim);await db.flush();target={"id":str(victim.id)}
+                elif case=="foreign_project_source":
+                    edge.from_node_id=other["root_node_id"]
+                elif case=="wrong_branch_source":
+                    edge.from_node_id=second_root["id"]
+                elif case=="edge_project_mismatch_inbound":
+                    edge.project_id=other["id"]
+                elif case=="edge_project_mismatch_outbound":
+                    leaf=Node(project_id=project["id"],branch_id=branch["id"],title="leaf")
+                    db.add(leaf);await db.flush()
+                    db.add(Edge(project_id=other["id"],from_node_id=child["id"],to_node_id=leaf.id,relation_type="child_of"))
+                elif case=="pure_cycle":
+                    edge.from_node_id=child["id"];edge.to_node_id=root["id"]
+                    db.add(Edge(project_id=project["id"],from_node_id=root["id"],to_node_id=child["id"],relation_type="child_of"))
+                elif case=="multiple_disconnected_components":
+                    nodes=[Node(project_id=project["id"],branch_id=branch["id"],title=f"component-{i}") for i in range(4)]
+                    db.add_all(nodes);await db.flush()
+                    db.add_all([
+                        Edge(project_id=project["id"],from_node_id=nodes[0].id,to_node_id=nodes[1].id,relation_type="child_of"),
+                        Edge(project_id=project["id"],from_node_id=nodes[1].id,to_node_id=nodes[0].id,relation_type="child_of"),
+                        Edge(project_id=project["id"],from_node_id=nodes[2].id,to_node_id=nodes[3].id,relation_type="child_of"),
+                        Edge(project_id=project["id"],from_node_id=nodes[3].id,to_node_id=nodes[2].id,relation_type="child_of"),
+                    ])
+                edge_id=str(edge.id)
+                await db.commit()
+            if case=="absent_branch":
+                await execute_with_foreign_keys_disabled(("DELETE FROM branches WHERE id=?",(branch["id"],)))
+            elif case=="missing_source":
+                await execute_with_foreign_keys_disabled(("UPDATE edges SET from_node_id=? WHERE id=?",("00000000-0000-0000-0000-000000000099",edge_id)))
+
+        asyncio.run(seed())
+        before=asyncio.run(authority_snapshot())
+        response=delete_node(client,project["id"],target)
+        assert response.status_code==409,(case,response.text)
+        assert asyncio.run(authority_snapshot())==before
+
+
+def test_large_legal_subtree_delete_is_exact_and_preserves_unrelated_authority():
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":"large exact delete"}).json()
+        foreign=client.post("/api/projects",json={"name":"large foreign"}).json()
+        parent=create_node(client,project["id"],"wide parent",project["root_node_id"])
+        survivor=create_node(client,project["id"],"survivor",project["root_node_id"])
+        async def seed_and_snapshot(seed=False):
             async with async_session() as db:
                 if seed:
-                    if case=="two_roots":
-                        db.add(Node(project_id=project["id"],branch_id=branch["id"],title="second root"))
-                    elif case=="parallel_inbound":
-                        db.add(Edge(project_id=project["id"],from_node_id=root["id"],to_node_id=child["id"],relation_type="child_of"))
-                    elif case=="wrong_edge_project":
-                        edge=(await db.execute(select(Edge).where(Edge.from_node_id==root["id"],Edge.to_node_id==child["id"],Edge.relation_type=="child_of"))).scalars().one();edge.project_id=other["id"]
-                    elif case=="external_source":
-                        db.add(Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=child["id"],relation_type="child_of"))
-                    elif case=="self_loop":
-                        loop=Node(project_id=project["id"],branch_id=branch["id"],title="loop");db.add(loop);await db.flush();db.add(Edge(project_id=project["id"],from_node_id=loop.id,to_node_id=loop.id,relation_type="child_of"))
-                    elif case=="disconnected_cycle":
-                        left=Node(project_id=project["id"],branch_id=branch["id"],title="left");right=Node(project_id=project["id"],branch_id=branch["id"],title="right");db.add_all([left,right]);await db.flush();db.add_all([Edge(project_id=project["id"],from_node_id=left.id,to_node_id=right.id,relation_type="child_of"),Edge(project_id=project["id"],from_node_id=right.id,to_node_id=left.id,relation_type="child_of")])
-                    elif case=="unknown_status":
-                        from sqlalchemy import update
-                        await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status="hostile"))
-                    else:
-                        from sqlalchemy import update
-                        await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status=None))
-                    await db.commit()
-                p=await db.get(Project,project["id"])
-                edges=(await db.execute(select(Edge).where(or_(Edge.project_id==project["id"],Edge.project_id==other["id"])).order_by(Edge.id))).scalars().all()
-                logs=(await db.execute(select(ActionLog).where(or_(ActionLog.project_id==project["id"],ActionLog.project_id==other["id"])).order_by(ActionLog.id))).scalars().all()
-                nodes=(await db.execute(select(Node).where(Node.project_id==project["id"]).order_by(Node.id))).scalars().all()
-                return p.revision,[(n.id,n.project_id,n.branch_id,n.title) for n in nodes],[(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type) for r in logs]
-        before=asyncio.run(corrupt_and_snapshot(True));response=delete_node(client,project["id"],child)
-        assert response.status_code==409,(case,response.text);assert asyncio.run(corrupt_and_snapshot())==before
-        if case in {"unknown_status","null_status"}:
-            async def restore_status():
-                from sqlalchemy import update
-                async with async_session() as db:
-                    await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status="active"));await db.commit()
-            asyncio.run(restore_status())
+                    children=[Node(project_id=project["id"],title=f"legal-{i}") for i in range(501)]
+                    db.add_all(children);await db.flush()
+                    db.add_all([Edge(project_id=project["id"],from_node_id=parent["id"],to_node_id=n.id,relation_type="child_of") for n in children])
+                    db.add_all([ActionLog(project_id=project["id"],node_id=n.id,actor_type="human",action_type="bound",payload={"i":i}) for i,n in enumerate(children)])
+                    db.add_all([
+                        ActionLog(project_id=project["id"],node_id=parent["id"],actor_type="human",action_type="bound-parent",payload={}),
+                        ActionLog(project_id=project["id"],node_id=survivor["id"],actor_type="human",action_type="keep-node",payload={}),
+                        ActionLog(project_id=project["id"],node_id=None,actor_type="human",action_type="keep-null",payload={}),
+                        ActionLog(project_id=foreign["id"],node_id=foreign["root_node_id"],actor_type="human",action_type="keep-foreign",payload={}),
+                        Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=survivor["id"],relation_type="related_to"),
+                    ])
+                    await db.commit();deleted={parent["id"],*(str(n.id) for n in children)}
+                else: deleted=set()
+                snapshot=await authority_snapshot()
+                return deleted,snapshot
+        deleted,before=asyncio.run(seed_and_snapshot(True))
+        assert delete_node(client,project["id"],parent).status_code==204
+        _,after=asyncio.run(seed_and_snapshot())
+        projects_before,branches_before,nodes_before,edges_before,logs_before=before
+        projects_after,branches_after,nodes_after,edges_after,logs_after=after
+        expected_projects=[]
+        for row in projects_before:
+            mutable=list(row)
+            if row[0]==project["id"]:
+                revision_index=[c.name for c in Project.__table__.columns].index("revision")
+                updated_index=[c.name for c in Project.__table__.columns].index("updated_at")
+                mutable[revision_index]=row[revision_index]+1
+                mutable[updated_index]=projects_after[[r[0] for r in projects_after].index(row[0])][updated_index]
+            expected_projects.append(tuple(mutable))
+        assert projects_after==tuple(expected_projects)
+        assert branches_after==branches_before
+        assert nodes_after==tuple(row for row in nodes_before if row[0] not in deleted)
+        edge_columns=[c.name for c in Edge.__table__.columns]
+        source_i,target_i=edge_columns.index("from_node_id"),edge_columns.index("to_node_id")
+        assert edges_after==tuple(row for row in edges_before if row[source_i] not in deleted and row[target_i] not in deleted)
+        log_columns=[c.name for c in ActionLog.__table__.columns];project_i,node_i=log_columns.index("project_id"),log_columns.index("node_id")
+        assert logs_after==tuple(row for row in logs_before if not (row[project_i]==project["id"] and row[node_i] in deleted))
+        foreign_i=[r[0] for r in projects_before].index(foreign["id"])
+        assert projects_after[foreign_i]==projects_before[foreign_i]
 
 
 def test_branch_authority_executes_under_conservative_parameter_budget():
@@ -375,14 +479,7 @@ def test_cross_chunk_repeated_target_rejects_and_late_delete_failure_rolls_back(
             async with async_session() as db:
                 if remove_repeat:
                     edge=(await db.execute(select(Edge).where(Edge.from_node_id==ids[-1],Edge.to_node_id==ids[0]))).scalars().one();await db.delete(edge);await db.commit()
-                p=await db.get(Project,project["id"])
-                node_count=0;log_count=0
-                for offset in range(0,len(ids),500):
-                    part=ids[offset:offset+500]
-                    node_count+=await db.scalar(select(func.count()).select_from(Node).where(Node.id.in_(part)))
-                    log_count+=await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.node_id.in_(part)))
-                node_count+=int(await db.get(Node,parent["id"]) is not None)
-                return p.revision,node_count,await db.scalar(select(func.count()).select_from(Edge).where(Edge.project_id==project["id"])),log_count
+            return await authority_snapshot()
         before=asyncio.run(snapshot(True));deletes=0
         def fail_second_node_delete(_conn,_cursor,statement,_parameters,_context,_many):
             nonlocal deletes
