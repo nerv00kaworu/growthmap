@@ -36,8 +36,31 @@ jobs:
             if (-not (Test-Path $path -PathType Leaf)) { throw "Missing Linux production sidecar source: $path" }
           }
           if (-not (Select-String -Path services/payments/tests/test_sidecar_server.py -Pattern 'AF_UNIX/SO_PEERCRED' -Quiet)) { throw 'Windows skip must document Linux AF_UNIX/SO_PEERCRED boundary' }
-      - run: python -m pytest -q
+      # R14-R24 require an external untracked VPS evidence bundle. The two
+      # production authority modules use fcntl and are Linux-only; all other
+      # authority/license/signer tests remain in this Windows foundation gate.
+      - name: Cross-platform backend tests with fail-closed source partition
+        shell: pwsh
         working-directory: src/backend
+        run: |
+          $ignores = @()
+          foreach ($release in 14..24) {
+            $test = "tests/test_r${release}_deployment_contract.py"
+            $artifact = "reports/phase2-authority-production-readiness-20260808/vps-staging-r${release}"
+            if (-not (Test-Path $test -PathType Leaf)) { throw "Missing artifact-bound test: $test" }
+            if (-not (Select-String -Path $test -SimpleMatch $artifact -Quiet)) { throw "Artifact contract drifted: $test" }
+            $ignores += "--ignore=$test"
+          }
+          $deploymentTests = @(Get-ChildItem tests/test_r*_deployment_contract.py | ForEach-Object Name)
+          $expectedDeploymentTests = @(14..24 | ForEach-Object { "test_r${_}_deployment_contract.py" })
+          if ($deploymentTests.Count -ne 11 -or (Compare-Object $deploymentTests $expectedDeploymentTests)) { throw 'Deployment-test partition is incomplete' }
+          foreach ($source in @('licensing/authority_composition.py','licensing/authority_service.py')) {
+            if (-not (Test-Path $source -PathType Leaf)) { throw "Missing Linux authority source: $source" }
+            if (-not (Select-String -Path $source -Pattern '(^|\s)(import|from)\s+fcntl\b' -Quiet)) { throw "Linux fcntl boundary drifted: $source" }
+          }
+          $ignores += '--ignore=tests/test_authority_composition.py'
+          $ignores += '--ignore=tests/test_authority_service.py'
+          python -m pytest -q @ignores
       - run: npm ci
         working-directory: src/frontend
       - run: npm run lint && npm run typecheck && npm run build

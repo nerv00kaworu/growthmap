@@ -66,7 +66,27 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -r requirements.lock -r packaging/requirements-test.txt
       - run: python -m compileall -q -x 'venv|__pycache__' .
-      - run: python -m pytest -q
+      # R14-R24 deployment contracts consume an external, untracked VPS evidence
+      # bundle. Keep that dedicated-runner boundary explicit and fail closed if
+      # the files or their artifact contracts drift; every other backend test runs.
+      - name: Verify artifact-bound deployment-test partition
+        run: |
+          set -eu
+          ignores=""
+          for release in $(seq 14 24); do
+            test_file="tests/test_r${release}_deployment_contract.py"
+            artifact="reports/phase2-authority-production-readiness-20260808/vps-staging-r${release}"
+            test -f "$test_file"
+            grep -Fq "$artifact" "$test_file"
+            ignores="$ignores --ignore=$test_file"
+          done
+          discovered=$(find tests -maxdepth 1 -name 'test_r*_deployment_contract.py' -print)
+          test "$(printf '%s\n' "$discovered" | grep -c .)" -eq 11
+          if printf '%s\n' "$discovered" | grep -Evq '^tests/test_r(1[4-9]|2[0-4])_deployment_contract\.py$'; then
+            echo 'Unexpected deployment contract is not explicitly partitioned' >&2
+            exit 1
+          fi
+          python -m pytest -q $ignores
       - run: |
           test ! -e gameplay
           test ! -e content
