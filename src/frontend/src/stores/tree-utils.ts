@@ -3,6 +3,9 @@ import type { GNode } from "@/lib/types";
 export interface UndoEntry {
   rootNode: GNode;
   description: string;
+  inverse?: { kind: "delete-created-node"; nodeId: string; nodeRevision: number; projectRevision: number };
+  projectId: string;
+  branchId: string | null;
 }
 
 export const MAX_UNDO = 10;
@@ -71,6 +74,6 @@ export function searchNodes(node: GNode, query: string): string[] {
   return results;
 }
 
-export function pushUndo(stack: UndoEntry[], rootNode: GNode, description: string): UndoEntry[] {
-  return [{ rootNode, description }, ...stack].slice(0, MAX_UNDO);
+export function pushUndo(stack: UndoEntry[], rootNode: GNode, description: string, owner: Pick<UndoEntry, "projectId" | "branchId">): UndoEntry[] {
+  return [{ rootNode, description, ...owner }, ...stack].slice(0, MAX_UNDO);
 }

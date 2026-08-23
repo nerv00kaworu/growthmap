@@ -18,7 +18,7 @@ test("real acceptAllSuggestions orchestration serializes requests with propagate
   const requests: Array<Record<string, unknown>> = [];
   let projectRevision = 7, parentRevision = 3;
   globalThis.confirm = () => true;
-  api.createNode = (async (_projectId, body) => {
+  api.createNode = (async (_projectId: string, body: Parameters<typeof api.createNode>[1]) => {
     requests.push({ ...body, expected_project_revision: projectRevision, expected_parent_revision: parentRevision });
     projectRevision += 1; parentRevision += 1;
     return { id: `n${requests.length}`, project_id: "p", title: body.title, revision: 1, children: [], content_blocks: [],
@@ -41,7 +41,7 @@ test("real deepen summary conflict does not replay, refreshes once, and preserve
   const originalUpdate = api.updateNode;
   const originalSubtree = api.getSubtree;
   let mutations = 0, refreshes = 0;
-  api.updateNode = (async () => { mutations += 1; throw new ApiError(409, "REVISION_CONFLICT", "stale"); }) as typeof api.updateNode;
+  api.updateNode = (async () => { mutations += 1; throw new ApiError(409, "REVISION_CONFLICT", "stale"); }) as unknown as typeof api.updateNode;
   api.getSubtree = (async () => { refreshes += 1; return root; }) as typeof api.getSubtree;
   try {
     reset({ deepenResult: { target_node_id: "root", enriched_summary: "keep summary", content_blocks: [] } });
@@ -68,4 +68,28 @@ test("real deepen block conflict does not replay, refreshes once, and preserves 
     assert.match(useStore.getState().conflict?.suggestionInput ?? "", /keep title/);
     assert.equal(useStore.getState().deepenResult?.content_blocks.length, 1);
   } finally { api.createBlock = originalCreate; api.getSubtree = originalSubtree; }
+});
+
+test("undo of a newly created child performs durable inverse before publishing", async () => {
+  const originalCreate=api.createNode, originalDelete=api.deleteNode, originalSubtree=api.getSubtree;
+  const calls: unknown[][]=[];
+  api.createNode=(async()=>({...(root as object),id:"made",title:"made",revision:1,authoritative_project_revision:8,authoritative_parent_id:"root",authoritative_parent_revision:4})) as unknown as typeof api.createNode;
+  api.deleteNode=(async(...args: unknown[])=>{calls.push(args)}) as typeof api.deleteNode;
+  api.getSubtree=(async()=>root) as typeof api.getSubtree;
+  try { reset({undoStack:[]}); await useStore.getState().addChildNode("root","made"); assert.equal(useStore.getState().undoStack.length,1); await useStore.getState().undo(); assert.deepEqual(calls,[["made",8,1]]); assert.equal(useStore.getState().undoStack.length,0); }
+  finally {api.createNode=originalCreate;api.deleteNode=originalDelete;api.getSubtree=originalSubtree;}
+});
+
+test("failed durable undo keeps entry and reloads coherent durable state", async () => {
+  const originalDelete=api.deleteNode, originalSubtree=api.getSubtree; let reads=0;
+  api.deleteNode=(async()=>{throw new Error("refused")}) as typeof api.deleteNode; api.getSubtree=(async()=>{reads++;return root}) as typeof api.getSubtree;
+  const inverse={rootNode:root,description:"create",projectId:"p",branchId:null,inverse:{kind:"delete-created-node",nodeId:"made",nodeRevision:1,projectRevision:8}} as never;
+  try {reset({undoStack:[inverse]});await useStore.getState().undo();assert.equal(useStore.getState().undoStack.length,1);assert.equal(reads,1);assert.match(useStore.getState().error??"",/refused/);}
+  finally {api.deleteNode=originalDelete;api.getSubtree=originalSubtree;}
+});
+
+test("unsupported committed mutations clear misleading undo entries", async()=>{
+ const originalUpdate=api.updateNode; const inverse={rootNode:root,description:"create",projectId:"p",branchId:null,inverse:{kind:"delete-created-node",nodeId:"old",nodeRevision:1,projectRevision:7}} as never;
+ api.updateNode=(async()=>({...(root as object),title:"saved"})) as unknown as typeof api.updateNode;
+ try{reset({undoStack:[inverse]});await useStore.getState().updateNode("root",{title:"saved"});assert.equal(useStore.getState().undoStack.length,0)}finally{api.updateNode=originalUpdate;}
 });

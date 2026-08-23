@@ -1,91 +1,39 @@
-"""Mock LLM provider — deterministic, no API key required."""
+"""Mock LLM provider — deterministic, localized, and network-free."""
 import json
-import uuid
 from typing import Optional
-
 from .base import LLMProvider
 
-
 class MockProvider(LLMProvider):
-    """Deterministic mock provider for testing/development."""
-
     @property
-    def name(self) -> str:
-        return "mock"
+    def name(self) -> str: return "mock"
 
-    async def complete(
-        self,
-        system: str,
-        user: str,
-        model: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-    ) -> str:
-        """Return deterministic responses based on system prompt type."""
-        system_lower = system.lower()
+    async def complete(self, system: str, user: str, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+        locale = "en" if "write all generated text in english" in system.lower() else "zh-CN" if "简体中文" in system else "zh-TW"
+        if "suggest" in system.lower() or "project structure" in system.lower() or "專案結構" in system or "项目结构" in system or "子節點" in system or "子节点" in system:
+            payload = json.loads(user)
+            mode = payload.get("mode_key", "explore")
+            if mode not in {"focused", "explore", "challenge"}:
+                mode = "explore"
+            count = max(1, min(8, int(payload.get("requested_count", 3))))
+            return json.dumps(self._expand(locale, mode)[:count], ensure_ascii=False)
+        if "content_blocks" in system:
+            return json.dumps(self._deepen(locale), ensure_ascii=False)
+        replies={"en":"This is a Mock-mode response. Configure an API key to receive a live AI response.","zh-CN":"这是 Mock 模式的回复。配置 API Key 后即可获得真实 AI 回复。","zh-TW":"這是 Mock 模式的回覆。設定 API Key 後即可獲得真實 AI 回應。"}
+        return replies[locale]
 
-        # Detect which prompt template is being used
-        if "expand" in system_lower and "子節點建議" in system:
-            return self._expand_response(user)
-        elif "深化" in system and "content_blocks" in system:
-            return self._deepen_response()
-        elif "專案顧問" in system or "對話" in system:
-            return "這是 Mock 模式的回覆。在實際配置 API Key 後才能獲得真實 AI 回應。"
-        elif "連線成功" in user:
-            return "連線成功！Mock Provider 運作正常。"
-        else:
-            return json.dumps([
-                {"title": "範例建議標題", "summary": "這是一個示範性的Summary內容", "node_type": "task"}
-            ])
-
-    def _expand_response(self, user_prompt: str) -> str:
-        """Generate mock expand suggestions."""
-        # Check user prompt for mode hints
-        mode = "explore"
-        if "focused" in user_prompt.lower():
-            mode = "focused"
-        elif "challenge" in user_prompt.lower():
-            mode = "challenge"
-
-        suggestions = [
-            {
-                "title": f"[{mode}] 概念驗證",
-                "summary": "建立基本 PoC，驗證核心功能的可行性。重點在於快速迭代和學習。",
-                "node_type": "task"
-            },
-            {
-                "title": f"[{mode}] 技術調研",
-                "summary": "調研相關技術堆疊，包含效能、擴展性和維護成本評估。需產出比較矩陣。",
-                "node_type": "task"
-            },
-            {
-                "title": f"[{mode}] 使用者訪談",
-                "summary": "進行至少 5 位潛在使用者訪談，收集需求痛點和使用場景描述。",
-                "node_type": "task"
-            },
-        ]
-        return json.dumps(suggestions, ensure_ascii=False)
-
-    def _deepen_response(self) -> str:
-        """Generate mock deepen content."""
-        result = {
-            "enriched_summary": "這是一個經過 Mock Provider 深化的摘要。在實際配置 API Key 後，AI 會根據上下文產生更具體且相關的內容。",
-            "content_blocks": [
-                {
-                    "title": "定義與範圍",
-                    "body": "此模組的核心職責包括：(1) 資料處理、(2) 狀態管理、(3) 與其他模組的介面整合。需要明確界定邊界條件。",
-                    "block_type": "definition"
-                },
-                {
-                    "title": "實施規則",
-                    "body": "1. 所有公開方法必須有對應的單元測試\n2. 必須遵循既定的命名規範\n3.重大變更需經 code review",
-                    "block_type": "rules"
-                },
-                {
-                    "title": "範例案例",
-                    "body": "情境：使用者登入\n輸入 → 驗證憑證 → 调用認證服務 → 產生 session → 回傳成功\n這是最基本的流程示意。",
-                    "block_type": "examples"
-                },
-            ]
+    def _expand(self, locale: str, mode: str) -> list[dict]:
+        rows={
+          "en":[("Proof of concept","Build a minimal PoC that tests the core behavior and records pass/fail evidence."),("Technical evaluation","Compare performance, scalability, and maintenance cost in a decision matrix."),("User interviews","Interview at least five target users and document needs and scenarios.")],
+          "zh-CN":[("概念验证","构建最小 PoC，验证核心行为并记录通过或失败的证据。"),("技术调研","通过决策矩阵比较性能、扩展性和维护成本。"),("用户访谈","访谈至少五位目标用户，并记录需求和使用场景。")],
+          "zh-TW":[("概念驗證","建立最小 PoC，驗證核心行為並記錄通過或失敗的證據。"),("技術調研","透過決策矩陣比較效能、擴充性與維護成本。"),("使用者訪談","訪談至少五位目標使用者，並記錄需求與使用情境。")],
         }
-        return json.dumps(result, ensure_ascii=False) if hasattr(result, '__name__') else json.dumps(result, ensure_ascii=False)
+        return [{"title":f"[{mode}] {title}","summary":summary,"node_type":"task"} for title,summary in rows[locale]]
+
+    def _deepen(self, locale: str) -> dict:
+        values={
+          "en":("A Mock Provider summary that demonstrates localized, structured output.",[("Definition and scope","Define responsibilities, interfaces, and explicit boundary conditions.","definition"),("Implementation rules","Every public method has a unit test; major changes require review.","rules")]),
+          "zh-CN":("这是 Mock Provider 生成的本地化结构化摘要。",[("定义与范围","明确职责、接口和边界条件。","definition"),("实施规则","所有公开方法都要有单元测试；重大变更必须经过审查。","rules")]),
+          "zh-TW":("這是 Mock Provider 產生的本地化結構化摘要。",[("定義與範圍","明確職責、介面與邊界條件。","definition"),("實作規則","所有公開方法都要有單元測試；重大變更必須經過審查。","rules")]),
+        }
+        summary,blocks=values[locale]
+        return {"enriched_summary":summary,"content_blocks":[{"title":t,"body":b,"block_type":k} for t,b,k in blocks]}
