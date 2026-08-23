@@ -257,7 +257,6 @@ export function NodeContent({
     if (nextIndex < 0 || nextIndex >= blocks.length) return;
 
     const current = blocks[index];
-    const target = blocks[nextIndex];
     const nextBlocks = [...blocks];
     [nextBlocks[index], nextBlocks[nextIndex]] = [nextBlocks[nextIndex], nextBlocks[index]];
 

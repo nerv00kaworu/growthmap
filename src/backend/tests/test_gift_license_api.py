@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from src.backend.tests.test_gift_license_service import authority,device
+from .test_gift_license_service import authority,device
 from licensing.gift_api import create_candidate_app
 class Verifier:
  def __init__(self,explode=False):self.explode=explode
