@@ -67,6 +67,11 @@ def touch_project(project: Project | None):
         project.revision = (project.revision or 1) + 1
 
 
+def ordinary_main_nodes(project_id: str):
+    """Canonical ordinary-project projection; branch views are explicit."""
+    return select(Node).where(Node.project_id == project_id, Node.branch_id.is_(None))
+
+
 # ─── Provider configurations ───
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -591,7 +596,7 @@ async def delete_project(project_id: str, data: ProjectRevisionRequest, db: Asyn
 @router.get("/projects/{project_id}/nodes", response_model=list[NodeBrief])
 async def list_nodes(project_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(Node).where(Node.project_id == project_id).order_by(Node.created_at)
+        ordinary_main_nodes(project_id).order_by(Node.created_at)
     )
     return result.scalars().all()
 
@@ -658,7 +663,7 @@ async def create_node(project_id: str, data: NodeCreate, db: AsyncSession = Depe
         node_id=node.id,
         actor_type="human",
         action_type="create_node",
-        payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None},
+        payload={"title": node.title, "parent_id": str(data.parent_id) if data.parent_id else None, "branch_id": str(node.branch_id) if node.branch_id else None},
     ))
     # Auto-advance parent maturity and bump the touched existing parent exactly
     # once for the relationship plus any maturity transition.
@@ -720,17 +725,71 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
         raise HTTPException(404, "Node not found")
     project = await db.get(Project, node.project_id)
     if project and project.root_node_id == node_id:
-        raise HTTPException(400, "Cannot delete the project root node")
-    await claim_project_revision(db, node.project_id, data.expected_project_revision)
+        raise HTTPException(409, "Cannot delete the project root node")
     check_entity_revision(node, data.expected_revision, kind="node")
-    # Delete edges referencing this node first
-    from sqlalchemy import or_
-    await db.execute(
-        Edge.__table__.delete().where(
-            or_(Edge.from_node_id == node_id, Edge.to_node_id == node_id)
-        )
-    )
-    await db.delete(node)
+
+    async def validate_closure():
+        subtree_ids={str(node.id)};frontier={str(node.id)};incoming=set();edge_ids=set();parents={}
+        root_ids={str(value) for value in (await db.execute(
+            select(Project.root_node_id).where(Project.root_node_id.is_not(None))
+        )).scalars().all()}
+        branch_id=str(node.branch_id) if node.branch_id is not None else None
+        while frontier:
+            sources=(await db.execute(select(Node).where(Node.id.in_(frontier)))).scalars().all()
+            if len(sources)!=len(frontier) or any(
+                str(source.project_id)!=str(node.project_id)
+                or (str(source.branch_id) if source.branch_id is not None else None)!=branch_id
+                for source in sources
+            ):raise HTTPException(409,"Subtree containment boundary is invalid")
+            edges=(await db.execute(select(Edge).where(
+                Edge.relation_type=="child_of",Edge.from_node_id.in_(frontier)
+            ))).scalars().all()
+            target_ids={str(edge.to_node_id) for edge in edges}
+            targets={str(target.id):target for target in (await db.execute(
+                select(Node).where(Node.id.in_(target_ids))
+            )).scalars().all()} if target_ids else {}
+            for edge in edges:
+                target_id=str(edge.to_node_id);target=targets.get(target_id)
+                if (str(edge.id) in edge_ids or target_id in incoming or target_id in subtree_ids
+                        or not target or str(edge.project_id)!=str(node.project_id)
+                        or str(target.project_id)!=str(node.project_id)
+                        or (str(target.branch_id) if target.branch_id is not None else None)!=branch_id
+                        or target_id in root_ids):
+                    raise HTTPException(409,"Subtree containment crosses a boundary or is not a tree")
+                edge_ids.add(str(edge.id));incoming.add(target_id);parents[target_id]=str(edge.from_node_id)
+            frontier=target_ids;subtree_ids.update(frontier)
+
+        inbound=(await db.execute(select(Edge).where(
+            Edge.relation_type=="child_of",Edge.to_node_id.in_(subtree_ids)
+        ))).scalars().all()
+        source_ids={str(edge.from_node_id) for edge in inbound}
+        sources={str(source.id):source for source in (await db.execute(
+            select(Node).where(Node.id.in_(source_ids))
+        )).scalars().all()} if source_ids else {}
+        by_target={}
+        for edge in inbound:
+            source=sources.get(str(edge.from_node_id));target_id=str(edge.to_node_id)
+            if (str(edge.project_id)!=str(node.project_id) or not source
+                    or str(source.project_id)!=str(node.project_id)
+                    or (str(source.branch_id) if source.branch_id is not None else None)!=branch_id):
+                raise HTTPException(409,"Subtree incoming ownership boundary is invalid")
+            by_target.setdefault(target_id,[]).append(edge)
+        for target_id in subtree_ids:
+            edges=by_target.get(target_id,[])
+            if target_id==str(node.id):
+                if len(edges)>1:raise HTTPException(409,"Subtree root has invalid ownership")
+            elif len(edges)!=1 or str(edges[0].from_node_id)!=parents.get(target_id):
+                raise HTTPException(409,"Subtree descendant has invalid ownership")
+        return subtree_ids
+
+    # Validate before and after the project CAS writer boundary.
+    subtree_ids=await validate_closure()
+    await claim_project_revision(db,node.project_id,data.expected_project_revision)
+    subtree_ids=await validate_closure()
+    await db.execute(Edge.__table__.delete().where(
+        or_(Edge.from_node_id.in_(subtree_ids),Edge.to_node_id.in_(subtree_ids))
+    ))
+    await db.execute(Node.__table__.delete().where(Node.id.in_(subtree_ids)))
     await db.commit()
 
 
@@ -1424,9 +1483,9 @@ async def _query_only_export_rows(db: AsyncSession, project_id: str):
     """Narrow seam for query-only export reads; intentionally performs no writes."""
     text = __import__("sqlalchemy").text
     project_row = (await db.execute(text("SELECT id,name,description,goal,root_node_id FROM projects WHERE id=:project_id"), {"project_id": project_id})).mappings().first()
-    node_rows = (await db.execute(text("SELECT id,title,summary,maturity FROM nodes WHERE project_id=:project_id"), {"project_id": project_id})).mappings().all()
-    edge_rows = (await db.execute(text("SELECT from_node_id,to_node_id FROM edges WHERE project_id=:project_id AND relation_type='child_of'"), {"project_id": project_id})).all()
-    block_rows = (await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id) ORDER BY node_id,order_index"), {"project_id": project_id})).mappings().all()
+    node_rows = (await db.execute(text("SELECT id,title,summary,maturity FROM nodes WHERE project_id=:project_id AND branch_id IS NULL"), {"project_id": project_id})).mappings().all()
+    edge_rows = (await db.execute(text("SELECT e.from_node_id,e.to_node_id FROM edges e JOIN nodes f ON f.id=e.from_node_id JOIN nodes t ON t.id=e.to_node_id WHERE e.project_id=:project_id AND e.relation_type='child_of' AND f.project_id=:project_id AND t.project_id=:project_id AND f.branch_id IS NULL AND t.branch_id IS NULL"), {"project_id": project_id})).all()
+    block_rows = (await db.execute(text("SELECT id,node_id,block_type,content,order_index FROM content_blocks WHERE node_id IN (SELECT id FROM nodes WHERE project_id=:project_id AND branch_id IS NULL) ORDER BY node_id,order_index"), {"project_id": project_id})).mappings().all()
     return project_row, node_rows, edge_rows, block_rows
 
 
@@ -1453,10 +1512,13 @@ async def export_project(project_id: str, locale: str = "zh-TW", db: AsyncSessio
     else:
         project = await db.get(Project, project_id)
         if not project: raise HTTPException(404, "Project not found")
-        nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+        nodes_result = await db.execute(ordinary_main_nodes(project_id))
         nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
-        edge_rows = (await db.execute(select(Edge.from_node_id, Edge.to_node_id).where(Edge.project_id == project_id, Edge.relation_type == "child_of"))).all()
         all_node_ids = list(nodes_by_id.keys())
+        edge_rows = (await db.execute(select(Edge.from_node_id, Edge.to_node_id).where(
+            Edge.project_id == project_id, Edge.relation_type == "child_of",
+            Edge.from_node_id.in_(all_node_ids), Edge.to_node_id.in_(all_node_ids)
+        ))).all() if all_node_ids else []
         blocks_by_node: dict[str, list] = {}
         if all_node_ids:
             try:
@@ -1614,20 +1676,23 @@ async def export_project_json(project_id: str, db: AsyncSession = Depends(get_db
     if not project:
         raise HTTPException(404, "Project not found")
 
-    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+    nodes_result = await db.execute(ordinary_main_nodes(project_id))
     nodes = nodes_result.scalars().all()
 
-    edges_result = await db.execute(select(Edge).where(Edge.project_id == project_id))
-    edges = edges_result.scalars().all()
-
     node_ids = [str(n.id) for n in nodes]
+    edges_result = await db.execute(select(Edge).where(
+        Edge.project_id == project_id, Edge.from_node_id.in_(node_ids), Edge.to_node_id.in_(node_ids)
+    )) if node_ids else None
+    edges = edges_result.scalars().all() if edges_result else []
     blocks_result = await db.execute(
         select(ContentBlock).where(ContentBlock.node_id.in_(node_ids))
     ) if node_ids else None
     blocks = blocks_result.scalars().all() if blocks_result else []
 
     logs_result = await db.execute(
-        select(ActionLog).where(ActionLog.project_id == project_id).order_by(ActionLog.created_at.desc()).limit(200)
+        select(ActionLog).where(
+            ActionLog.project_id == project_id, ActionLog.node_id.in_(node_ids)
+        ).order_by(ActionLog.created_at.desc()).limit(200)
     )
     logs = logs_result.scalars().all()
 
@@ -1830,16 +1895,18 @@ async def export_spec(project_id: str, locale: str = "zh-TW", db: AsyncSession =
         raise HTTPException(404, "No root node")
 
     from datetime import date
-    nodes_result = await db.execute(select(Node).where(Node.project_id == project_id))
+    nodes_result = await db.execute(ordinary_main_nodes(project_id))
     nodes_by_id = {str(n.id): n for n in nodes_result.scalars().all()}
 
+    main_ids = list(nodes_by_id.keys())
     edges_result = await db.execute(
         select(Edge.from_node_id, Edge.to_node_id).where(
-            Edge.project_id == project_id, Edge.relation_type == "child_of"
+            Edge.project_id == project_id, Edge.relation_type == "child_of",
+            Edge.from_node_id.in_(main_ids), Edge.to_node_id.in_(main_ids)
         )
-    )
+    ) if main_ids else None
     child_map: dict[str, list[str]] = {}
-    for from_id, to_id in edges_result.all():
+    for from_id, to_id in (edges_result.all() if edges_result else []):
         child_map.setdefault(str(from_id), []).append(str(to_id))
 
     all_node_ids = list(nodes_by_id.keys())

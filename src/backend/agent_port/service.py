@@ -27,22 +27,70 @@ def bump(entities=()):
         if e.id in seen: continue
         seen.add(e.id);e.revision=(e.revision or 1)+1
 
-async def descendants(db,project_id,root_id,limit=5000):
-    rows=(await db.execute(select(Edge.from_node_id,Edge.to_node_id).where(Edge.project_id==project_id,Edge.relation_type=="child_of"))).all()
-    children={}
-    for a,b in rows:children.setdefault(a,[]).append(b)
-    out=set();stack=[root_id]
-    while stack:
-        cur=stack.pop()
-        if cur in out:continue
-        out.add(cur)
+async def validated_scoped_graph(db,project_id,root_id,limit=5000,allow_external_root_parent=False):
+    """Validate an exact project/branch child closure before projecting it."""
+    root=await db.get(Node,root_id)
+    if not root or root.project_id!=project_id:
+        raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Grant root is outside its project"})
+    branch_id=root.branch_id
+    if branch_id is not None:
+        branch=await db.get(Branch,branch_id)
+        if not branch or branch.project_id!=project_id:
+            raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope branch is outside its project"})
+    out={root_id};frontier={root_id};incoming=set();edge_ids=set();parents={}
+    while frontier:
+        sources=(await db.execute(select(Node).where(Node.id.in_(frontier)))).scalars().all()
+        if len(sources)!=len(frontier) or any(n.project_id!=project_id or n.branch_id!=branch_id for n in sources):
+            raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope source crosses project or branch"})
+        # Do not trust Edge.project_id to hide a hostile outgoing endpoint.
+        edges=(await db.execute(select(Edge).where(
+            Edge.from_node_id.in_(frontier),Edge.relation_type=="child_of"
+        ))).scalars().all()
+        target_ids={edge.to_node_id for edge in edges}
+        targets={n.id:n for n in (await db.execute(select(Node).where(Node.id.in_(target_ids)))).scalars().all()} if target_ids else {}
+        for edge in edges:
+            target=targets.get(edge.to_node_id)
+            if (edge.id in edge_ids or edge.to_node_id in incoming or edge.to_node_id in out
+                    or edge.project_id!=project_id or not target
+                    or target.project_id!=project_id or target.branch_id!=branch_id):
+                raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope graph is not an exact project/branch tree"})
+            edge_ids.add(edge.id);incoming.add(edge.to_node_id);parents[edge.to_node_id]=edge.from_node_id
+        frontier=target_ids;out.update(frontier)
         if len(out)>limit:raise HTTPException(413,{"code":"SCOPE_TOO_LARGE","message":"Scope traversal exceeds limit"})
-        stack.extend(children.get(cur,()))
+
+    # Outgoing traversal cannot see a second/external parent into the closure.
+    inbound=(await db.execute(select(Edge).where(
+        Edge.to_node_id.in_(out),Edge.relation_type=="child_of"
+    ))).scalars().all()
+    source_ids={edge.from_node_id for edge in inbound}
+    source_nodes={n.id:n for n in (await db.execute(select(Node).where(Node.id.in_(source_ids)))).scalars().all()} if source_ids else {}
+    by_target={}
+    for edge in inbound:
+        source=source_nodes.get(edge.from_node_id)
+        if (edge.project_id!=project_id or not source
+                or source.project_id!=project_id or source.branch_id!=branch_id):
+            raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope graph is not an exact project/branch tree"})
+        by_target.setdefault(edge.to_node_id,[]).append(edge)
+    for target_id in out:
+        edges=by_target.get(target_id,[])
+        if target_id==root_id:
+            if (not allow_external_root_parent and edges) or len(edges)>1:
+                raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope root has invalid ownership"})
+        elif len(edges)!=1 or edges[0].from_node_id!=parents.get(target_id):
+            raise HTTPException(409,{"code":"MALFORMED_SCOPE","message":"Scope descendant has invalid ownership"})
     return out
+
+async def descendants(db,project_id,root_id,limit=5000):
+    return await validated_scoped_graph(db,project_id,root_id,limit)
 async def allowed_nodes(db,grant):
-    if grant.node_scope_id:return {grant.node_scope_id}
-    if grant.branch_root_id:return await descendants(db,grant.project_id,grant.branch_root_id)
-    ids=set((await db.execute(select(Node.id).where(Node.project_id==grant.project_id).limit(5001))).scalars())
+    if grant.node_scope_id:
+        # A node grant projects only the singleton, but validates its closure.
+        await validated_scoped_graph(db,grant.project_id,grant.node_scope_id,allow_external_root_parent=True)
+        return {grant.node_scope_id}
+    if grant.branch_root_id:return await validated_scoped_graph(db,grant.project_id,grant.branch_root_id)
+    ids=set((await db.execute(select(Node.id).where(
+        Node.project_id==grant.project_id,Node.branch_id.is_(None)
+    ).limit(5001))).scalars())
     if len(ids)>5000:raise HTTPException(413,{"code":"SCOPE_TOO_LARGE","message":"Project graph exceeds Agent Port limit"})
     return ids
 async def validate_scope(db,grant,ids):

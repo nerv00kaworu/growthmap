@@ -83,6 +83,26 @@ class AgentPortV1(unittest.TestCase):
   a=self.grant().json();b=self.grant().json();p=self.client.get("/agent/v1/project",headers=self.auth(a["token"])).json();n=self.client.get(f"/api/nodes/{self.root}").json();statuses=[]
   for i,g in enumerate((a,b)):statuses.append(self.client.post("/agent/v1/batch",headers=self.auth(g["token"]),json={"expected_project_revision":p["revision"],"idempotency_key":f"writer-{i}","operations":[{"op":"update_node","node_id":self.root,"expected_revision":n["revision"],"fields":{"summary":str(i)}}]}).status_code)
   self.assertEqual(sorted(statuses),[200,409])
+ def test_unscoped_graph_projects_only_endpoint_true_main_nodes(self):
+  main=self.child("main-visible").json();p,n=self.revisions()
+  made=self.client.post(f"/api/projects/{self.pid}/branches",json={"expected_project_revision":p["revision"],"source_node_id":self.root,"name":"hidden-branch"});self.assertEqual(made.status_code,201,made.text)
+  branch=made.json();branch_root=self.client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+  p=self.client.get(f"/api/projects/{self.pid}").json();bn=self.client.get(f"/api/nodes/{branch_root['id']}").json()
+  branch_child=self.client.post(f"/api/projects/{self.pid}/nodes",json={"expected_project_revision":p["revision"],"expected_parent_revision":bn["revision"],"title":"branch-hidden","parent_id":branch_root["id"],"branch_id":branch["id"]}).json()
+  grant=self.grant("read").json();response=self.client.get("/agent/v1/graph",headers=self.auth(grant["token"]));self.assertEqual(response.status_code,200,response.text)
+  self.assertEqual({row["id"] for row in response.json()["nodes"]},{self.root,main["id"]})
+  self.assertTrue({branch_root["id"],branch_child["id"]}.isdisjoint({row["id"] for row in response.json()["nodes"]}))
+ def test_explicit_scope_rejects_malformed_closure_without_projection(self):
+  from db.database import async_session
+  from models.models import Edge
+  parent=self.child("scope-parent").json()
+  p=self.client.get(f"/api/projects/{self.pid}").json();n=self.client.get(f"/api/nodes/{parent['id']}").json()
+  child=self.client.post(f"/api/projects/{self.pid}/nodes",json={"expected_project_revision":p["revision"],"expected_parent_revision":n["revision"],"title":"scope-child","parent_id":parent["id"]}).json()
+  async def add_parallel():
+   async with async_session() as db:
+    db.add(Edge(project_id=self.pid,from_node_id=parent["id"],to_node_id=child["id"],relation_type="child_of"));await db.commit()
+  asyncio.run(add_parallel());grant=self.grant("read",{"node_scope_id":parent["id"]}).json()
+  response=self.client.get("/agent/v1/graph",headers=self.auth(grant["token"]));self.assertEqual(response.status_code,409,response.text);self.assertEqual(response.json()["detail"]["code"],"MALFORMED_SCOPE")
  def test_persistent_grant_has_no_public_expiry(self):
   body={"project_id":self.pid,"permission":"propose","persistent":True,"expires_at":None,"label":"persistent","agent_identity":"local-mcp"}
   made=self.client.post("/api/agent-port/grants",json=body,headers=self.human);self.assertEqual(made.status_code,201,made.text)
