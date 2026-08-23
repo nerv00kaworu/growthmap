@@ -6,7 +6,7 @@ from sqlalchemy import func, or_, select
 
 from db.database import async_session
 from main import app
-from models.models import ContentBlock, Edge, Node, Project
+from models.models import ActionLog, ContentBlock, Edge, Node, Project
 
 def project_revision(client, project_id):
     return client.get(f"/api/projects/{project_id}").json()["revision"]
@@ -195,6 +195,69 @@ def test_delete_rejects_diamond_parallel_and_different_depth_repeated_targets_wi
             response=delete_node(client,project["id"],parent)
             assert response.status_code==409,(case,response.text)
             assert asyncio.run(snapshot([project["id"],other["id"]]))==before
+
+def test_foreign_project_noncontainment_edge_rejects_with_both_projects_unchanged():
+    with TestClient(app) as client:
+        a=client.post("/api/projects",json={"name":"incident-a"}).json()
+        b=client.post("/api/projects",json={"name":"incident-b"}).json()
+        victim=create_node(client,a["id"],"victim",a["root_node_id"])
+        async def seed_and_snapshot(seed=False):
+            async with async_session() as db:
+                if seed:
+                    db.add(Edge(project_id=b["id"],from_node_id=b["root_node_id"],to_node_id=victim["id"],relation_type="related_to"))
+                    db.add(ActionLog(project_id=a["id"],node_id=victim["id"],actor_type="human",action_type="kept_on_reject",payload={"safe":True}))
+                    await db.commit()
+                projects=(await db.execute(select(Project).where(Project.id.in_([a["id"],b["id"]])).order_by(Project.id))).scalars().all()
+                edges=(await db.execute(select(Edge).where(Edge.project_id.in_([a["id"],b["id"]])).order_by(Edge.id))).scalars().all()
+                logs=(await db.execute(select(ActionLog).where(ActionLog.project_id.in_([a["id"],b["id"]])).order_by(ActionLog.id))).scalars().all()
+                return ([(p.id,p.revision,p.updated_at) for p in projects],[(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type,r.payload) for r in logs])
+        before=asyncio.run(seed_and_snapshot(True))
+        response=delete_node(client,a["id"],victim)
+        assert response.status_code==409,response.text
+        assert asyncio.run(seed_and_snapshot())==before
+        assert client.get(f"/api/nodes/{victim['id']}").status_code==200
+
+
+def test_active_branch_root_delete_rejects_without_revision_edge_or_log_changes():
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":"branch authority"}).json()
+        branch=client.post(f"/api/projects/{project['id']}/branches",json={"expected_project_revision":project_revision(client,project["id"]),"source_node_id":project["root_node_id"],"name":"active"}).json()
+        root=client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+        async def snapshot():
+            async with async_session() as db:
+                p=await db.get(Project,project["id"])
+                edges=(await db.execute(select(Edge).where(Edge.project_id==project["id"]))).scalars().all()
+                logs=(await db.execute(select(ActionLog).where(ActionLog.project_id==project["id"]))).scalars().all()
+                return p.revision,[(e.id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.node_id,r.action_type) for r in logs]
+        before=asyncio.run(snapshot());response=delete_node(client,project["id"],root)
+        assert response.status_code==409,response.text
+        assert asyncio.run(snapshot())==before
+        assert client.get(f"/api/nodes/{root['id']}").status_code==200
+
+
+def test_subtree_delete_removes_bound_logs_and_malformed_rollback_preserves_them():
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":"log custody"}).json()
+        parent=create_node(client,project["id"],"parent",project["root_node_id"])
+        child=create_node(client,project["id"],"child",parent["id"])
+        async def seed_log(node_id,kind):
+            async with async_session() as db:
+                db.add(ActionLog(project_id=project["id"],node_id=node_id,actor_type="human",action_type=kind,payload={"kind":kind}));await db.commit()
+        async def counts():
+            async with async_session() as db:
+                p=await db.get(Project,project["id"])
+                return p.revision,await db.scalar(select(func.count()).select_from(Edge).where(Edge.project_id==project["id"])),await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.project_id==project["id"])),await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.node_id.in_([parent["id"],child["id"]])))
+        asyncio.run(seed_log(child["id"],"delete-with-child"));assert delete_node(client,project["id"],parent).status_code==204
+        after=asyncio.run(counts());assert after[3]==0
+        victim=create_node(client,project["id"],"rollback-victim",project["root_node_id"]);other=client.post("/api/projects",json={"name":"foreign rollback"}).json()
+        asyncio.run(seed_log(victim["id"],"must-survive-reject"))
+        async def corrupt():
+            async with async_session() as db:
+                db.add(Edge(project_id=other["id"],from_node_id=other["root_node_id"],to_node_id=victim["id"],relation_type="related_to"));await db.commit()
+        asyncio.run(corrupt());before=asyncio.run(counts())
+        assert delete_node(client,project["id"],victim).status_code==409
+        assert asyncio.run(counts())==before
+
 
 def test_export_json_omits_ambiguous_null_node_logs_but_keeps_main_node_log():
     from models.models import ActionLog

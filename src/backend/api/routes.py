@@ -734,6 +734,34 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
             select(Project.root_node_id).where(Project.root_node_id.is_not(None))
         )).scalars().all()}
         branch_id=str(node.branch_id) if node.branch_id is not None else None
+        if branch_id is not None:
+            branch=await db.get(Branch,branch_id)
+            if not branch or str(branch.project_id)!=str(node.project_id):
+                raise HTTPException(409,"Branch ownership is invalid")
+            branch_nodes=(await db.execute(select(Node).where(
+                Node.project_id==node.project_id,Node.branch_id==branch_id
+            ))).scalars().all()
+            branch_node_ids={str(item.id) for item in branch_nodes}
+            branch_inbound=(await db.execute(select(Edge).where(
+                Edge.relation_type=="child_of",Edge.to_node_id.in_(branch_node_ids)
+            ))).scalars().all() if branch_node_ids else []
+            branch_sources={str(edge.from_node_id) for edge in branch_inbound}
+            source_nodes={str(item.id):item for item in (await db.execute(
+                select(Node).where(Node.id.in_(branch_sources))
+            )).scalars().all()} if branch_sources else {}
+            owned_targets={}
+            for edge in branch_inbound:
+                source=source_nodes.get(str(edge.from_node_id));target_id=str(edge.to_node_id)
+                if (str(edge.project_id)!=str(node.project_id) or not source
+                        or str(source.project_id)!=str(node.project_id)
+                        or (str(source.branch_id) if source.branch_id is not None else None)!=branch_id):
+                    raise HTTPException(409,"Branch root authority is malformed")
+                owned_targets[target_id]=owned_targets.get(target_id,0)+1
+            branch_roots=branch_node_ids-set(owned_targets)
+            if len(branch_roots)!=1 or any(count!=1 for count in owned_targets.values()):
+                raise HTTPException(409,"Branch root authority is malformed")
+            if branch.status=="active" and str(node.id) in branch_roots:
+                raise HTTPException(409,"Cannot delete an active branch root")
         while frontier:
             sources=(await db.execute(select(Node).where(Node.id.in_(frontier)))).scalars().all()
             if len(sources)!=len(frontier) or any(
@@ -780,15 +808,37 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
                 if len(edges)>1:raise HTTPException(409,"Subtree root has invalid ownership")
             elif len(edges)!=1 or str(edges[0].from_node_id)!=parents.get(target_id):
                 raise HTTPException(409,"Subtree descendant has invalid ownership")
-        return subtree_ids
+
+        # Validate every relation incident to the closure. Cross-branch
+        # non-containment relations are canonical, but every endpoint and edge
+        # must still belong to the claimed project.
+        incident=(await db.execute(select(Edge).where(or_(
+            Edge.from_node_id.in_(subtree_ids),Edge.to_node_id.in_(subtree_ids)
+        )))).scalars().all()
+        endpoint_ids={str(value) for edge in incident for value in (edge.from_node_id,edge.to_node_id)}
+        endpoints={str(item.id):item for item in (await db.execute(
+            select(Node).where(Node.id.in_(endpoint_ids))
+        )).scalars().all()} if endpoint_ids else {}
+        incident_ids=set()
+        for edge in incident:
+            source=endpoints.get(str(edge.from_node_id));target=endpoints.get(str(edge.to_node_id))
+            if (str(edge.id) in incident_ids or not source or not target
+                    or str(edge.project_id)!=str(node.project_id)
+                    or str(source.project_id)!=str(node.project_id)
+                    or str(target.project_id)!=str(node.project_id)):
+                raise HTTPException(409,"Subtree incident edge ownership is invalid")
+            if edge.relation_type=="child_of" and source.branch_id!=target.branch_id:
+                raise HTTPException(409,"Subtree containment branch is invalid")
+            incident_ids.add(str(edge.id))
+        return subtree_ids,incident_ids
 
     # Validate before and after the project CAS writer boundary.
-    subtree_ids=await validate_closure()
+    subtree_ids,incident_ids=await validate_closure()
     await claim_project_revision(db,node.project_id,data.expected_project_revision)
-    subtree_ids=await validate_closure()
-    await db.execute(Edge.__table__.delete().where(
-        or_(Edge.from_node_id.in_(subtree_ids),Edge.to_node_id.in_(subtree_ids))
-    ))
+    subtree_ids,incident_ids=await validate_closure()
+    if incident_ids:
+        await db.execute(Edge.__table__.delete().where(Edge.id.in_(incident_ids)))
+    await db.execute(ActionLog.__table__.delete().where(ActionLog.node_id.in_(subtree_ids)))
     await db.execute(Node.__table__.delete().where(Node.id.in_(subtree_ids)))
     await db.commit()
 
