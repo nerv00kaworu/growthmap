@@ -739,10 +739,14 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
             return rows
         async def edges_touching(values,relation_type=None):
             rows={}
+            # Separate endpoint queries keep each statement at <=501 total binds
+            # (500 IDs plus the optional relation type), below the conservative
+            # SQLite 900-variable budget.
             for part in chunks(values):
-                predicates=[or_(Edge.from_node_id.in_(part),Edge.to_node_id.in_(part))]
-                if relation_type is not None:predicates.append(Edge.relation_type==relation_type)
-                for edge in (await db.execute(select(Edge).where(*predicates))).scalars().all():rows[str(edge.id)]=edge
+                for endpoint in (Edge.from_node_id,Edge.to_node_id):
+                    predicates=[endpoint.in_(part)]
+                    if relation_type is not None:predicates.append(Edge.relation_type==relation_type)
+                    for edge in (await db.execute(select(Edge).where(*predicates))).scalars().all():rows[str(edge.id)]=edge
             return list(rows.values())
         root_ids={str(value) for value in (await db.execute(
             select(Project.root_node_id).where(Project.root_node_id.is_not(None))
@@ -752,16 +756,15 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
             branch=await db.get(Branch,branch_id)
             if not branch or str(branch.project_id)!=str(node.project_id):
                 raise HTTPException(409,"Branch ownership is invalid")
-            # Aggregate in SQL: never materialize a branch-wide ID list or bind one
-            # parameter per node. Every inbound child edge must have exact project
-            # metadata and a present same-project/same-branch source.
+            if branch.status not in {"active","merged","archived"}:
+                raise HTTPException(409,"Branch status is invalid")
+            # Constant-bind authority proof. UNION (not UNION ALL) makes the
+            # recursive reachability walk cycle-safe. In-degree validity alone is
+            # insufficient: a rooted component plus a disconnected cycle must fail.
             authority=(await db.execute(__import__("sqlalchemy").text("""
-                SELECT SUM(CASE WHEN inbound_count=0 THEN 1 ELSE 0 END) AS roots,
-                       SUM(CASE WHEN inbound_count>1 OR inbound_count<>valid_count THEN 1 ELSE 0 END) AS malformed,
-                       MAX(CASE WHEN inbound_count=0 THEN target_id END) AS root_id
-                FROM (
-                  SELECT n.id AS target_id,
-                         COUNT(e.id) AS inbound_count,
+                WITH RECURSIVE
+                ownership AS (
+                  SELECT n.id AS target_id, COUNT(e.id) AS inbound_count,
                          SUM(CASE WHEN e.id IS NOT NULL AND e.project_id=:project_id
                                    AND s.id IS NOT NULL AND s.project_id=:project_id
                                    AND s.branch_id=:branch_id THEN 1 ELSE 0 END) AS valid_count
@@ -770,12 +773,35 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
                   LEFT JOIN nodes s ON s.id=e.from_node_id
                   WHERE n.project_id=:project_id AND n.branch_id=:branch_id
                   GROUP BY n.id
-                ) authority
+                ),
+                roots AS (SELECT target_id FROM ownership WHERE inbound_count=0),
+                reachable(id) AS (
+                  SELECT target_id FROM roots
+                  UNION
+                  SELECT t.id FROM reachable r
+                  JOIN edges e ON e.from_node_id=r.id AND e.relation_type='child_of'
+                  JOIN nodes s ON s.id=e.from_node_id
+                  JOIN nodes t ON t.id=e.to_node_id
+                  WHERE e.project_id=:project_id
+                    AND s.project_id=:project_id AND s.branch_id=:branch_id
+                    AND t.project_id=:project_id AND t.branch_id=:branch_id
+                )
+                SELECT (SELECT COUNT(*) FROM ownership) AS branch_nodes,
+                       (SELECT COUNT(*) FROM roots) AS roots,
+                       (SELECT COUNT(*) FROM ownership
+                          WHERE inbound_count>1 OR inbound_count<>valid_count) AS malformed,
+                       (SELECT MAX(target_id) FROM roots) AS root_id,
+                       (SELECT COUNT(*) FROM reachable) AS reachable
             """),{"project_id":str(node.project_id),"branch_id":branch_id})).mappings().one()
-            if int(authority["roots"] or 0)!=1 or int(authority["malformed"] or 0)!=0:
+            if (int(authority["branch_nodes"] or 0)==0 or int(authority["roots"] or 0)!=1
+                    or int(authority["malformed"] or 0)!=0
+                    or int(authority["reachable"] or 0)!=int(authority["branch_nodes"] or 0)):
                 raise HTTPException(409,"Branch root authority is malformed")
-            if branch.status=="active" and str(node.id)==str(authority["root_id"]):
-                raise HTTPException(409,"Cannot delete an active branch root")
+            # Branch rows are durable lifecycle/history authorities. Archive is a
+            # soft lifecycle transition, not permission to destroy its tree; merged
+            # branches canonically have no branch-bound root at all.
+            if str(node.id)==str(authority["root_id"]):
+                raise HTTPException(409,"Cannot delete a branch root")
         while frontier:
             sources=await nodes_by_ids(frontier)
             if len(sources)!=len(frontier) or any(

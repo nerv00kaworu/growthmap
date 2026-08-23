@@ -1,14 +1,12 @@
 """Corrected-release canonical graph projection boundary regressions."""
 import asyncio
-import inspect
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, or_, select
 
 from db.database import async_session
 from main import app
-from models.models import ActionLog, ContentBlock, Edge, Node, Project
+from models.models import ActionLog, Branch, ContentBlock, Edge, Node, Project
 
 def project_revision(client, project_id):
     return client.get(f"/api/projects/{project_id}").json()["revision"]
@@ -292,7 +290,10 @@ def test_successful_delete_preserves_unrelated_edges_and_logs_exactly():
         assert after_edges==expected_edges;assert after_logs==expected_logs
 
 
-@pytest.mark.parametrize("case",["zero_or_multiple_roots","parallel_inbound","wrong_edge_project","external_source"])
+@pytest.mark.parametrize("case",[
+    "two_roots","parallel_inbound","wrong_edge_project","external_source",
+    "self_loop","disconnected_cycle","unknown_status","null_status",
+])
 def test_malformed_branch_authority_matrix_is_zero_mutation(case):
     with TestClient(app) as client:
         project=client.post("/api/projects",json={"name":f"branch-{case}"}).json()
@@ -303,14 +304,24 @@ def test_malformed_branch_authority_matrix_is_zero_mutation(case):
         async def corrupt_and_snapshot(seed=False):
             async with async_session() as db:
                 if seed:
-                    if case=="zero_or_multiple_roots":
+                    if case=="two_roots":
                         db.add(Node(project_id=project["id"],branch_id=branch["id"],title="second root"))
                     elif case=="parallel_inbound":
                         db.add(Edge(project_id=project["id"],from_node_id=root["id"],to_node_id=child["id"],relation_type="child_of"))
                     elif case=="wrong_edge_project":
                         edge=(await db.execute(select(Edge).where(Edge.from_node_id==root["id"],Edge.to_node_id==child["id"],Edge.relation_type=="child_of"))).scalars().one();edge.project_id=other["id"]
-                    else:
+                    elif case=="external_source":
                         db.add(Edge(project_id=project["id"],from_node_id=project["root_node_id"],to_node_id=child["id"],relation_type="child_of"))
+                    elif case=="self_loop":
+                        loop=Node(project_id=project["id"],branch_id=branch["id"],title="loop");db.add(loop);await db.flush();db.add(Edge(project_id=project["id"],from_node_id=loop.id,to_node_id=loop.id,relation_type="child_of"))
+                    elif case=="disconnected_cycle":
+                        left=Node(project_id=project["id"],branch_id=branch["id"],title="left");right=Node(project_id=project["id"],branch_id=branch["id"],title="right");db.add_all([left,right]);await db.flush();db.add_all([Edge(project_id=project["id"],from_node_id=left.id,to_node_id=right.id,relation_type="child_of"),Edge(project_id=project["id"],from_node_id=right.id,to_node_id=left.id,relation_type="child_of")])
+                    elif case=="unknown_status":
+                        from sqlalchemy import update
+                        await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status="hostile"))
+                    else:
+                        from sqlalchemy import update
+                        await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status=None))
                     await db.commit()
                 p=await db.get(Project,project["id"])
                 edges=(await db.execute(select(Edge).where(or_(Edge.project_id==project["id"],Edge.project_id==other["id"])).order_by(Edge.id))).scalars().all()
@@ -319,13 +330,70 @@ def test_malformed_branch_authority_matrix_is_zero_mutation(case):
                 return p.revision,[(n.id,n.project_id,n.branch_id,n.title) for n in nodes],[(e.id,e.project_id,e.from_node_id,e.to_node_id,e.relation_type) for e in edges],[(r.id,r.project_id,r.node_id,r.action_type) for r in logs]
         before=asyncio.run(corrupt_and_snapshot(True));response=delete_node(client,project["id"],child)
         assert response.status_code==409,(case,response.text);assert asyncio.run(corrupt_and_snapshot())==before
+        if case in {"unknown_status","null_status"}:
+            async def restore_status():
+                from sqlalchemy import update
+                async with async_session() as db:
+                    await db.execute(update(Branch).where(Branch.id==branch["id"]).values(status="active"));await db.commit()
+            asyncio.run(restore_status())
 
 
-def test_branch_authority_query_has_no_branch_wide_in_bind_list():
-    source=inspect.getsource(__import__("api.routes",fromlist=["delete_node"]).delete_node)
-    authority=source.split("Aggregate in SQL",1)[1].split("while frontier",1)[0]
-    assert "Node.id.in_(branch" not in authority
-    assert "WHERE n.project_id=:project_id AND n.branch_id=:branch_id" in authority
+def test_branch_authority_executes_under_conservative_parameter_budget():
+    from sqlalchemy import event
+    from db.database import engine
+    with TestClient(app) as client:
+        project=client.post("/api/projects",json={"name":"parameter budget"}).json()
+        branch=client.post(f"/api/projects/{project['id']}/branches",json={"expected_project_revision":project_revision(client,project["id"]),"source_node_id":project["root_node_id"],"name":"budget"}).json()
+        root=client.get(f"/api/branches/{branch['id']}/subtree").json()["tree"]
+        leaf=create_node(client,project["id"],"leaf",root["id"],branch["id"]);counts=[]
+        def before(_conn,_cursor,_statement,parameters,_context,_many):
+            counts.append(len(parameters) if hasattr(parameters,"__len__") else 0)
+        event.listen(engine.sync_engine,"before_cursor_execute",before)
+        try: assert delete_node(client,project["id"],leaf).status_code==204
+        finally: event.remove(engine.sync_engine,"before_cursor_execute",before)
+        assert counts and max(counts)<=900
+
+
+def test_cross_chunk_repeated_target_rejects_and_late_delete_failure_rolls_back():
+    from sqlalchemy import event
+    from db.database import engine
+    with TestClient(app,raise_server_exceptions=False) as client:
+        project=client.post("/api/projects",json={"name":"cross chunk"}).json()
+        parent=create_node(client,project["id"],"wide",project["root_node_id"])
+        async def seed():
+            async with async_session() as db:
+                children=[Node(project_id=project["id"],title=f"child-{i}") for i in range(501)];db.add_all(children);await db.flush()
+                db.add_all([Edge(project_id=project["id"],from_node_id=parent["id"],to_node_id=item.id,relation_type="child_of") for item in children])
+                db.add_all([ActionLog(project_id=project["id"],node_id=item.id,actor_type="human",action_type="wide",payload={}) for item in children])
+                await db.commit();return [str(item.id) for item in children]
+        ids=asyncio.run(seed())
+        async def add_repeat():
+            async with async_session() as db:
+                db.add(Edge(project_id=project["id"],from_node_id=ids[-1],to_node_id=ids[0],relation_type="child_of"));await db.commit()
+        asyncio.run(add_repeat());assert delete_node(client,project["id"],parent).status_code==409
+        async def snapshot(remove_repeat=False):
+            async with async_session() as db:
+                if remove_repeat:
+                    edge=(await db.execute(select(Edge).where(Edge.from_node_id==ids[-1],Edge.to_node_id==ids[0]))).scalars().one();await db.delete(edge);await db.commit()
+                p=await db.get(Project,project["id"])
+                node_count=0;log_count=0
+                for offset in range(0,len(ids),500):
+                    part=ids[offset:offset+500]
+                    node_count+=await db.scalar(select(func.count()).select_from(Node).where(Node.id.in_(part)))
+                    log_count+=await db.scalar(select(func.count()).select_from(ActionLog).where(ActionLog.node_id.in_(part)))
+                node_count+=int(await db.get(Node,parent["id"]) is not None)
+                return p.revision,node_count,await db.scalar(select(func.count()).select_from(Edge).where(Edge.project_id==project["id"])),log_count
+        before=asyncio.run(snapshot(True));deletes=0
+        def fail_second_node_delete(_conn,_cursor,statement,_parameters,_context,_many):
+            nonlocal deletes
+            if statement.lstrip().upper().startswith("DELETE FROM NODES"):
+                deletes+=1
+                if deletes==2:raise RuntimeError("injected late node chunk failure")
+        event.listen(engine.sync_engine,"before_cursor_execute",fail_second_node_delete)
+        try: response=delete_node(client,project["id"],parent)
+        finally: event.remove(engine.sync_engine,"before_cursor_execute",fail_second_node_delete)
+        assert response.status_code==500 and deletes==2
+        assert asyncio.run(snapshot())==before
 
 
 def test_export_json_omits_ambiguous_null_node_logs_but_keeps_main_node_log():
