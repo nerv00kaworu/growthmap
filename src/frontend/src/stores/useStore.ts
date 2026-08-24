@@ -147,6 +147,50 @@ function pushOwnedUndo(
   return pushUndo(stack, rootNode, description, owner, inverse);
 }
 
+type CreateNodeAuthority = Readonly<{
+  id: string;
+  projectId: string;
+  branchId: string | null;
+  parentId: string;
+  projectRevision: number;
+  parentRevision: number;
+  nodeRevision: number;
+}>;
+
+function snapshotCreateNodeAuthority(value: unknown): CreateNodeAuthority | null {
+  if (value === null || typeof value !== "object") return null;
+  try {
+    const readOwnData = (key: string): unknown => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set) throw new Error("unsafe create authority");
+      return descriptor.value;
+    };
+    const id = readOwnData("id");
+    const projectId = readOwnData("project_id");
+    const rawBranchId = readOwnData("branch_id");
+    const parentId = readOwnData("authoritative_parent_id");
+    const projectRevision = readOwnData("authoritative_project_revision");
+    const parentRevision = readOwnData("authoritative_parent_revision");
+    const nodeRevision = readOwnData("revision");
+    const branchId = rawBranchId === null || rawBranchId === undefined ? null : rawBranchId;
+    if (typeof id !== "string" || id.length === 0
+      || typeof projectId !== "string" || projectId.length === 0
+      || (branchId !== null && (typeof branchId !== "string" || branchId.length === 0))
+      || typeof parentId !== "string" || parentId.length === 0
+      || !Number.isSafeInteger(projectRevision) || (projectRevision as number) <= 0
+      || !Number.isSafeInteger(parentRevision) || (parentRevision as number) <= 0
+      || !Number.isSafeInteger(nodeRevision) || (nodeRevision as number) <= 0) return null;
+    return Object.freeze({
+      id, projectId, branchId: branchId as string | null, parentId,
+      projectRevision: projectRevision as number,
+      parentRevision: parentRevision as number,
+      nodeRevision: nodeRevision as number,
+    });
+  } catch {
+    return null;
+  }
+}
+
 type DeepenBlockToken = Readonly<{ token: symbol; originalIndex: number; title: string; body: string; block_type: string }>;
 type DeepenOperationContext = Readonly<{
   owner: StoreOperationOwner;
@@ -288,37 +332,31 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     // The POST committed. Retire every older capability before any fallible
     // validation/readback; never let an in-flight old DELETE revive it.
     if (!retireUndoAfterOwnedCommit(set, owner)) return;
-    const newNode = outcome.value!;
+    const authority = snapshotCreateNodeAuthority(outcome.value);
     const settlementRoot = get().rootNode;
     const settlementParent = settlementRoot ? findNode(settlementRoot, parentId) : null;
-    const responseAuthority = typeof newNode?.id === "string"
-      && newNode.id.length > 0
-      && findNode(rootNode, newNode.id) === null
+    const responseAuthority = authority !== null
+      && findNode(rootNode, authority.id) === null
       && settlementRoot?.project_id === currentProject.id
       && Boolean(settlementParent && settlementParent.revision === initiatingParentRevision)
-      && Boolean(settlementRoot && findNode(settlementRoot, newNode.id) === null)
-      && newNode.project_id === currentProject.id
-      && (newNode.branch_id ?? null) === owner.branchId
-      && newNode.authoritative_parent_id === parentId
-      && Number.isSafeInteger(newNode.authoritative_project_revision)
-      && newNode.authoritative_project_revision > 0
-      && Number.isSafeInteger(newNode.authoritative_parent_revision)
-      && newNode.authoritative_parent_revision > 0
-      && Number.isSafeInteger(newNode.revision)
-      && newNode.revision > 0;
+      && Boolean(settlementRoot && findNode(settlementRoot, authority.id) === null)
+      && authority.projectId === currentProject.id
+      && authority.branchId === owner.branchId
+      && authority.parentId === parentId;
     try {
       const refresh = await get().refreshTree();
       if (refresh !== "refreshed" || !stillOwned()) return;
       const authoritativeRoot = get().rootNode;
       const authoritativeParent = authoritativeRoot ? findNode(authoritativeRoot, parentId) : null;
-      const authoritativeChild = authoritativeRoot ? findNode(authoritativeRoot, newNode.id) : null;
-      const isDirectChild = Boolean(authoritativeParent?.children?.some((child) => child.id === newNode.id));
+      const authoritativeChild = authority && authoritativeRoot ? findNode(authoritativeRoot, authority.id) : null;
+      const isDirectChild = Boolean(authority && authoritativeParent?.children?.some((child) => child.id === authority.id));
       const readbackProvesCreate = responseAuthority
+        && authority !== null
         && authoritativeRoot?.project_id === currentProject.id
         && authoritativeChild?.project_id === currentProject.id
         && (authoritativeChild?.branch_id ?? null) === owner.branchId
         && isDirectChild;
-      if (!readbackProvesCreate) {
+      if (!readbackProvesCreate || !authority) {
         set({ toast: ui(
           '✅ 節點已建立，但無法驗證安全復原權限；請重新載入專案',
           '✅ 节点已创建，但无法验证安全恢复权限；请重新加载项目',
@@ -326,8 +364,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
         ) });
         return;
       }
-      const inverse = { kind: "delete-created-node" as const, nodeId: newNode.id,
-        nodeRevision: newNode.revision, projectRevision: newNode.authoritative_project_revision };
+      const inverse = { kind: "delete-created-node" as const, nodeId: authority.id,
+        nodeRevision: authority.nodeRevision, projectRevision: authority.projectRevision };
       set({ undoStack: pushOwnedUndo(get().undoStack, authoritativeRoot!,
         ui(`新增子節點: ${title}`,`新增子节点: ${title}`,`Add child node: ${title}`), owner, inverse) });
     } catch {
