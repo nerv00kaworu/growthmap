@@ -11,7 +11,8 @@ CREATE TABLE branches(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,name TEXT NOT
 CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL,priority INTEGER,confidence FLOAT,description TEXT,rules_text TEXT,constraints_text TEXT,examples_text TEXT,questions_text TEXT,decision_notes TEXT,tags JSON,branch_id VARCHAR(36),workflow_status VARCHAR(20) NOT NULL DEFAULT 'draft',file_paths JSON DEFAULT '[]',created_by TEXT,last_edited_by TEXT,position_x FLOAT,position_y FLOAT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL);
 CREATE TABLE edges(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,is_mainline BOOLEAN NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT DEFAULT '',created_at DATETIME NOT NULL);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY NOT NULL,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL);
-CREATE TABLE provider_configs(id TEXT PRIMARY KEY, secret_env_key VARCHAR(128) DEFAULT '');
+CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
+CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '');
 INSERT INTO projects(id,name,status,created_at,updated_at,revision) VALUES ('p','kept','active','2020-01-01','2020-01-01',7);
 """
 
@@ -87,7 +88,7 @@ def test_injected_failure_rolls_back_version_and_retry_succeeds(tmp_path, monkey
 def test_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path): asyncio.run(_version_one_legacy_revision_upgrade_is_idempotent_and_preserves_rows(tmp_path))
 
 async def _missing_provider_secret_column_gets_exact_default_and_preserves_rows(tmp_path):
-    sql=OLD.replace("secret_env_key VARCHAR(128) DEFAULT ''","name TEXT")+"\nINSERT INTO provider_configs VALUES ('provider','kept');\nPRAGMA user_version=1;"
+    sql=OLD.replace(",secret_env_key VARCHAR(128) DEFAULT ''","")+"\nINSERT INTO provider_configs(id,name) VALUES ('provider','kept');\nPRAGMA user_version=1;"
     engine=await db(tmp_path,sql)
     async with engine.begin() as conn:await migrate_sqlite(conn)
     async with engine.begin() as conn:await migrate_sqlite(conn)

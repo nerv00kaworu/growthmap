@@ -2,6 +2,7 @@ import os, sqlite3
 from pathlib import Path
 import pytest
 from desktop import database_maintenance as dm
+from tests.generated_schema_fixtures import generate
 
 def fixture(path):
  c=sqlite3.connect(path);c.executescript("""CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,description TEXT,goal TEXT,root_node_id TEXT,status TEXT NOT NULL,settings JSON,created_at TEXT,updated_at TEXT);CREATE TABLE nodes(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),title TEXT NOT NULL,summary TEXT,node_type TEXT NOT NULL,status TEXT NOT NULL,maturity TEXT NOT NULL);CREATE TABLE edges(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id),from_node_id TEXT NOT NULL REFERENCES nodes(id),to_node_id TEXT NOT NULL REFERENCES nodes(id),relation_type TEXT NOT NULL);CREATE TABLE content_blocks(id TEXT PRIMARY KEY,node_id TEXT NOT NULL REFERENCES nodes(id),block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL);CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT REFERENCES projects(id),actor_type TEXT,action_type TEXT,created_at TEXT);CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER);CREATE TABLE provider_selection (singleton_id INTEGER NOT NULL PRIMARY KEY, provider_id VARCHAR(36) REFERENCES provider_configs(id) ON DELETE SET NULL, selection_revision INTEGER NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL, CONSTRAINT ck_provider_selection_singleton CHECK (singleton_id = 1), CONSTRAINT ck_provider_selection_revision_safe CHECK (selection_revision >= 1 AND selection_revision <= 9007199254740991));INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP);""");c.execute("insert into projects values('p','x','','',NULL,'active','{}','','')");c.commit();c.close()
@@ -36,16 +37,13 @@ def test_provider_selection_authority_is_exactly_allowlisted(tmp_path):
  with pytest.raises(ValueError,match='unapproved'):dm.validate(near)
 
 def test_accepts_canonical_edge_integrity_objects_only(tmp_path):
- p=tmp_path/'canonical.db';fixture(p);c=sqlite3.connect(p)
- c.execute("CREATE UNIQUE INDEX ux_edges_one_mainline_per_parent ON edges(from_node_id) WHERE relation_type='child_of'")
- c.execute("CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges BEGIN UPDATE edges SET relation_type=relation_type WHERE id=NEW.id; END")
- c.close();assert dm.validate(p)['valid'] is True
- p2=tmp_path/'lookalike.db';fixture(p2);c=sqlite3.connect(p2)
+ p=generate(tmp_path/'canonical.db','v12');assert dm.validate(p)['valid'] is True
+ p2=generate(tmp_path/'lookalike.db','v12');c=sqlite3.connect(p2)
  c.execute("CREATE TRIGGER trg_edges_not_canonical AFTER INSERT ON edges BEGIN SELECT 1; END");c.close()
  with pytest.raises(ValueError,match='unapproved'):dm.validate(p2)
 
 def test_accepts_exact_canonical_gameplay_extension_and_rejects_lookalikes(tmp_path):
- p=tmp_path/'abyss.db';fixture(p);c=sqlite3.connect(p)
+ p=generate(tmp_path/'abyss.db','v12');c=sqlite3.connect(p)
  columns=dm.EXTENSION_TABLE_COLUMNS['schema_migrations']
  c.execute('''CREATE TABLE schema_migrations (
               migration_id TEXT PRIMARY KEY,
@@ -53,20 +51,20 @@ def test_accepts_exact_canonical_gameplay_extension_and_rejects_lookalikes(tmp_p
               applied_at DATETIME NOT NULL
             )''')
  c.close();assert dm.validate(p)['valid'] is True
- p2=tmp_path/'wrong-columns.db';fixture(p2);c=sqlite3.connect(p2);c.execute('CREATE TABLE schema_migrations(migration_id TEXT PRIMARY KEY,checksum TEXT,applied_at TEXT,secret TEXT)');c.close()
+ p2=generate(tmp_path/'wrong-columns.db','v12');c=sqlite3.connect(p2);c.execute('CREATE TABLE schema_migrations(migration_id TEXT PRIMARY KEY,checksum TEXT,applied_at TEXT,secret TEXT)');c.close()
  with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p2)
- p3=tmp_path/'wrong-owner.db';fixture(p3);c=sqlite3.connect(p3);c.execute('CREATE INDEX idx_game_events_pack ON projects(name)');c.close()
+ p3=generate(tmp_path/'wrong-owner.db','v12');c=sqlite3.connect(p3);c.execute('CREATE INDEX idx_game_events_pack ON projects(name)');c.close()
  with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p3)
- p4=tmp_path/'forged-trigger.db';fixture(p4);c=sqlite3.connect(p4)
+ p4=generate(tmp_path/'forged-trigger.db','v12');c=sqlite3.connect(p4)
  c.execute('CREATE TABLE player_event_resolutions(id TEXT PRIMARY KEY,run_id TEXT,content_pack_id TEXT,event_id TEXT,choice_id TEXT,sequence_no INTEGER,idempotency_key TEXT,content_version TEXT,event_key TEXT,choice_key TEXT,known_state_json TEXT,input_refs_json TEXT,outcome_json TEXT,effects_json TEXT,outputs_json TEXT,resolved_at TEXT,integrity_hash TEXT)')
  c.execute('CREATE TRIGGER trg_resolution_immutable_delete BEFORE DELETE ON player_event_resolutions BEGIN SELECT 1; END');c.close()
  with pytest.raises(ValueError,match='incompatible extension schema object'):dm.validate(p4)
 
 def test_legacy_canonical_schema_is_accepted_but_never_declared_current(tmp_path):
- p=tmp_path/'legacy.db';fixture(p);c=sqlite3.connect(p);c.execute('PRAGMA user_version=1');c.close()
+ p=generate(tmp_path/'legacy.db','v2')
  assert dm.validate(p)['valid'] is True
  status=dm.schema_status(p);assert status['migrationNeeded'] is True
- assert 'column:projects.revision' in status['reasons'] and 'column:nodes.revision' in status['reasons'] and 'user_version:1' in status['reasons']
+ assert 'column:projects.revision' in status['reasons'] and 'column:nodes.revision' in status['reasons'] and 'user_version:2' in status['reasons']
 
 
 def test_version_one_with_compatibility_surface_still_requires_version_advancement(tmp_path):

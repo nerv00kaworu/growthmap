@@ -90,7 +90,7 @@ def _canonical_snapshot(connection):
   "providerSelectionRows":connection.execute("SELECT singleton_id,provider_id,selection_revision,updated_at FROM provider_selection").fetchall() if selection else (),
   "providerSelectionFkViolation":bool(authority_critical_fk_violations(fk_rows))}
 
-def _validate_connection(connection,source):
+def _validate_connection(connection,source,require_importable=True):
  _configure(connection)
  page_count=int(connection.execute("PRAGMA page_count").fetchone()[0]);page_size=int(connection.execute("PRAGMA page_size").fetchone()[0])
  if page_count<=0 or page_size<=0 or page_count*page_size>MAX_BYTES: raise ValueError("database page limits exceeded")
@@ -120,8 +120,10 @@ def _validate_connection(connection,source):
  if foreign_key_violations: raise ValueError("foreign key check failed")
  result=evaluate_snapshot(_canonical_snapshot(connection))
  if result["policy"]["newer"]: raise ValueError("database schema is newer than this application")
- if not result["importable"]: raise ValueError("database contains an incompatible canonical schema")
+ if require_importable and not result["importable"]: raise ValueError("database contains an incompatible canonical schema")
  version=result["policy"]["version"]
+ if not require_importable:
+  return {"valid":True,"userVersion":version,"pageCount":page_count,"pageSize":page_size,"_canonicalResult":result}
  counts={}
  for table,limit in MAX_COUNTS.items():
   counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
@@ -132,10 +134,10 @@ def _validate_connection(connection,source):
   if connection.execute(f'SELECT 1 FROM "{table}" WHERE length("{column}")>16777216 LIMIT 1').fetchone(): raise ValueError("database value limits exceeded")
  return {"valid":True,"userVersion":version,"counts":counts,"pageCount":page_count,"pageSize":page_size}
 
-def _open_validated(source):
+def _open_validated(source,require_importable=True):
  source=Path(source);stat=_regular_file(source)
  connection=sqlite3.connect(f"file:{source.resolve().as_posix()}?mode=ro&immutable=1",uri=True)
- try: meta=_validate_connection(connection,source)
+ try: meta=_validate_connection(connection,source,require_importable=require_importable)
  except Exception: connection.close();raise
  # Filesystem identities cross a JSON/JavaScript boundary in Electron. Keep
  # them as canonical decimal strings so Windows 64-bit file IDs are not
@@ -159,9 +161,9 @@ def schema_status(path):
  """Inspect only the migration-owned schema surface without opening SQLite writable."""
  source=Path(path)
  if not source.exists(): return {"exists":False,"compatible":False,"migrationNeeded":True,"reasons":["database_missing"]}
- connection,meta=_open_validated(source)
+ connection,meta=_open_validated(source,require_importable=False)
  try:
-  result=evaluate_snapshot(_canonical_snapshot(connection))
+  result=meta.pop("_canonicalResult")
   return {"exists":True,"compatible":result["compatibleCurrent"],"migrationNeeded":result["migrationNeeded"],"reasons":list(result["reasons"]),"sha256":meta["sha256"],"size":meta["size"],"userVersion":meta["userVersion"]}
  finally: connection.close()
 

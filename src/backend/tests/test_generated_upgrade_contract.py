@@ -119,7 +119,11 @@ def test_current_near_misses_are_fail_closed_without_migration_mutation(tmp_path
     path=generate(tmp_path/f"near-{variant}.db",variant)
     before_bytes=path.read_bytes(); before=sql_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    if variant in ("newer_v13","bad_selection_table","bad_selection_row"):
+        with pytest.raises(ValueError): dm.schema_status(path)
+    else:
+        status=dm.schema_status(path)
+        assert not status["compatible"] and status["migrationNeeded"] and status["reasons"]
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes() == before_bytes
     assert sql_snapshot(path) == before
@@ -143,7 +147,8 @@ def test_optional_object_applicability_is_shared_and_owner_driven(tmp_path):
 def test_current_optional_index_drift_fails_closed_without_mutation(tmp_path, variant):
     path=generate(tmp_path/f"{variant}.db",variant)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    status=dm.schema_status(path)
+    assert not status["compatible"] and status["migrationNeeded"] and status["reasons"]
     before=path.read_bytes()
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes()==before
@@ -170,7 +175,10 @@ def test_historical_malformed_present_schema_rejected_consistently(tmp_path,vari
     c=sqlite3.connect(path); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
     before=path.read_bytes(); logical=logical_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    status=dm.schema_status(path)
+    assert not status["compatible"] and status["migrationNeeded"]
+    expected={"bad_column":"incompatible_orm_column:projects.settings","forged_object":"incompatible_object:trg_edges_normalize_null_insert"}[variant]
+    assert expected in status["reasons"]
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes()==before and logical_snapshot(path)==logical
 
@@ -186,7 +194,8 @@ def test_historical_required_null_data_rejected_consistently(tmp_path):
     c.execute("UPDATE projects SET name=NULL"); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
     before=path.read_bytes(); logical=logical_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    status=dm.schema_status(path)
+    assert not status["compatible"] and status["migrationNeeded"] and "incompatible_orm_column:projects.name" in status["reasons"]
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes()==before and logical_snapshot(path)==logical
 

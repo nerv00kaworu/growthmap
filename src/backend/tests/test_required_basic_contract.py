@@ -46,7 +46,8 @@ def test_missing_mandatory_table_rejected_everywhere_before_mutation(tmp_path,ve
     c=sqlite3.connect(path); c.execute(f"PRAGMA user_version={version}"); c.commit(); c.close()
     mutate(path,table); before=path.read_bytes(); logical=logical_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    status=dm.schema_status(path)
+    assert not status["compatible"] and status["migrationNeeded"] and f"required_table:{table}" in status["reasons"]
     with pytest.raises(Exception): asyncio.run(run_migration(path))
     assert path.read_bytes()==before and logical_snapshot(path)==logical
 
@@ -57,6 +58,10 @@ def test_missing_non_orm_basic_column_rejected_everywhere_before_mutation(tmp_pa
     c=sqlite3.connect(path); c.execute(f"PRAGMA user_version={version}"); c.commit(); c.close()
     mutate(path,table,column); before=path.read_bytes(); logical=logical_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    with pytest.raises(ValueError): dm.schema_status(path)
+    if (table,column)==("provider_configs","id"):
+        with pytest.raises(ValueError,match="foreign key check failed"): dm.schema_status(path)
+    else:
+        status=dm.schema_status(path)
+        assert not status["compatible"] and status["migrationNeeded"] and f"required_column:{table}.{column}" in status["reasons"]
     with pytest.raises(Exception): asyncio.run(run_migration(path))
     assert path.read_bytes()==before and logical_snapshot(path)==logical
