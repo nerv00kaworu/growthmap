@@ -63,7 +63,7 @@ OBJECT_OWNERS = {
 def applicable_objects(existing_tables):
     """Return canonical objects whose owning table exists."""
     tables = set(existing_tables)
-    return {name: sql for name, sql in OBJECT_SQL.items() if OBJECT_OWNERS[name] in tables}
+    return {name: meta["sql"] for name, meta in OBJECT_METADATA.items() if meta["owner"] in tables}
 
 
 def authority_critical_fk_violations(rows):
@@ -224,3 +224,144 @@ def provider_selection_contract_problem(table_info, foreign_keys, table_sql):
     revision_bounds = re.search(r"check\(+\s*selection_revision\s*>\s*=\s*1\s+and\s+selection_revision\s*<\s*=\s*9007199254740991\s*\)+", normalized)
     if not (revision_between or revision_bounds): return "revision check"
     return None
+
+# Canonical migration-owned table surface. Optional tables may be absent from
+# historical authoring databases, but no consumer maintains a second copy.
+CANONICAL_TABLES = frozenset({
+    "projects","nodes","edges","content_blocks","suggestions","action_logs",
+    "provider_configs","provider_selection","branches","agent_artifacts",
+    "agent_sessions","agent_grants","agent_receipts","agent_proposals",
+    "agent_events","agent_readbacks",
+})
+REQUIRED_TABLE_COLUMNS = {
+ "projects":frozenset({"id","name","status","created_at","updated_at"}),
+ "nodes":frozenset({"id","project_id","title","node_type","status","maturity"}),
+ "edges":frozenset({"id","project_id","from_node_id","to_node_id","relation_type"}),
+ "content_blocks":frozenset({"id","node_id","block_type","content","order_index"}),
+ "action_logs":frozenset({"id","project_id","actor_type","action_type","created_at"}),
+ "provider_configs":frozenset({"id","name","provider_type","model_name","enabled"}),
+}
+OBJECT_METADATA = {
+ name: {"kind": "index" if name in INDEXES else "trigger", "owner": OBJECT_OWNERS[name], "sql": sql}
+ for name, sql in OBJECT_SQL.items()
+}
+
+
+def version_policy(version):
+    """Pure, explicit version decision; never encode policy in exception text."""
+    integer = isinstance(version, int) and not isinstance(version, bool)
+    supported = integer and 0 <= version <= CURRENT_USER_VERSION
+    current = supported and version == CURRENT_USER_VERSION
+    return {
+        "version": version,
+        "importableHistorical": supported and not current,
+        "runnableCurrent": current,
+        "migratable": supported and not current,
+        "supported": supported,
+        "newer": integer and version > CURRENT_USER_VERSION,
+        "reasons": () if supported else (("user_version:newer",) if integer and version > CURRENT_USER_VERSION else ("user_version:invalid",)),
+    }
+
+
+def _snapshot_parts(snapshot):
+    tables = set(snapshot.get("tables", ()))
+    info = snapshot.get("tableInfo", {})
+    objects = snapshot.get("objects", {})
+    return tables, info, objects
+
+
+def evaluate_snapshot(snapshot):
+    """Evaluate a plain, connection-free canonical snapshot.
+
+    Missing current additive fields/objects are migration work on historical
+    versions. Incompatible *present* declarations and authority are always
+    rejected, before a migrator is allowed to mutate anything.
+    """
+    policy = version_policy(snapshot.get("version"))
+    tables, infos, objects = _snapshot_parts(snapshot)
+    reasons = list(policy["reasons"])
+    fatal = bool(reasons)
+    current = policy["runnableCurrent"]
+
+    for table, required in REQUIRED_TABLE_COLUMNS.items():
+        if table not in tables:
+            reasons.append(f"required_table:{table}"); fatal = fatal or snapshot.get("enforceBasicRequired", True); continue
+        missing = required - {row[1] for row in infos.get(table, ())}
+        if missing:
+            reasons.extend(f"required_column:{table}.{name}" for name in sorted(missing)); fatal = fatal or snapshot.get("enforceBasicRequired", True)
+
+    specs = list(COLUMNS) + [spec for spec in TABLE_CONDITIONAL_COLUMNS if spec[0] in tables]
+    additive = {(spec[0], spec[1]) for spec in specs}
+    for spec in specs:
+        row = next((row for row in infos.get(spec[0], ()) if row[1] == spec[1]), None)
+        if row is None:
+            reasons.append(f"column:{spec[0]}.{spec[1]}")
+            if current: fatal = True
+        elif not column_matches(row, spec):
+            reasons.append(f"incompatible_column:{spec[0]}.{spec[1]}"); fatal = True
+
+    for table, columns in ORM_READ_COLUMNS.items():
+        if table == "provider_selection": continue
+        rows = {row[1]: row for row in infos.get(table, ())}
+        for name, expected in columns.items():
+            problem = orm_column_problem(rows.get(name), expected)
+            if not problem: continue
+            repairable = (not current and problem == "missing" and (table, name) in additive)
+            if (not current and snapshot.get("version") == 0 and problem == "incompatible"
+                and name in {"created_at", "updated_at"} and table in {"projects","nodes","edges","content_blocks"}
+                and rows.get(name) is not None and str(rows[name][2]).upper() in ("DATETIME","TIMESTAMP") and not bool(rows[name][3])):
+                repairable = True
+            reasons.append(f"{problem}_orm_column:{table}.{name}")
+            if not repairable: fatal = True
+
+    for table, column in snapshot.get("nullViolations", ()):
+        reasons.append(f"null_data:{table}.{column}"); fatal = True
+    expiry = next((row for row in infos.get("agent_grants", ()) if row[1] == "expires_at"), None)
+    if expiry is not None and bool(expiry[3]):
+        reasons.append("incompatible_column:agent_grants.expires_at")
+        if current: fatal = True
+
+    for name, meta in OBJECT_METADATA.items():
+        if meta["owner"] not in tables: continue
+        row = objects.get(name)
+        if row is None:
+            reasons.append(f"object:{name}")
+            if current: fatal = True
+        elif row[0] != meta["kind"] or normalize_sql(row[1]) != normalize_sql(meta["sql"]):
+            reasons.append(f"incompatible_object:{name}"); fatal = True
+
+    selection_present = "provider_selection" in tables
+    if not selection_present and not current:
+        for name in ORM_READ_COLUMNS["provider_selection"]:
+            reasons.append(f"missing_orm_column:provider_selection.{name}")
+    if selection_present:
+        problem = provider_selection_contract_problem(
+            infos.get("provider_selection", ()), snapshot.get("providerSelectionForeignKeys", ()),
+            snapshot.get("providerSelectionSql"))
+        if problem:
+            reasons.append(f"provider_selection:{problem}"); fatal = True
+        rows = snapshot.get("providerSelectionRows", ())
+        valid_row = (len(rows) == 1 and rows[0][0] == 1 and isinstance(rows[0][2], int)
+                     and not isinstance(rows[0][2], bool) and 1 <= rows[0][2] <= 9007199254740991
+                     and rows[0][3] is not None)
+        if rows and not valid_row:
+            reasons.append("provider_selection:row"); fatal = True
+        elif current and not valid_row:
+            reasons.append("provider_selection:row"); fatal = True
+        if snapshot.get("providerSelectionFkViolation"):
+            reasons.append("provider_selection:foreign_key_violation"); fatal = True
+    elif current:
+        reasons.append("provider_selection:missing"); fatal = True
+
+    if policy["supported"] and not current:
+        reasons.append(f"user_version:{snapshot['version']}")
+    # Stable de-duplication keeps public status deterministic.
+    reasons = tuple(dict.fromkeys(reasons))
+    importable = policy["supported"] and not fatal
+    return {
+        "policy": policy, "importable": importable,
+        "compatibleCurrent": current and not fatal and not any(not reason.startswith(("required_table:", "required_column:")) for reason in reasons),
+        "migrationNeeded": policy["supported"] and (not current or bool(reasons)),
+        "migratable": policy["migratable"] and not fatal,
+        "reasons": reasons,
+    }

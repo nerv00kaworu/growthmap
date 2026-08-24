@@ -2,7 +2,25 @@
 import os
 import re
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, applicable_objects, authority_critical_fk_violations, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_METADATA, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, applicable_objects, authority_critical_fk_violations, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem, evaluate_snapshot
+
+async def _canonical_snapshot(conn, foreign_key_rows=None):
+    tables={row[0] for row in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
+    infos={}
+    for table in tables: infos[table]=(await conn.execute(text(f'PRAGMA table_info("{table}")'))).all()
+    objects={row[1]:(row[0],row[2]) for row in (await conn.execute(text("SELECT type,name,sql FROM sqlite_schema WHERE type IN ('index','trigger')"))).all()}
+    nulls=[]
+    for table,columns in ROW_REQUIRED_NON_NULL.items():
+        present={row[1] for row in infos.get(table,())}
+        for column in columns:
+            if column in present and (await conn.execute(text(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1'))).first(): nulls.append((table,column))
+    selection="provider_selection" in tables
+    if foreign_key_rows is None: foreign_key_rows=(await conn.execute(text("PRAGMA foreign_key_check"))).all()
+    return {"version":int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0),"enforceBasicRequired":False,"tables":tables,"tableInfo":infos,"objects":objects,
+      "nullViolations":nulls,"providerSelectionForeignKeys":(await conn.execute(text("PRAGMA foreign_key_list('provider_selection')"))).all() if selection else (),
+      "providerSelectionSql":(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name='provider_selection'"))).scalar() if selection else None,
+      "providerSelectionRows":(await conn.execute(text("SELECT singleton_id,provider_id,selection_revision,updated_at FROM provider_selection"))).all() if selection else (),
+      "providerSelectionFkViolation":bool(authority_critical_fk_violations(foreign_key_rows))}
 
 async def _table_exists(conn, table):
     return (await conn.execute(text("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=:name"), {"name":table})).first() is not None
@@ -152,7 +170,7 @@ async def _validate_objects(conn, create_missing):
     tables={row[0] for row in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
     expected=applicable_objects(tables)
     for name,sql in expected.items():
-        kind="trigger" if name.startswith("trg_") else "index"
+        kind=OBJECT_METADATA[name]["kind"]
         row=(await conn.execute(text("SELECT type,sql FROM sqlite_schema WHERE name=:name"),{"name":name})).first()
         if row is None:
             if create_missing is False:raise RuntimeError(f"missing migration {kind} {name}")
@@ -222,6 +240,9 @@ async def _migrate_sqlite_body(conn):
     # process-global schema contract while the v12 authority table is being born.
     preflight_contract = ORM_READ_COLUMNS if selection_exists else {table: columns for table, columns in ORM_READ_COLUMNS.items() if table != "provider_selection"}
     await _validate_before_mutation(conn,migration_specs,upgrading,version,preflight_contract)
+    shared_preflight=evaluate_snapshot(await _canonical_snapshot(conn, foreign_keys_before))
+    if upgrading and not shared_preflight["migratable"]: raise RuntimeError("incompatible canonical schema before migration: "+shared_preflight["reasons"][0])
+    if not upgrading and not shared_preflight["compatibleCurrent"]: raise RuntimeError("incompatible current canonical schema singleton: "+shared_preflight["reasons"][0])
     if not selection_exists:
         await conn.execute(text(PROVIDER_SELECTION_TABLE_SQL))
         await conn.execute(text("INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP)"))
@@ -261,6 +282,8 @@ async def _migrate_sqlite_body(conn):
     if (await conn.execute(text("PRAGMA foreign_key_check"))).all()!=foreign_keys_before:raise RuntimeError("database foreign key state changed after migration")
     if upgrading:await conn.execute(text(f"PRAGMA user_version={CURRENT_USER_VERSION}"))
     if int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0)!=CURRENT_USER_VERSION:raise RuntimeError("migration version did not validate")
+    shared_final=evaluate_snapshot(await _canonical_snapshot(conn, foreign_keys_before))
+    if not shared_final["compatibleCurrent"]: raise RuntimeError("migration final canonical contract did not validate: "+shared_final["reasons"][0])
 
 
 async def migrate_sqlite(conn):
