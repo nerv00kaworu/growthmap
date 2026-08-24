@@ -74,7 +74,7 @@
     "desktop/credential-lineage.js": "22ea538fa211f731bee1b1852a70a7fcfa787df015b01565f26712a3f388b5f3",
     "desktop/credential-startup.js": "a54fc5a670478e93e11ba2007f37273335740aa6609234494db1620a39bc5c0f",
     "desktop/csp.js": "2e2ca25a7579ba2d7c43df6babf596c8ce8d2a916a4b7797cfe9154939f517cd",
-    "desktop/database-manager.js": "b7919627eafa61ed2b5210fba2e9e64d64195517ceca5dd3b353b48e2be5305a",
+    "desktop/database-manager.js": "c3b8737e7af656bcd2818ed9e1e12be6febe43149a7f69f0df3627cf2e91326a",
     "desktop/database-workspace.js": "5e5ee732f277e2740df06701f9f926e9bc48f1e3f600c32205506985ab67e56d",
     "desktop/device-identity-store.js": "a483d2615efd46e6ce93ad1a7291d93e98cc754da9aa506d670f6fd03110dea2",
     "desktop/e2e-commercial-config.js": "25e10bf6fbaaf85330d30fcf93d69ec0d05d3d3df4259f8c9f5536e2a63ab7a2",
