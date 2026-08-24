@@ -104,6 +104,8 @@ let branchSelectionGeneration = 0;
 let treeRefreshGeneration = 0;
 let aiRequestGeneration = 0;
 let comparisonGeneration = 0;
+let undoOperationGeneration = 0;
+let undoInFlight: Readonly<{ token: symbol; generation: number }> | null = null;
 
 type OperationStepResult = "completed" | "conflict" | "superseded" | "failed";
 
@@ -304,16 +306,23 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       revision: newNode.revision || 1,
     };
     const locallyUpdated = insertChild(rootNode, parentId, child);
-    const hasDurableAuthority = newNode.id !== rootNode.id
+    const settlementRoot = get().rootNode;
+    const hasDurableAuthority = typeof newNode.id === "string"
+      && newNode.id.length > 0
+      && findNode(rootNode, newNode.id) === null
+      && Boolean(settlementRoot && findNode(settlementRoot, newNode.id) === null)
       && newNode.project_id === currentProject.id
       && (newNode.branch_id ?? null) === ownerBranchId
       && newNode.authoritative_parent_id === parentId
-      && typeof newNode.authoritative_project_revision === "number"
-      && Number.isInteger(newNode.authoritative_project_revision)
-      && typeof newNode.revision === "number"
-      && Number.isInteger(newNode.revision);
+      && Number.isSafeInteger(newNode.authoritative_project_revision)
+      && newNode.authoritative_project_revision > 0
+      && Number.isSafeInteger(newNode.authoritative_parent_revision)
+      && newNode.authoritative_parent_revision > 0
+      && Number.isSafeInteger(newNode.revision)
+      && newNode.revision > 0;
     if (!hasDurableAuthority) {
-      set({ rootNode: locallyUpdated, undoStack: [], toast: ui(
+      const responseIdCollision = typeof newNode.id === "string" && Boolean(settlementRoot && findNode(settlementRoot, newNode.id));
+      set({ rootNode: responseIdCollision ? settlementRoot : locallyUpdated, undoStack: [], toast: ui(
         '✅ 節點已建立，但伺服器未回傳安全復原版本；請重新載入專案',
         '✅ 节点已创建，但服务器未返回安全恢复版本；请重新加载项目',
         '✅ Node created, but safe undo authority was missing; reload the project.',
@@ -422,7 +431,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       if (!ownsOperation(owner)) return;
       advanceProjectRevision(set, currentProject);
       const updated = markMainlineChild(rootNode, parentId, childId);
-      set({ rootNode: updated });
+      set({ rootNode: updated, undoStack: [] });
+      ++undoOperationGeneration;
       const { selectedNodeId } = get();
       if (selectedNodeId) set({ selectedNode: findNode(updated, selectedNodeId) });
     } catch (error) {
@@ -466,6 +476,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
   },
 
   undo: async () => {
+    if (undoInFlight) return;
     const { undoStack } = get();
     if (undoStack.length === 0) return;
     const [entry, ...rest] = undoStack;
@@ -476,40 +487,55 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       set({ undoStack: [], error: ui('這項操作無法安全地持久復原；畫面未變更','此操作无法安全地持久恢复；画面未更改','This operation cannot be durably undone; the view was not changed.') });
       return;
     }
+    const operation = Object.freeze({ token: Symbol("undo"), generation: undoOperationGeneration });
+    undoInFlight = operation;
+    // Reserve the exact entry before the first await. New pushes may prepend to
+    // `rest`, but no concurrent undo may consume this or the next entry.
+    set({ undoStack: rest });
+    const current = () => undoInFlight?.token === operation.token
+      && operation.generation === undoOperationGeneration && ownsOperation(owner);
     const inverse = entry.inverse;
     try {
-      await api.deleteNode(inverse.nodeId, inverse.projectRevision, inverse.nodeRevision);
-    } catch (error) {
-      if (!ownsOperation(owner)) return;
+      try {
+        await api.deleteNode(inverse.nodeId, inverse.projectRevision, inverse.nodeRevision);
+      } catch (error) {
+        if (!current()) return;
+        try {
+          const refreshed = await get().refreshTree();
+          if (refreshed !== "refreshed" || !current()) return;
+          const stack = get().undoStack;
+          // Preserve pushes made while DELETE/readback was pending. Restore at
+          // the old boundary, immediately before the still-present old suffix.
+          let boundary = rest.length === 0 ? stack.length : stack.findIndex((candidate) => candidate === rest[0]);
+          if (boundary < 0 || rest.some((candidate, index) => stack[boundary + index] !== candidate)) return;
+          set({ undoStack: [...stack.slice(0, boundary), entry, ...stack.slice(boundary)],
+            error: (error as Error).message,
+            toast: ui('復原失敗；已重新載入目前資料，可再試一次','恢复失败；已重新加载当前数据，可以重试','Undo failed; current data was reloaded and you may retry.') });
+        } catch {
+          if (current()) set({ rootNode: null, selectedNodeId: null, selectedNode: null,
+            error: (error as Error).message,
+            toast: ui('復原失敗，且無法確認最新資料；請重新載入專案後再試','恢复失败，且无法确认最新数据；请重新加载项目后重试','Undo failed and current data could not be verified; reload the project before retrying.') });
+        }
+        return;
+      }
+      if (!current()) return;
+      const localRoot = get().rootNode;
+      const updated = localRoot ? removeNode(localRoot, inverse.nodeId) : null;
+      const selectedNodeId = get().selectedNodeId === inverse.nodeId ? null : get().selectedNodeId;
+      set({ rootNode: updated, selectedNodeId,
+        selectedNode: selectedNodeId && updated ? findNode(updated, selectedNodeId) : null, error: null });
       try {
         const refreshed = await get().refreshTree();
-        if (refreshed === "refreshed" && ownsOperation(owner)) set({
-          error: (error as Error).message,
-          toast: ui('復原失敗；已重新載入目前資料，可再試一次','恢复失败；已重新加载当前数据，可以重试','Undo failed; current data was reloaded and you may retry.'),
-        });
+        if (refreshed === "refreshed" && current()) set({ toast: ui(`已復原: ${entry.description}`,`已恢复: ${entry.description}`,`Restored: ${entry.description}`) });
       } catch {
-        if (ownsOperation(owner)) set({ rootNode: null, selectedNodeId: null, selectedNode: null,
-          error: (error as Error).message,
-          toast: ui('復原失敗，且無法確認最新資料；請重新載入專案後再試','恢复失败，且无法确认最新数据；请重新加载项目后重试','Undo failed and current data could not be verified; reload the project before retrying.'),
-        });
+        if (current()) set({ toast: ui(
+          '節點已刪除，但最新畫面載入失敗；復原已退休，請重新載入專案',
+          '节点已删除，但最新画面加载失败；恢复已退役，请重新加载项目',
+          'Node deleted, but the latest view could not load; undo was retired. Reload the project.',
+        ) });
       }
-      return;
-    }
-    if (!ownsOperation(owner)) return;
-    const localRoot = get().rootNode;
-    const updated = localRoot ? removeNode(localRoot, inverse.nodeId) : null;
-    const selectedNodeId = get().selectedNodeId === inverse.nodeId ? null : get().selectedNodeId;
-    set({ rootNode: updated, undoStack: rest, selectedNodeId,
-      selectedNode: selectedNodeId && updated ? findNode(updated, selectedNodeId) : null, error: null });
-    try {
-      const refreshed = await get().refreshTree();
-      if (refreshed === "refreshed" && ownsOperation(owner)) set({ toast: ui(`已復原: ${entry.description}`,`已恢复: ${entry.description}`,`Restored: ${entry.description}`) });
-    } catch {
-      if (ownsOperation(owner)) set({ toast: ui(
-        '節點已刪除，但最新畫面載入失敗；復原已退休，請重新載入專案',
-        '节点已删除，但最新画面加载失败；恢复已退役，请重新加载项目',
-        'Node deleted, but the latest view could not load; undo was retired. Reload the project.',
-      ) });
+    } finally {
+      if (undoInFlight?.token === operation.token) undoInFlight = null;
     }
   },
 
@@ -612,7 +638,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       if (!ownsOperation(owner)) return;
       advanceProjectRevision(set, currentProject);
       const remaining = branches.filter((branch) => branch.id !== branchId);
-      set({ branches: remaining, branchComparison: null, toast: ui('🗃️ 方案線已封存','🗃️ 方案线已归档','🗃️ Scenario archived') });
+      set({ branches: remaining, branchComparison: null, undoStack: [], toast: ui('🗃️ 方案線已封存','🗃️ 方案线已归档','🗃️ Scenario archived') });
+      ++undoOperationGeneration;
       if (currentBranch?.id === branchId && currentProject) {
         await get().selectBranch(null);
       }
@@ -632,6 +659,8 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
       if (!ownsOperation(owner)) return;
       await api.mergeBranch(branchId, targetNodeId, currentProject.revision, branch.revision, target.revision);
       if (!ownsOperation(owner)) return;
+      set({ undoStack: [] });
+      ++undoOperationGeneration;
       const rootNode = await api.getSubtree(currentProject.root_node_id, false);
       if (!ownsOperation(owner)) return;
       api.rememberResponse(rootNode);
