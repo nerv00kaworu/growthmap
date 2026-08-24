@@ -76,3 +76,103 @@ test("matching PATCH and create responses provide their latest revisions", async
   await api.updateBlock("new", { order_index: 0 });
   assert.equal(bodies[3].expected_revision, 30);
 });
+
+for (const returnedRevision of [13, 12, 3]) test(`create duplicate existing same-owner ID revision ${returnedRevision} preserves exact CAS`, async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11), b("a", "n", 12)]);
+  const bodies: any[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    return response(fetches === 1 ? b("a", "n", returnedRevision) : b("a", "n", 13));
+  }) as typeof fetch;
+  await api.createBlock("n", { block_type: "note", content: {} });
+  await api.updateBlock("a", { order_index: 0 });
+  assert.equal(fetches, 2);
+  assert.deepEqual(bodies[1], { expected_project_revision: 10, expected_node_revision: 11, expected_revision: 12, order_index: 0 });
+});
+
+test("create duplicate cross-owner same UUID cannot replace authority", async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11), p("q", 20, "m"), n("m", "q", 21), b("shared", "m", 22)]);
+  const bodies: any[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    return response(fetches === 1 ? b("shared", "n", 99) : b("shared", "m", 23));
+  }) as typeof fetch;
+  await api.createBlock("n", { block_type: "note", content: {} });
+  await api.updateBlock("shared", { order_index: 0 });
+  assert.equal(fetches, 2);
+  assert.deepEqual(bodies[1], { expected_project_revision: 20, expected_node_revision: 21, expected_revision: 22, order_index: 0 });
+});
+
+for (const order of [[0, 1], [1, 0]] as const) test(`colliding creates grant custody only to first settlement ${order.join("-")}`, async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11)]);
+  const revisions = [30, 90];
+  const resolvers: ((value: Response) => void)[] = [];
+  const bodies: any[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    if (fetches <= 2) return new Promise<Response>(resolve => resolvers.push(resolve));
+    return response(b("same", "n", 100));
+  }) as typeof fetch;
+  const creates = [api.createBlock("n", { block_type: "note", content: {} }), api.createBlock("n", { block_type: "note", content: {} })];
+  resolvers[order[0]](response(b("same", "n", revisions[order[0]])));
+  await creates[order[0]];
+  resolvers[order[1]](response(b("same", "n", revisions[order[1]])));
+  await creates[order[1]];
+  await api.updateBlock("same", { order_index: 0 });
+  assert.equal(fetches, 3);
+  assert.equal(bodies[2].expected_revision, revisions[order[0]]);
+});
+
+test("intervening legitimate readback owns a create response ID", async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11)]);
+  let resolveCreate!: (value: Response) => void;
+  let fetches = 0;
+  const bodies: any[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    if (fetches === 1) return new Promise<Response>(resolve => { resolveCreate = resolve; });
+    return response(b("readback", "n", 41));
+  }) as typeof fetch;
+  const pending = api.createBlock("n", { block_type: "note", content: {} });
+  api.rememberResponse(b("readback", "n", 40));
+  resolveCreate(response(b("readback", "n", 99)));
+  await pending;
+  await api.updateBlock("readback", { order_index: 0 });
+  assert.equal(fetches, 2);
+  assert.equal(bodies[1].expected_revision, 40);
+});
+
+test("unique concurrent creates each retain returned revision", async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11)]);
+  const resolvers: ((value: Response) => void)[] = [];
+  const bodies: any[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    if (fetches <= 2) return new Promise<Response>(resolve => resolvers.push(resolve));
+    return response(b(fetches === 3 ? "left" : "right", "n", fetches === 3 ? 31 : 41));
+  }) as typeof fetch;
+  const left = api.createBlock("n", { block_type: "note", content: {} });
+  const right = api.createBlock("n", { block_type: "note", content: {} });
+  resolvers[1](response(b("right", "n", 40)));
+  resolvers[0](response(b("left", "n", 30)));
+  await Promise.all([left, right]);
+  await api.updateBlock("left", { order_index: 0 });
+  await api.updateBlock("right", { order_index: 0 });
+  assert.equal(fetches, 4);
+  assert.equal(bodies[2].expected_revision, 30);
+  assert.equal(bodies[3].expected_revision, 40);
+});

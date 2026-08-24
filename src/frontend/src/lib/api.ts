@@ -91,7 +91,7 @@ const revisionCache = {
   branches: new Map<string, { projectId: string; revision: number }>(),
 };
 const blockOwnerGenerations = new Map<string, number>();
-type BlockResponseCustody = { projectId: string; nodeId: string; blockId?: string; generation: number };
+type BlockResponseCustody = { projectId: string; nodeId: string; blockId?: string; generation: number; preDispatchBlockIds?: ReadonlySet<string> };
 const ownerKey = (projectId: string, nodeId: string) => `${projectId}\u0000${nodeId}`;
 const ownerGeneration = (projectId: string, nodeId: string) => blockOwnerGenerations.get(ownerKey(projectId, nodeId)) ?? 0;
 function supersedeBlockOwner(projectId: string, nodeId: string): void {
@@ -168,6 +168,14 @@ function rememberBlockResponse(row: Record<string, unknown>, custody: BlockRespo
   const id = row.id as string;
   const revision = row.revision as number;
   const current = revisionCache.blocks.get(id);
+  if (!custody.blockId) {
+    // A create response may establish authority only for an ID that was absent
+    // both at dispatch and settlement. This also gives the first of colliding
+    // concurrent creates (or an intervening legitimate readback) sole custody.
+    if (custody.preDispatchBlockIds?.has(id) || current) return;
+    revisionCache.blocks.set(id, { nodeId: custody.nodeId, projectId: custody.projectId, revision });
+    return;
+  }
   if (!current || revision > current.revision) revisionCache.blocks.set(id, { nodeId: custody.nodeId, projectId: custody.projectId, revision });
 }
 
@@ -350,7 +358,12 @@ function blockExpected(blockId: string) {
     const node = revisionCache.nodes.get(nodeId);
     if (!node) throw new Error("Node revision unavailable; refresh and retry");
     const expected = nodeExpected(nodeId);
-    const custody: BlockResponseCustody = { projectId: node.projectId, nodeId, generation: ownerGeneration(node.projectId, nodeId) };
+    const custody: BlockResponseCustody = {
+      projectId: node.projectId,
+      nodeId,
+      generation: ownerGeneration(node.projectId, nodeId),
+      preDispatchBlockIds: new Set(revisionCache.blocks.keys()),
+    };
     return request(`/nodes/${nodeId}/blocks`, { method: "POST", body: JSON.stringify({ expected_project_revision: expected.expected_project_revision, expected_node_revision: expected.expected_revision, ...data }) }, true, false, custody);
   },
   updateBlock: (blockId: string, data: { expected_project_revision?: number; expected_node_revision?: number; expected_revision?: number; content?: Record<string, string>; block_type?: string; order_index?: number }) => {
