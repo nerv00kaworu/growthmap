@@ -157,7 +157,7 @@
     "desktop/tests/database-manager-deadline.test.js": "fd1f8ac300579fb1ff4e6b4da5e5423fc3e95f2d5c0ee579fd54989ca80a1418",
     "desktop/tests/database-manager-snapshot-drift.test.js": "811405e8d4e340bc2f3e681e0b3a383749a467216444aa73e8fa474118ff6f9a",
     "desktop/tests/database-manager-windows-preflight.test.js": "5bbb291adf5ae4b3261ef190e3e489de378deeaaa4c620985dc25e7494ee2f08",
-    "desktop/tests/database-manager.test.js": "098e560658765637fad20b26ed1e67ee19830c58d2748390c37bccac5ce4bbf7",
+    "desktop/tests/database-manager.test.js": "8e202051327603dc2393660484d6b20826e4ceac389ea4ac85acd8859a12c1b7",
     "desktop/tests/database-workspace.test.js": "6811e7c326605f9ee1c322f3694f0c6aeb33c94ef3ecc336f30fc2614048e4f7",
     "desktop/tests/device-identity-store.test.js": "7a28a6d9e2d5130494fa989826129d2ff9a8666450de49bf3749b4a00eb8dc4e",
     "desktop/tests/license-file.test.js": "a39039cd7f2ab7dc2a1d654b98fb0d5a878770ce27b3251aae9b15fcc446f9e1",
