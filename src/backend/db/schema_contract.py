@@ -285,10 +285,10 @@ def evaluate_snapshot(snapshot):
 
     for table, required in REQUIRED_TABLE_COLUMNS.items():
         if table not in tables:
-            reasons.append(f"required_table:{table}"); fatal = fatal or snapshot.get("enforceBasicRequired", True); continue
+            reasons.append(f"required_table:{table}"); fatal = True; continue
         missing = required - {row[1] for row in infos.get(table, ())}
         if missing:
-            reasons.extend(f"required_column:{table}.{name}" for name in sorted(missing)); fatal = fatal or snapshot.get("enforceBasicRequired", True)
+            reasons.extend(f"required_column:{table}.{name}" for name in sorted(missing)); fatal = True
 
     specs = list(COLUMNS) + [spec for spec in TABLE_CONDITIONAL_COLUMNS if spec[0] in tables]
     additive = {(spec[0], spec[1]) for spec in specs}
@@ -360,7 +360,7 @@ def evaluate_snapshot(snapshot):
     importable = policy["supported"] and not fatal
     return {
         "policy": policy, "importable": importable,
-        "compatibleCurrent": current and not fatal and not any(not reason.startswith(("required_table:", "required_column:")) for reason in reasons),
+        "compatibleCurrent": current and not fatal,
         "migrationNeeded": policy["supported"] and (not current or bool(reasons)),
         "migratable": policy["migratable"] and not fatal,
         "reasons": reasons,

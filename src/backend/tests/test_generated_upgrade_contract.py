@@ -115,25 +115,11 @@ def test_generator_is_logically_deterministic(tmp_path):
 
 
 @pytest.mark.parametrize("variant", NEAR_MISSES)
-def test_near_misses_are_fail_closed_without_migration_mutation(tmp_path, variant):
+def test_current_near_misses_are_fail_closed_without_migration_mutation(tmp_path, variant):
     path=generate(tmp_path/f"near-{variant}.db",variant)
     before_bytes=path.read_bytes(); before=sql_snapshot(path)
-
-    # Entry-point expectations are deliberately distinct: maintenance validate
-    # admits safe historical/missing migration objects, while hostile authority
-    # and newer-version states fail at that outer gate.
-    hostile=variant.startswith("bad_selection") or variant == "newer_v13"
-    if hostile:
-        with pytest.raises(ValueError): dm.validate(path)
-        with pytest.raises(ValueError): dm.schema_status(path)
-    else:
-        assert dm.validate(path)["valid"]
-        status=dm.schema_status(path)
-        assert status["migrationNeeded"] and not status["compatible"]
-        expected="incompatible_orm_column:projects.settings" if variant=="bad_column" else (
-            "object:trg_edges_normalize_null_insert" if variant=="missing_object" else "incompatible_object:trg_edges_normalize_null_insert")
-        assert expected in status["reasons"]
-
+    with pytest.raises(ValueError): dm.validate(path)
+    with pytest.raises(ValueError): dm.schema_status(path)
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes() == before_bytes
     assert sql_snapshot(path) == before
@@ -156,9 +142,8 @@ def test_optional_object_applicability_is_shared_and_owner_driven(tmp_path):
 @pytest.mark.parametrize("variant", ("missing_optional_index","forged_optional_index"))
 def test_current_optional_index_drift_fails_closed_without_mutation(tmp_path, variant):
     path=generate(tmp_path/f"{variant}.db",variant)
-    status=dm.schema_status(path)
-    expected=("object:" if variant.startswith("missing") else "incompatible_object:")+"ux_agent_grants_one_active_workspace"
-    assert expected in status["reasons"] and status["migrationNeeded"] and not status["compatible"]
+    with pytest.raises(ValueError): dm.validate(path)
+    with pytest.raises(ValueError): dm.schema_status(path)
     before=path.read_bytes()
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes()==before
@@ -178,3 +163,38 @@ def test_historical_unrelated_fk_violation_is_preserved(tmp_path):
     asyncio.run(migrate(path))
     c=sqlite3.connect(path); after=c.execute("PRAGMA foreign_key_check").fetchall(); version=c.execute("PRAGMA user_version").fetchone()[0]; c.close()
     assert after==before and version==CURRENT_USER_VERSION
+
+@pytest.mark.parametrize("variant",("bad_column","forged_object"))
+def test_historical_malformed_present_schema_rejected_consistently(tmp_path,variant):
+    path=generate(tmp_path/f"historical-{variant}.db",variant)
+    c=sqlite3.connect(path); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
+    before=path.read_bytes(); logical=logical_snapshot(path)
+    with pytest.raises(ValueError): dm.validate(path)
+    with pytest.raises(ValueError): dm.schema_status(path)
+    with pytest.raises(RuntimeError): asyncio.run(migrate(path))
+    assert path.read_bytes()==before and logical_snapshot(path)==logical
+
+
+def test_historical_required_null_data_rejected_consistently(tmp_path):
+    path=generate(tmp_path/"historical-null.db","v12")
+    c=sqlite3.connect(path)
+    c.execute("PRAGMA foreign_keys=OFF")
+    sql=c.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='projects'").fetchone()[0]
+    c.execute("PRAGMA writable_schema=ON")
+    c.execute("UPDATE sqlite_schema SET sql=? WHERE type='table' AND name='projects'",(sql.replace('name TEXT NOT NULL','name TEXT'),))
+    c.execute("PRAGMA writable_schema=OFF"); version=c.execute("PRAGMA schema_version").fetchone()[0]; c.execute(f"PRAGMA schema_version={version+1}")
+    c.execute("UPDATE projects SET name=NULL"); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
+    before=path.read_bytes(); logical=logical_snapshot(path)
+    with pytest.raises(ValueError): dm.validate(path)
+    with pytest.raises(ValueError): dm.schema_status(path)
+    with pytest.raises(RuntimeError): asyncio.run(migrate(path))
+    assert path.read_bytes()==before and logical_snapshot(path)==logical
+
+
+def test_historical_missing_object_is_importable_and_repaired(tmp_path):
+    path=generate(tmp_path/"historical-missing-object.db","missing_object")
+    c=sqlite3.connect(path); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
+    assert dm.validate(path)["valid"]
+    status=dm.schema_status(path); assert status["migrationNeeded"] and "object:trg_edges_normalize_null_insert" in status["reasons"]
+    asyncio.run(migrate(path))
+    assert dm.schema_status(path)["compatible"]

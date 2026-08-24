@@ -115,10 +115,12 @@ def _validate_connection(connection,source):
  if temp: raise ValueError("temporary schema objects are not allowed")
  quick=connection.execute("PRAGMA quick_check").fetchall()
  if quick!=[("ok",)]: raise ValueError("SQLite quick check failed")
- if connection.execute("PRAGMA foreign_key_check").fetchall(): raise ValueError("foreign key check failed")
+ try: foreign_key_violations=connection.execute("PRAGMA foreign_key_check").fetchall()
+ except sqlite3.DatabaseError as exc: raise ValueError("foreign key check failed") from exc
+ if foreign_key_violations: raise ValueError("foreign key check failed")
  result=evaluate_snapshot(_canonical_snapshot(connection))
  if result["policy"]["newer"]: raise ValueError("database schema is newer than this application")
- if not result["policy"]["supported"] or any(reason.startswith(("required_table:","required_column:","provider_selection:")) for reason in result["reasons"]): raise ValueError("database contains an incompatible canonical schema")
+ if not result["importable"]: raise ValueError("database contains an incompatible canonical schema")
  version=result["policy"]["version"]
  counts={}
  for table,limit in MAX_COUNTS.items():

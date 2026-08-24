@@ -40,3 +40,17 @@ def test_malformed_present_provider_is_never_migratable(tmp_path):
     result=evaluate_snapshot(dm._canonical_snapshot(c)); c.close()
     assert not result["importable"] and not result["migratable"]
     assert any(reason.startswith("provider_selection:") for reason in result["reasons"])
+
+@pytest.mark.parametrize("version", (True, False, 1.0, 12.0, "12", None, -1, 13, 10**100))
+def test_version_policy_rejects_hostile_values(version):
+    policy=version_policy(version)
+    assert not policy["supported"] and not policy["migratable"]
+    assert policy["newer"] is (isinstance(version,int) and not isinstance(version,bool) and version>CURRENT_USER_VERSION)
+
+@pytest.mark.parametrize("missing_table,reason", ((True,"required_table:action_logs"),(False,"required_column:action_logs.id")))
+def test_required_contract_is_always_fatal_and_never_current_compatible(missing_table,reason):
+    tables=set() if missing_table else {"action_logs"}
+    snapshot={"version":CURRENT_USER_VERSION,"tables":tables,"tableInfo":{"action_logs":()},"objects":{},"enforceBasicRequired":False}
+    result=evaluate_snapshot(snapshot)
+    assert reason in result["reasons"]
+    assert not result["importable"] and not result["compatibleCurrent"]

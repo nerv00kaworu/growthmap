@@ -16,7 +16,7 @@ async def _canonical_snapshot(conn, foreign_key_rows=None):
             if column in present and (await conn.execute(text(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NULL LIMIT 1'))).first(): nulls.append((table,column))
     selection="provider_selection" in tables
     if foreign_key_rows is None: foreign_key_rows=(await conn.execute(text("PRAGMA foreign_key_check"))).all()
-    return {"version":int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0),"enforceBasicRequired":False,"tables":tables,"tableInfo":infos,"objects":objects,
+    return {"version":int((await conn.execute(text("PRAGMA user_version"))).scalar() or 0),"tables":tables,"tableInfo":infos,"objects":objects,
       "nullViolations":nulls,"providerSelectionForeignKeys":(await conn.execute(text("PRAGMA foreign_key_list('provider_selection')"))).all() if selection else (),
       "providerSelectionSql":(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name='provider_selection'"))).scalar() if selection else None,
       "providerSelectionRows":(await conn.execute(text("SELECT singleton_id,provider_id,selection_revision,updated_at FROM provider_selection"))).all() if selection else (),
