@@ -10,6 +10,15 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
+test('packaged E2E pre-return launch failures close CDP and kill only the spawned process tree',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(source,/async function abortLaunch\(child,browser,pids\)/);
+ assert.match(source,/browser\?\.close\(\)\.catch/);
+ assert.match(source,/taskkill.*\/PID.*String\(pid\).*\/T.*\/F/s);
+ assert.match(source,/catch\(error\)\{await abortLaunch\(child,browser,pids\);throw error;\}/);
+ assert.doesNotMatch(source,/taskkill.*\/IM|growthmap-sidecar\.exe.*taskkill/is);
+});
+
 test('packaged E2E keeps import input outside the fresh profile and verifies Free writability',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),entrypoint=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/growthmap-e2e-profile-/);assert.match(source,/growthmap-e2e-input-/);assert.doesNotMatch(source,/path\.join\(userData,'fixture\.sqlite'\)/);

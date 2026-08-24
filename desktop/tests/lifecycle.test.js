@@ -15,10 +15,12 @@ test('already exited/crashed child needs no tree kill',async()=>{const c=child()
 test('entitlement probes capture bounded output while production sidecars never expose stderr via ambient CI',()=>{
  assert.deepEqual(probeSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
  assert.deepEqual(sidecarSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','ignore','ignore']});
+ assert.deepEqual(sidecarSpawnOptions('win32',{captureStderr:true}),{detached:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
  const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8');
  assert.match(source,/--entitlement-status[\s\S]*probeSpawnOptions\(\)/);
- assert.match(source,/const spawnOptions=sidecarSpawnOptions\(\)/);
- assert.doesNotMatch(source,/process\.env\.CI|spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
+ assert.match(source,/captureSidecarStderr=process\.env\.CI==='true'&&process\.env\.GROWTHMAP_DESKTOP_E2E==='1'/);
+ assert.match(source,/sidecarSpawnOptions\(process\.platform,\{captureStderr:captureSidecarStderr\}\)/);
+ assert.doesNotMatch(source,/spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
  assert.match(source,/lifecycle\.attach\(spawn\(executable\(\),\[\],\{env,\.\.\.spawnOptions\}\)\)/);
  assert.match(source,/if\(!child\.stdout\|\|!child\.stderr\)return reject/);
 });
