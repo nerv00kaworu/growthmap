@@ -27,3 +27,52 @@ for(const returnedRevision of [2,99])test(`same block UUID reuse rejects delayed
 test("absent node explicit invalidation clears tagged A blocks and preserves distinct B",async()=>{const api=createApiClient();api.rememberResponse([p("p",1),n("n","p",1),b("a","n",1),p("q",4,"m"),n("m","q",5),b("z","m",6)]);api.invalidateBlockOwner("n");api.rememberResponse(b("a","n",2));api.invalidateBlockOwner("n","p");let fetches=0;globalThis.fetch=(async()=>{fetches++;return response(b("z","m",7))}) as typeof fetch;assert.throws(()=>api.updateBlock("a",{order_index:0}),/Block revision unavailable|Block owner unavailable/);assert.equal(fetches,0);await api.updateBlock("z",{order_index:0});assert.equal(fetches,1)});
 
 test("unknown-owner block is never mutation authority",()=>{const api=createApiClient();api.rememberResponse(b("orphan","missing",1));let fetches=0;globalThis.fetch=(async()=>{fetches++;return response(b("orphan","missing",2))}) as typeof fetch;assert.throws(()=>api.updateBlock("orphan",{order_index:0}),/Block owner unavailable/);assert.equal(fetches,0)});
+
+const hostileBlockResponses: { name: string; operation: "patch" | "create"; value: unknown; injectedId: string }[] = [
+  { name: "PATCH wrong ID", operation: "patch", value: b("z", "n", 99), injectedId: "z" },
+  { name: "PATCH wrong node", operation: "patch", value: b("z", "m", 99), injectedId: "z" },
+  { name: "create wrong node", operation: "create", value: b("z", "m", 99), injectedId: "z" },
+  { name: "non-block response", operation: "patch", value: { id: "z", node_id: "n", revision: 99 }, injectedId: "z" },
+  { name: "array mixed envelope", operation: "patch", value: [b("z", "n", 99), { ok: true }], injectedId: "z" },
+  { name: "nested mixed envelope", operation: "patch", value: { ok: true, block: b("z", "n", 99) }, injectedId: "z" },
+];
+
+for (const hostile of hostileBlockResponses) test(`${hostile.name} cannot mint block mutation authority`, async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11), b("a", "n", 12)]);
+  const bodies: unknown[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    return response(fetches === 1 ? hostile.value : b("a", "n", 13));
+  }) as typeof fetch;
+  if (hostile.operation === "create") await api.createBlock("n", { block_type: "note", content: {} });
+  else await api.updateBlock("a", { order_index: 1 });
+  assert.throws(() => api.updateBlock(hostile.injectedId, { order_index: 0 }), /Block revision unavailable/);
+  assert.equal(fetches, 1);
+  await api.updateBlock("a", { order_index: 0 });
+  assert.equal(fetches, 2);
+  assert.deepEqual(bodies[1], { expected_project_revision: 10, expected_node_revision: 11, expected_revision: 12, order_index: 0 });
+});
+
+test("matching PATCH and create responses provide their latest revisions", async () => {
+  const api = createApiClient();
+  api.rememberResponse([p("p", 10), n("n", "p", 11), b("a", "n", 12)]);
+  const bodies: any[] = [];
+  let fetches = 0;
+  globalThis.fetch = (async (_url, init) => {
+    fetches++;
+    bodies.push(JSON.parse(String(init?.body)));
+    if (fetches === 1) return response(b("a", "n", 20));
+    if (fetches === 2) return response(b("a", "n", 21));
+    if (fetches === 3) return response(b("new", "n", 30));
+    return response(b("new", "n", 31));
+  }) as typeof fetch;
+  await api.updateBlock("a", { order_index: 1 });
+  await api.updateBlock("a", { order_index: 0 });
+  assert.equal(bodies[1].expected_revision, 20);
+  await api.createBlock("n", { block_type: "note", content: {} });
+  await api.updateBlock("new", { order_index: 0 });
+  assert.equal(bodies[3].expected_revision, 30);
+});

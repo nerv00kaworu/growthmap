@@ -155,6 +155,22 @@ function blockResponseCustodyIsCurrent(custody: BlockResponseCustody): boolean {
   return !!block && block.nodeId === custody.nodeId && block.projectId === custody.projectId;
 }
 
+function blockResponseMatchesCustody(value: unknown, custody: BlockResponseCustody): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (typeof row.id !== "string" || !row.id || typeof row.node_id !== "string" || !row.node_id) return false;
+  if (typeof row.block_type !== "string" || !row.block_type) return false;
+  if (typeof row.revision !== "number" || !Number.isInteger(row.revision) || row.revision < 1) return false;
+  return row.node_id === custody.nodeId && (!custody.blockId || row.id === custody.blockId);
+}
+
+function rememberBlockResponse(row: Record<string, unknown>, custody: BlockResponseCustody): void {
+  const id = row.id as string;
+  const revision = row.revision as number;
+  const current = revisionCache.blocks.get(id);
+  if (!current || revision > current.revision) revisionCache.blocks.set(id, { nodeId: custody.nodeId, projectId: custody.projectId, revision });
+}
+
 async function request<T>(path: string, options?: RequestInit, rememberResponse = true, aiEnvelope = false, blockCustody?: BlockResponseCustody): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -182,8 +198,12 @@ async function request<T>(path: string, options?: RequestInit, rememberResponse 
   if (res.status === 204) return undefined as T;
   const value = await res.json() as T;
   // Mutation ownership belongs to the dispatch context, never to whichever
-  // project happens to own the node id when the response settles.
-  if (rememberResponse && (!blockCustody || blockResponseCustodyIsCurrent(blockCustody))) remember(value);
+  // project happens to own the node id when the response settles. Block
+  // mutations additionally accept only their single top-level block response.
+  if (rememberResponse) {
+    if (!blockCustody) remember(value);
+    else if (blockResponseCustodyIsCurrent(blockCustody) && blockResponseMatchesCustody(value, blockCustody)) rememberBlockResponse(value, blockCustody);
+  }
   return value;
 }
 
