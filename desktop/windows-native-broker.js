@@ -15,7 +15,7 @@ function createWindowsNativeBroker(options={}){
  const testCrashPhase=testMode&&['after-old-rename-directory-flush','after-old-quarantine-directory-flush'].includes(options.testCrashPhase)?options.testCrashPhase:null;
  if(options.testCrashPhase!==undefined&&!testCrashPhase)throw brokerError('test-crash-phase');
  if(options.testCrashSentinel!==undefined&&(!testCrashPhase||typeof options.testCrashSentinel!=='string'||!path.win32.isAbsolute(options.testCrashSentinel)))throw brokerError('test-crash-sentinel');
- const sourceTimeout=options.sourceTimeout||15000,serverTimeout=options.serverTimeout||15000,connectTimeout=options.connectTimeout||30000,helloTimeout=options.helloTimeout||15000,commandTimeout=options.timeout||15000;
+ const sourceTimeout=options.sourceTimeout||15000,serverTimeout=options.serverTimeout||30000,connectTimeout=options.connectTimeout||30000,helloTimeout=options.helloTimeout||15000,commandTimeout=options.timeout||15000;
  let started=null;
  async function start(){if(started)return started;started=(async()=>{
   const began=process.hrtime.bigint(),telemetry=[],emit=stage=>{const entry=Object.freeze({stage,elapsedMs:Number(process.hrtime.bigint()-began)/1e6});telemetry.push(entry);try{onPhase?.(entry)}catch{}};

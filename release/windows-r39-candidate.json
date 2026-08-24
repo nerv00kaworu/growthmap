@@ -221,7 +221,7 @@
     "desktop/update-recovery.js": "43ab88d4b3caf3204866794e56fc865973eeb1a27d5c3855757ea9064cdce18e",
     "desktop/updater.js": "bae63344bb4ea28377fc7675d92e24b503abf08080fff1e5423c3ae83abc01eb",
     "desktop/windows-native-broker-helper.ps1": "6329fe1251e1fa098d6f370fb69f632227c3b4cb51d56d285d8f4482fce4b9cb",
-    "desktop/windows-native-broker.js": "2a3fdc22fec2fe1a650e958a2e022bcbf105d5c00da8b9fbe4de797e2b4553eb",
+    "desktop/windows-native-broker.js": "6974bf7c5c1bb058752eb68cbf4418ff0b8c9f62a8fb27edf4336809cd24f238",
     "desktop/windows-native-evidence-helper.ps1": "2ca3816d1f588c1b81601cc8534fc8e134c0188f06a70971fe29860bc4e07af8",
     "desktop/windows-native-evidence.js": "76d23093be019a5b61b8ef59e776c08a571b09c6ac55e33c9df45800cbf1be09",
     "desktop/windows-native-replacement-helper.ps1": "cc5903a1cd08ebc064deafe17adbe8c531591dc1e0d73f7f1ce756b5b64ecf35",
