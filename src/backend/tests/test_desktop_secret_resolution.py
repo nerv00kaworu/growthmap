@@ -14,7 +14,17 @@ class CapturingProvider(LLMProvider):
   assert self.api_key=='memory-key'
   try: payload=__import__('json').loads(user)
   except (TypeError,ValueError): payload=None
-  if isinstance(payload,dict) and 'context' in payload and 'mode' in payload:
+  if isinstance(payload,dict) and set(payload)=={'context','mode_key','mode','requested_count','existing_children','existing_siblings','instruction'}:
+   assert isinstance(payload['context'],dict)
+   assert payload['mode_key']=='explore' and isinstance(payload['mode'],str)
+   assert isinstance(payload['requested_count'],int) and not isinstance(payload['requested_count'],bool)
+   for key in ('existing_children','existing_siblings'):
+    assert set(payload[key])=={'label','titles'}
+    assert isinstance(payload[key]['label'],str)
+    assert isinstance(payload[key]['titles'],list) and all(isinstance(x,str) for x in payload[key]['titles'])
+   assert set(payload['instruction'])=={'label','value'}
+   assert isinstance(payload['instruction']['label'],str)
+   assert payload['instruction']['value'] is None or isinstance(payload['instruction']['value'],str)
    return '[{"title":"fixture child","summary":"fixture summary","node_type":"idea"}]'
   return 'OK'
 def fake_provider(config):
