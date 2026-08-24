@@ -1,8 +1,16 @@
 import type { GNode } from "@/lib/types";
 
+export type UndoInverse = Readonly<{
+  kind: "delete-created-node";
+  nodeId: string;
+  nodeRevision: number;
+  projectRevision: number;
+}>;
+
 export interface UndoEntry {
   rootNode: GNode;
   description: string;
+  inverse?: UndoInverse;
   projectId: string;
   branchId: string | null;
   projectGeneration: number;
@@ -75,6 +83,12 @@ export function searchNodes(node: GNode, query: string): string[] {
   return results;
 }
 
-export function pushUndo(stack: UndoEntry[], rootNode: GNode, description: string, owner: Omit<UndoEntry, "rootNode" | "description">): UndoEntry[] {
-  return [{ rootNode, description, ...owner }, ...stack].slice(0, MAX_UNDO);
+export function pushUndo(
+  stack: UndoEntry[],
+  rootNode: GNode,
+  description: string,
+  owner: Omit<UndoEntry, "rootNode" | "description" | "inverse">,
+  inverse?: UndoInverse,
+): UndoEntry[] {
+  return [{ rootNode, description, ...owner, inverse }, ...stack].slice(0, MAX_UNDO);
 }
