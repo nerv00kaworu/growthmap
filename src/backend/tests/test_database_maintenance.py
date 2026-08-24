@@ -11,6 +11,47 @@ def test_schema_status_missing_file_has_coherent_compatibility_contract(tmp_path
  status=dm.schema_status(tmp_path/'missing.db')
  assert status=={'exists':False,'compatible':False,'migrationNeeded':True,'reasons':['database_missing']}
 
+@pytest.mark.parametrize('table',dm.MAX_COUNTS)
+def test_row_limits_reject_on_both_public_validation_paths(tmp_path,monkeypatch,table):
+ p=generate(tmp_path/f'count-{table}.db','v12')
+ c=sqlite3.connect(p);actual=c.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0];c.close()
+ monkeypatch.setitem(dm.MAX_COUNTS,table,actual-1)
+ for check in (dm.validate,dm.schema_status):
+  with pytest.raises(ValueError,match='row limits'):check(p)
+
+@pytest.mark.parametrize(('table','column'),(('projects','name'),('nodes','title'),('content_blocks','content')))
+def test_value_limits_reject_on_both_public_validation_paths(tmp_path,table,column):
+ p=generate(tmp_path/f'value-{table}.db','v12')
+ c=sqlite3.connect(p);c.execute(f'UPDATE "{table}" SET "{column}"=zeroblob(?)',(16*1024*1024+1,));c.commit();c.close()
+ for check in (dm.validate,dm.schema_status):
+  with pytest.raises(ValueError,match='value limits'):check(p)
+
+@pytest.mark.parametrize('table',dm.MAX_COUNTS)
+def test_schema_status_missing_count_table_uses_evaluator_reason(tmp_path,table):
+ p=generate(tmp_path/f'missing-{table}.db','v12');c=sqlite3.connect(p)
+ for dependent in ('content_blocks','edges','nodes','branches','action_logs'):
+  if dependent!=table:c.execute(f'DELETE FROM "{dependent}"')
+ c.execute('DELETE FROM projects')
+ c.execute(f'DROP TABLE "{table}"');c.commit();c.close()
+ status=dm.schema_status(p)
+ assert status['compatible'] is False and f'required_table:{table}' in status['reasons']
+
+@pytest.mark.parametrize(('table','column'),(('projects','name'),('nodes','title'),('content_blocks','content')))
+def test_schema_status_missing_bounded_column_uses_evaluator_reason(tmp_path,table,column):
+ p=generate(tmp_path/f'missing-{table}-{column}.db','v12');c=sqlite3.connect(p)
+ c.execute(f'ALTER TABLE "{table}" DROP COLUMN "{column}"');c.commit();c.close()
+ status=dm.schema_status(p)
+ assert status['compatible'] is False and any(f'{table}.{column}' in reason for reason in status['reasons'])
+
+
+def test_current_validation_counts_shape_and_status_are_unchanged(tmp_path):
+ p=generate(tmp_path/'current-meta.db','v12')
+ meta=dm.validate(p)
+ assert set(meta['counts'])==set(dm.MAX_COUNTS)|{'activeProjects'}
+ assert meta['counts']['activeProjects']==1
+ status=dm.schema_status(p)
+ assert status['compatible'] is True and status['migrationNeeded'] is False and status['reasons']==[]
+
 def test_durability_metadata_matches_platform_contract(tmp_path):
  p=tmp_path/'flush.bin';p.write_bytes(b'durability-evidence')
  result=dm._durability(p,p.parent)

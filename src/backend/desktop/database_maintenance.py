@@ -118,20 +118,26 @@ def _validate_connection(connection,source,require_importable=True):
  try: foreign_key_violations=connection.execute("PRAGMA foreign_key_check").fetchall()
  except sqlite3.DatabaseError as exc: raise ValueError("foreign key check failed") from exc
  if foreign_key_violations: raise ValueError("foreign key check failed")
- result=evaluate_snapshot(_canonical_snapshot(connection))
+ snapshot=_canonical_snapshot(connection)
+ result=evaluate_snapshot(snapshot)
  if result["policy"]["newer"]: raise ValueError("database schema is newer than this application")
+ counts={}
+ for table,limit in MAX_COUNTS.items():
+  if table in snapshot["tables"]:
+   counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+   if counts[table]>limit: raise ValueError("database row limits exceeded")
+ project_columns={row[1] for row in snapshot["tableInfo"].get("projects",())}
+ if {"status"}<=project_columns:
+  counts["activeProjects"]=int(connection.execute("SELECT COUNT(*) FROM projects WHERE status='active'").fetchone()[0])
+ # Bound potentially hostile values without materializing them. Missing
+ # surfaces remain evaluator diagnostics rather than becoming SQL errors.
+ for table,column in (("projects","name"),("nodes","title"),("content_blocks","content")):
+  present={row[1] for row in snapshot["tableInfo"].get(table,())}
+  if column in present and connection.execute(f'SELECT 1 FROM "{table}" WHERE length("{column}")>16777216 LIMIT 1').fetchone(): raise ValueError("database value limits exceeded")
  if require_importable and not result["importable"]: raise ValueError("database contains an incompatible canonical schema")
  version=result["policy"]["version"]
  if not require_importable:
   return {"valid":True,"userVersion":version,"pageCount":page_count,"pageSize":page_size,"_canonicalResult":result}
- counts={}
- for table,limit in MAX_COUNTS.items():
-  counts[table]=int(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
-  if counts[table]>limit: raise ValueError("database row limits exceeded")
- counts["activeProjects"]=int(connection.execute("SELECT COUNT(*) FROM projects WHERE status='active'").fetchone()[0])
- # Bound potentially hostile values without materializing them.
- for table,column in (("projects","name"),("nodes","title"),("content_blocks","content")):
-  if connection.execute(f'SELECT 1 FROM "{table}" WHERE length("{column}")>16777216 LIMIT 1').fetchone(): raise ValueError("database value limits exceeded")
  return {"valid":True,"userVersion":version,"counts":counts,"pageCount":page_count,"pageSize":page_size}
 
 def _open_validated(source,require_importable=True):
