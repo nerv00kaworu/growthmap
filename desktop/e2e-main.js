@@ -33,6 +33,7 @@ if(process.env.GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE==='1'){
  require.cache[secretModule].exports.createSecretStore=options=>{const store=original(options),hydrate=store.hydrate.bind(store);store.hydrate=async()=>{await hydrate();throw new Error('Injected E2E hydration failure')};return store};
  phase('hydration-failure-injected');
 }
+require('./lifecycle').enableIsolatedE2EDiagnostics();
 phase('main-required');
 require('./main');
 app.on('browser-window-created',(_event,window)=>window.webContents.on('did-finish-load',()=>window.webContents.executeJavaScript(`document.documentElement.dataset.growthmapRendererReady='true'`).catch(()=>{})));

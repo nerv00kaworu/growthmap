@@ -15,12 +15,18 @@ test('already exited/crashed child needs no tree kill',async()=>{const c=child()
 test('entitlement probes capture bounded output while production sidecars never expose stderr via ambient CI',()=>{
  assert.deepEqual(probeSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','pipe','pipe']});
  assert.deepEqual(sidecarSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','ignore','ignore']});
- assert.deepEqual(sidecarSpawnOptions('win32',{captureStderr:true}),{detached:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
- const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8');
+ const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),e2e=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/--entitlement-status[\s\S]*probeSpawnOptions\(\)/);
- assert.match(source,/captureSidecarStderr=process\.env\.CI==='true'&&process\.env\.GROWTHMAP_DESKTOP_E2E==='1'/);
- assert.match(source,/sidecarSpawnOptions\(process\.platform,\{captureStderr:captureSidecarStderr\}\)/);
+ assert.match(e2e,/enableIsolatedE2EDiagnostics\(\)/);
+ assert.doesNotMatch(source,/process\.env\.CI|GROWTHMAP_DESKTOP_E2E/);
+ assert.match(source,/const spawnOptions=sidecarSpawnOptions\(\)/);
  assert.doesNotMatch(source,/spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
  assert.match(source,/lifecycle\.attach\(spawn\(executable\(\),\[\],\{env,\.\.\.spawnOptions\}\)\)/);
  assert.match(source,/if\(!child\.stdout\|\|!child\.stderr\)return reject/);
+});
+
+test('isolated E2E entrypoint capability explicitly enables bounded sidecar stderr',()=>{
+ const script="const l=require('./lifecycle');l.enableIsolatedE2EDiagnostics();process.stdout.write(JSON.stringify(l.sidecarSpawnOptions('win32')))";
+ const result=require('node:child_process').spawnSync(process.execPath,['-e',script],{cwd:path.resolve(__dirname,'..'),encoding:'utf8'});
+ assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),{detached:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
 });
