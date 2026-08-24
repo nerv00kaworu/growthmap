@@ -2,6 +2,7 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version 3
 $Protocol=1
 $MaxLine=65536
+[Console]::Error.WriteLine('HELPER_START')
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -23,6 +24,7 @@ public static class GrowthMapBrokerNative {
  public static void FlushDirectory(string p){using(var h=CreateFileW(p,0x40000000,7,IntPtr.Zero,3,0x22000000,IntPtr.Zero)){if(h.IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());if(!FlushFileBuffers(h))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}}
 }
 '@
+[Console]::Error.WriteLine('NATIVE_TYPE_READY')
 $TestFault=if($env:NODE_ENV-eq'test' -and $env:GROWTHMAP_BROKER_TEST_FAULT-in@('open','rename','flush')){$env:GROWTHMAP_BROKER_TEST_FAULT}else{''}
 $TestCrashPhase=if($env:NODE_ENV-eq'test' -and $env:GROWTHMAP_BROKER_TEST_CRASH_PHASE-in@('after-old-rename-directory-flush','after-old-quarantine-directory-flush')){$env:GROWTHMAP_BROKER_TEST_CRASH_PHASE}else{''}
 function Test-Crash([string]$phase){if($TestCrashPhase-ne$phase){return};$p=$env:GROWTHMAP_BROKER_TEST_CRASH_SENTINEL;if([string]::IsNullOrWhiteSpace($p)-or-not[IO.Path]::IsPathRooted($p)-or$p.StartsWith('\\')){throw 'request'};$d=[IO.Path]::GetDirectoryName($p);[IO.Directory]::CreateDirectory($d)|Out-Null;$b=[Text.Encoding]::UTF8.GetBytes($phase);$s=[IO.FileStream]::new($p,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read);try{$s.Write($b,0,$b.Length);$s.Flush($true)}finally{$s.Dispose()};NFlush $d;[Environment]::FailFast('GrowthMap allowlisted native test cutpoint')}
@@ -52,9 +54,12 @@ $pipe=$null;$reader=$null;$writer=$null;$evidenceHandles=@{};$script:tx=$null
 try{
  $name=$env:GROWTHMAP_BROKER_PIPE;$nonce=$env:GROWTHMAP_BROKER_NONCE
  if($name-notmatch'^[0-9a-f]{32}$'-or$nonce-notmatch'^[0-9a-f]{64}$'){throw 'env'}
+ [Console]::Error.WriteLine('ENV_READY')
  $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+ [Console]::Error.WriteLine('IDENTITY_READY')
  $security=[IO.Pipes.PipeSecurity]::new();$rights=[IO.Pipes.PipeAccessRights]::ReadWrite-bor[IO.Pipes.PipeAccessRights]::CreateNewInstance
  $security.AddAccessRule([IO.Pipes.PipeAccessRule]::new($sid,$rights,[Security.AccessControl.AccessControlType]::Allow));$security.SetAccessRuleProtection($true,$false)
+ [Console]::Error.WriteLine('PIPE_SECURITY_READY')
  $pipe=[IO.Pipes.NamedPipeServerStream]::new($name,[IO.Pipes.PipeDirection]::InOut,1,[IO.Pipes.PipeTransmissionMode]::Byte,[IO.Pipes.PipeOptions]::Asynchronous-bor[IO.Pipes.PipeOptions]::WriteThrough,65536,65536,$security)
  [Console]::Error.WriteLine('SERVER_CREATED')
  [Console]::Error.WriteLine('WAIT_CLIENT')
