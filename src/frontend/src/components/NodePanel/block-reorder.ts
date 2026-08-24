@@ -16,7 +16,7 @@ function matchesOwner<T extends OrderedBlock>(owner: CoherentOwner<T>, token: Ow
 
 /** One reorder PATCH followed by owner-validated, supersession-safe readback. */
 export async function reorderBlockAuthoritatively<T extends OrderedBlock>(
-  blocks: T[], index: number, direction: -1 | 1, token: OwnerToken, gate: OwnerGate,
+  blocks: readonly T[], index: number, direction: -1 | 1, token: OwnerToken, gate: OwnerGate,
   update: (blockId: string, orderIndex: number) => Promise<unknown>,
   reloadOwner: () => Promise<CoherentOwner<T>>,
   publish: (owner: CoherentOwner<T>) => void,

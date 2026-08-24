@@ -546,7 +546,7 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
           const stack = get().undoStack;
           // Preserve pushes made while DELETE/readback was pending. Restore at
           // the old boundary, immediately before the still-present old suffix.
-          let boundary = rest.length === 0 ? stack.length : stack.findIndex((candidate) => candidate === rest[0]);
+          const boundary = rest.length === 0 ? stack.length : stack.findIndex((candidate) => candidate === rest[0]);
           if (boundary < 0 || rest.some((candidate, index) => stack[boundary + index] !== candidate)) return;
           set({ undoStack: [...stack.slice(0, boundary), entry, ...stack.slice(boundary)],
             error: (error as Error).message,
