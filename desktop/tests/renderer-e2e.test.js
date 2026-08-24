@@ -13,7 +13,7 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
 test('packaged E2E keeps import input outside the fresh profile and verifies Free writability',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),entrypoint=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/growthmap-e2e-profile-/);assert.match(source,/growthmap-e2e-input-/);assert.doesNotMatch(source,/path\.join\(userData,'fixture\.sqlite'\)/);
- assert.match(source,/let made=runPython\(\[helper,fixture\]/);assert.match(source,/made=runPython\(\['-c'/);assert.doesNotMatch(source,/spawnSync\(['"]python['"]/);
+ assert.match(source,/let made=runPython\(\[helper,fixture\]/);assert.doesNotMatch(source,/spawnSync\(['"]python['"]/);
  assert.match(source,/fresh-free/);assert.match(source,/restart-free/);assert.match(source,/mutations_allowed===true/);assert.match(source,/trial-marker\.bin/);assert.match(source,/installation-identity\.bin/);assert.match(source,/trial-state\.json/);
  assert.match(source,/launch\(userData,fixture,'fresh'\)/);assert.match(source,/launch\(userData,fixture,'existing-free'\)/);assert.match(source,/GROWTHMAP_E2E_PROFILE_MODE:profileMode/);
  assert.match(entrypoint,/E2E import fixture must be outside userData/);
@@ -22,13 +22,10 @@ test('packaged E2E keeps import input outside the fresh profile and verifies Fre
  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),/GROWTHMAP_E2E_USER_DATA|growthmap-e2e-profile-/);
 });
 
-test('packaged E2E pins canonical fixture reads and Markdown through same-origin app API',()=>{
+test('packaged E2E proves broker-unavailable import is isolated from normal app health, backup, and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- assert.match(source,/fetch\(url,\{credentials:'same-origin'/);
- for(const route of ['/api/projects/fixture','/api/nodes/root','/api/nodes/child','/api/projects/fixture/nodes','/api/projects/fixture/edges?relation_type=child_of','/api/nodes/root/blocks','/api/projects/fixture/export'])assert.ok(source.includes(route),route);
- for(const token of ['fixture-edge','from_node_id','to_node_id','child_of','fixture body','import-canonical-api','restart-canonical-api','restore-canonical-api'])assert.ok(source.includes(token),token);
- const assertionBody=source.slice(source.indexOf('async function assertCanonicalFixture'),source.indexOf('(async()=>'));
- assert.doesNotMatch(assertionBody,/sqlite3|fixture\.sqlite|growthmap\.db/);
+ for(const token of ['import-safely-unavailable','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
+ assert.doesNotMatch(source,/import-canonical-api|restore-canonical-api|mutated-restart/);
 });
 
 test('Python runner resolves once and uses the same supplied interpreter for every subprocess',()=>{

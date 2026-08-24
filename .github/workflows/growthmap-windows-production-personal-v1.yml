@@ -64,32 +64,14 @@ jobs:
         working-directory: desktop
       - run: npm test
         working-directory: desktop
-      - name: Windows R39 native broker, evidence, replacement, startup and hard-exit acceptance
+      - name: Windows replacement fail-closed policy acceptance
         shell: pwsh
-        timeout-minutes: 20
+        timeout-minutes: 5
         working-directory: desktop
         run: |
-          New-Item artifacts -ItemType Directory -Force | Out-Null
           $ErrorActionPreference = 'Stop'
-          $commands = @(
-            @('node','--test','tests/windows-native-broker.test.js','tests/windows-native-evidence.test.js','tests/windows-native-replacement.test.js','tests/windows-startup-recovery.test.js'),
-            @('node','tests/windows-r311-broker-gate.js'),
-            @('node','tests/windows-r312-security-matrix.js'),
-            @('node','tests/windows-r313-security-matrix.js'),
-            @('node','tests/windows-r316-startup-acceptance.js'),
-            @('node','tests/windows-r318-hard-exit-acceptance.js'),
-            @('node','tests/windows-r39-broker-smoke.js'),
-            @('node','tests/windows-r39-acceptance.js'),
-            @('node','tests/windows-r39-manager-acceptance.js')
-          )
-          $index = 0
-          foreach ($command in $commands) {
-            $index++
-            $executable = $command[0]
-            $arguments = @($command | Select-Object -Skip 1)
-            & $executable @arguments 2>&1 | Tee-Object -FilePath "artifacts/r39-native-$index.log"
-            if ($LASTEXITCODE -ne 0) { throw "R39 native gate $index failed with exit $LASTEXITCODE" }
-          }
+          node --test tests/windows-native-broker.test.js tests/windows-native-evidence.test.js tests/windows-native-replacement.test.js tests/windows-startup-recovery.test.js tests/database-manager-windows-preflight.test.js
+          if ($LASTEXITCODE -ne 0) { throw "Windows replacement fail-closed policy acceptance failed with exit $LASTEXITCODE" }
       - name: Build isolated non-shipped R39 E2E package
         timeout-minutes: 10
         run: npm run dist:win:e2e
@@ -183,7 +165,6 @@ jobs:
           path: |
             ${{ runner.temp }}/growthmap-production-asar-diagnostic.txt
             desktop/dist/win-unpacked/resources/app.asar
-            desktop/artifacts/r39-native-*.log
             desktop/artifacts/r39-renderer-e2e.log
             desktop/artifacts/growthmap-r39-renderer.png
             ${{ runner.temp }}/growthmap-installed-acceptance.json

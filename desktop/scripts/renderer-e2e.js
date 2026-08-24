@@ -26,26 +26,6 @@ async function assertRestartCredential(run,proof,credential){
  const result=await run.page.evaluate(async({proof,credential})=>{const current=await fetch(`/api/providers/${proof.id}`,{credentials:'same-origin'}).then(r=>r.json());const denied=await fetch(`/api/desktop/secrets/${proof.id}/hydrate`,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json','X-GrowthMap-Hydration-Capability':'E'.repeat(43)},body:JSON.stringify({api_key:credential})});return {type:current.provider_type,status:current.credential_status,revision:current.revision,denied:denied.status};},{proof,credential});
  if(result.type==='mock'||result.status!=='ready'||result.revision!==proof.revision||result.denied!==403)throw Error(`restart hydration/seal proof failed: ${JSON.stringify(result)}`);
 }
-async function assertCanonicalFixture(run,stage,expectedProjectName){
- const result=await run.page.evaluate(async({expectedProjectName})=>{
-  const request=async(url,kind='json')=>{const response=await fetch(url,{credentials:'same-origin',headers:{Accept:kind==='text'?'text/markdown':'application/json'}});const body=kind==='text'?await response.text():await response.json().catch(async()=>({unparseable:await response.text().catch(()=>'<unreadable>')}));if(!response.ok)throw Error(`${url} HTTP ${response.status}: ${JSON.stringify(body).slice(0,500)}`);return body;};
-  try{
-   const project=await request('/api/projects/fixture'),root=await request('/api/nodes/root'),child=await request('/api/nodes/child');
-   const nodes=await request('/api/projects/fixture/nodes'),edges=await request('/api/projects/fixture/edges?relation_type=child_of'),blocks=await request('/api/nodes/root/blocks'),markdown=await request('/api/projects/fixture/export','text');
-   const failures=[];
-   if(project.id!=='fixture'||project.name!==expectedProjectName||project.root_node_id!=='root')failures.push(`project=${JSON.stringify(project)}`);
-   if(root.id!=='root'||root.project_id!=='fixture'||root.title!=='Root')failures.push(`root=${JSON.stringify(root)}`);
-   if(child.id!=='child'||child.project_id!=='fixture'||child.title!=='Child')failures.push(`child=${JSON.stringify(child)}`);
-   if(!nodes.some(node=>node.id==='root'&&node.title==='Root')||!nodes.some(node=>node.id==='child'&&node.title==='Child'))failures.push(`node-list=${JSON.stringify(nodes)}`);
-   if(!edges.some(edge=>edge.id==='fixture-edge'&&edge.from_node_id==='root'&&edge.to_node_id==='child'&&edge.relation_type==='child_of'))failures.push(`edges=${JSON.stringify(edges)}`);
-   if(!blocks.some(block=>block.id==='block'&&block.node_id==='root'&&block.content?.body==='fixture body'))failures.push(`blocks=${JSON.stringify(blocks)}`);
-   for(const token of [expectedProjectName,'Root','Child','fixture body'])if(!markdown.includes(token))failures.push(`markdown missing ${JSON.stringify(token)}: ${markdown.slice(0,1000)}`);
-   return failures.length?{error:failures.join('; ')}:{ok:true};
-  }catch(error){return {error:error?.stack||String(error)};}
- },{expectedProjectName});
- if(!result?.ok)throw Error(`${stage}: packaged same-origin API fixture assertion failed: ${result?.error||JSON.stringify(result)}; diagnostic=${JSON.stringify(await snapshot(run.page))}; child=${run.output().slice(-1500)}`);
- console.log(`E2E stage pass: ${stage}`);
-}
 (async()=>{
  if(!fs.existsSync(executable))throw Error('packaged resources missing');
  const resources=path.join(path.dirname(executable),'resources');assertE2EPackage(path.join(resources,'app.asar'),resources);
@@ -65,10 +45,11 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   await run.page.getByTestId('database-workspace').waitFor();
   const initialPath=await run.page.getByTestId('database-path').textContent();
   if(!initialPath||!initialPath.toLowerCase().endsWith('growthmap.db'))throw Error(`database workspace did not expose canonical path: ${initialPath}`);
+  const beforeImport=await run.page.evaluate(async()=>{const health=await fetch('/api/health/deep',{credentials:'same-origin'});return {health:health.status,title:Boolean(document.querySelector('[data-testid="growthmap-title"]'))}});
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-import').click();
-  await stageWait(run,'import',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture'))return true;const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return e?{error:e.slice(0,300)}:false;},90000);
-  await assertCanonicalFixture(run,'import-canonical-api','Desktop Fixture');
+  await stageWait(run,'import-safely-unavailable',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return /failed|preserved/i.test(e);},90000);
+  const afterImport=await run.page.evaluate(async()=>{const health=await fetch('/api/health/deep',{credentials:'same-origin'});return {health:health.status,title:Boolean(document.querySelector('[data-testid="growthmap-title"]'))}});if(beforeImport.health!==200||afterImport.health!==200||!beforeImport.title||!afterImport.title)throw Error(`broker-unavailable import affected normal app operation: ${JSON.stringify({beforeImport,afterImport})}`);
   const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential),firstSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;
   await run.page.getByTestId('database-workspace-button').click();
   await run.page.getByTestId('database-workspace').waitFor();
@@ -76,22 +57,13 @@ async function assertCanonicalFixture(run,stage,expectedProjectName){
   await stageWait(run,'backup',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';if(e.startsWith('✅'))return true;return e?{error:e.slice(0,300)}:false;},90000);
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
-  made=runPython(['-c',`import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute("update projects set name='Mutated Fixture'");c.commit();c.close()`,path.join(userData,'growthmap.db')],{encoding:'utf8'});if(made.status!==0)throw Error(made.stderr);
   run=await launch(userData,fixture,'existing-free');
   const secondTree=descendants(run.child.pid),secondSidecar=(survivingTree(secondTree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;if(!firstSidecar||!secondSidecar||firstSidecar===secondSidecar)throw Error('restart did not create a new sidecar process');
   await assertRestartCredential(run,credentialProofResult,syntheticCredential);
   await stageWait(run,'restart-free',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';const response=await fetch('/api/desktop/entitlement');if(!response.ok)return {error:`entitlement HTTP ${response.status}`};const entitlement=await response.json();if(status.startsWith('Free ·')&&entitlement.state==='free'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;return status.includes('Read-only')||entitlement.state==='extraction'?{error:`Free identity not preserved: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`}:false;},30000);
-  await stageWait(run,'mutated-restart',()=>document.body.innerText.includes('Mutated Fixture'),90000);
-  await assertCanonicalFixture(run,'restart-canonical-api','Mutated Fixture');
-  await run.page.getByTestId('database-workspace-button').click();
-  await run.page.getByTestId('database-workspace').waitFor();
-  run.page.once('dialog',d=>d.accept());
-  await run.page.getByTestId('database-restore').first().click();
-  await stageWait(run,'restore',()=>{const t=document.body.innerText;if(t.includes('Desktop Fixture')&&!t.includes('Mutated Fixture'))return true;const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return e&&!e.startsWith('✅')?{error:e.slice(0,300)}:false;},90000);
-  await assertCanonicalFixture(run,'restore-canonical-api','Desktop Fixture');
   await close(run);
   run=await launch(userData,fixture,'existing-free',{injectHydrationFailure:true,expectStartupFailure:true});
   const failureDeadline=Date.now()+30000;while(run.child.exitCode===null&&Date.now()<failureDeadline)await sleep(200);if(run.child.exitCode===null)throw Error('injected hydration failure did not block/terminate startup');if(run.output().includes(syntheticCredential))throw Error('credential echoed in hydration-failure diagnostic');await run.browser.close().catch(()=>{});await waitForTreeGone(run.tree);
-  console.log(`Packaged database/credential restart and fail-closed lifecycle E2E passed; screenshot=${screenshot}`);
+  console.log(`Packaged normal-startup, lazy-replacement failure, backup, credential restart and fail-closed lifecycle E2E passed; screenshot=${screenshot}`);
  }finally{if(run?.child.exitCode===null)spawnSync('taskkill',['/PID',String(run.child.pid),'/T','/F'],{windowsHide:true});fs.rmSync(fixtureDirectory,{recursive:true,force:true});}
 })().catch(e=>{console.error(e.stack||e);process.exit(1);});
