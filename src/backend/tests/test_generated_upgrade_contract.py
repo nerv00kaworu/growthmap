@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from db.migrations import migrate_sqlite
-from db.schema_contract import CURRENT_USER_VERSION, provider_selection_contract_problem
+from db.schema_contract import CURRENT_USER_VERSION, OBJECT_SQL, applicable_objects, authority_critical_fk_violations, provider_selection_contract_problem
 from desktop import database_maintenance as dm
 from tests.generated_schema_fixtures import GRANT, PROJECT, PROVIDER, generate, logical_snapshot
 
@@ -62,8 +62,6 @@ def test_generated_history_crosses_read_only_maintenance_and_writable_migration(
 
     assert dm.validate(path)["valid"]
     status=dm.schema_status(path)
-    if variant == "v2" and status["reasons"] == ["object:ux_agent_grants_one_active_workspace"]:
-        pytest.xfail("production schema_status unconditionally requires the optional agent_grants index")
     assert status["compatible"] and not status["migrationNeeded"] and status["reasons"] == []
     after=sql_snapshot(path)
     assert after["version"] == CURRENT_USER_VERSION
@@ -136,12 +134,47 @@ def test_near_misses_are_fail_closed_without_migration_mutation(tmp_path, varian
             "object:trg_edges_normalize_null_insert" if variant=="missing_object" else "incompatible_object:trg_edges_normalize_null_insert")
         assert expected in status["reasons"]
 
-    if variant == "bad_selection_row":
-        # Maintenance rejects the dangling authority FK, but writable migration
-        # deliberately preserves arbitrary pre-existing FK violations and accepts
-        # this row. R1 records the production-contract blocker without weakening
-        # the required rejection assertion or changing production validators.
-        pytest.xfail("production migrate_sqlite accepts a provider_selection row with a dangling provider_id FK")
     with pytest.raises(RuntimeError): asyncio.run(migrate(path))
     assert path.read_bytes() == before_bytes
     assert sql_snapshot(path) == before
+
+
+def test_optional_object_applicability_is_shared_and_owner_driven(tmp_path):
+    absent=generate(tmp_path/"absent.db","v2")
+    present=generate(tmp_path/"present.db","v12")
+    for path, expected_optional in ((absent,False),(present,True)):
+        c=sqlite3.connect(path)
+        tables={row[0] for row in c.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+        c.close()
+        applicable=applicable_objects(tables)
+        assert set(applicable) <= set(OBJECT_SQL)
+        assert ("ux_agent_grants_one_active_workspace" in applicable) is expected_optional
+    rows=[("provider_selection",1,"provider_configs",0),("historical_orphans",2,"projects",0)]
+    assert authority_critical_fk_violations(rows) == (rows[0],)
+
+
+@pytest.mark.parametrize("variant", ("missing_optional_index","forged_optional_index"))
+def test_current_optional_index_drift_fails_closed_without_mutation(tmp_path, variant):
+    path=generate(tmp_path/f"{variant}.db",variant)
+    status=dm.schema_status(path)
+    expected=("object:" if variant.startswith("missing") else "incompatible_object:")+"ux_agent_grants_one_active_workspace"
+    assert expected in status["reasons"] and status["migrationNeeded"] and not status["compatible"]
+    before=path.read_bytes()
+    with pytest.raises(RuntimeError): asyncio.run(migrate(path))
+    assert path.read_bytes()==before
+
+
+def test_historical_missing_optional_index_is_repaired(tmp_path):
+    path=generate(tmp_path/"historical-index.db","missing_optional_index")
+    c=sqlite3.connect(path); c.execute("PRAGMA user_version=11"); c.commit(); c.close()
+    asyncio.run(migrate(path))
+    assert dm.schema_status(path)["compatible"]
+
+
+def test_historical_unrelated_fk_violation_is_preserved(tmp_path):
+    path=generate(tmp_path/"historical-fk.db","historical_unrelated_fk")
+    c=sqlite3.connect(path); before=c.execute("PRAGMA foreign_key_check").fetchall(); c.close()
+    assert before and not authority_critical_fk_violations(before)
+    asyncio.run(migrate(path))
+    c=sqlite3.connect(path); after=c.execute("PRAGMA foreign_key_check").fetchall(); version=c.execute("PRAGMA user_version").fetchone()[0]; c.close()
+    assert after==before and version==CURRENT_USER_VERSION

@@ -2,7 +2,7 @@
 import os
 import re
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, INDEXES, TRIGGERS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, applicable_objects, authority_critical_fk_violations, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
 
 async def _table_exists(conn, table):
     return (await conn.execute(text("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=:name"), {"name":table})).first() is not None
@@ -149,10 +149,10 @@ async def _validate_before_mutation(conn, migration_specs, upgrading, version, o
 
 
 async def _validate_objects(conn, create_missing):
-    expected={"ux_edges_one_mainline_per_parent":("index",INDEXES["ux_edges_one_mainline_per_parent"]),**{name:("trigger",sql) for name,sql in TRIGGERS.items()}}
-    if await _table_exists(conn,"agent_grants"):
-        expected["ux_agent_grants_one_active_workspace"]=("index",INDEXES["ux_agent_grants_one_active_workspace"])
-    for name,(kind,sql) in expected.items():
+    tables={row[0] for row in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
+    expected=applicable_objects(tables)
+    for name,sql in expected.items():
+        kind="trigger" if name.startswith("trg_") else "index"
         row=(await conn.execute(text("SELECT type,sql FROM sqlite_schema WHERE name=:name"),{"name":name})).first()
         if row is None:
             if create_missing is False:raise RuntimeError(f"missing migration {kind} {name}")
@@ -209,6 +209,8 @@ async def _migrate_sqlite_body(conn):
     # Preserve the pre-existing FK custody state. Legacy authoring fixtures may
     # contain unrelated historical violations; migration must add none.
     foreign_keys_before=(await conn.execute(text("PRAGMA foreign_key_check"))).all()
+    if authority_critical_fk_violations(foreign_keys_before):
+        raise RuntimeError("provider selection authority foreign key violation")
     migration_specs=list(COLUMNS)
     for spec in TABLE_CONDITIONAL_COLUMNS:
         if await _table_exists(conn,spec[0]):migration_specs.append(spec)

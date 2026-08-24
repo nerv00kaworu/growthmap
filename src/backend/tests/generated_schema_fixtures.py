@@ -106,6 +106,14 @@ def generate(path: Path, variant: str) -> Path:
         elif variant == "bad_column":
             c.execute("ALTER TABLE projects DROP COLUMN settings"); c.execute("ALTER TABLE projects ADD COLUMN settings INTEGER")
         elif variant == "missing_object": c.execute("DROP TRIGGER trg_edges_normalize_null_insert")
+        elif variant == "missing_optional_index": c.execute("DROP INDEX ux_agent_grants_one_active_workspace")
+        elif variant == "forged_optional_index":
+            c.execute("DROP INDEX ux_agent_grants_one_active_workspace")
+            c.execute("CREATE UNIQUE INDEX ux_agent_grants_one_active_workspace ON agent_grants(id)")
+        elif variant == "historical_unrelated_fk":
+            c.execute("CREATE TABLE historical_orphans(id TEXT PRIMARY KEY, project_id TEXT REFERENCES projects(id))")
+            c.execute("INSERT INTO historical_orphans VALUES('orphan','missing-project')")
+            c.execute("PRAGMA user_version=11")
         elif variant == "forged_object":
             c.execute("DROP TRIGGER trg_edges_normalize_null_insert")
             c.execute("CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges BEGIN SELECT 1; END")

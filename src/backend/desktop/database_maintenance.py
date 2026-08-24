@@ -1,7 +1,7 @@
 """Offline SQLite maintenance used by the packaged desktop sidecar."""
 import ctypes, hashlib, json, os, sqlite3, sys
 from pathlib import Path
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_SQL, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, applicable_objects, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem
 MAX_BYTES=int(os.getenv("GROWTHMAP_DB_MAX_BYTES",str(2*1024**3)))
 MAX_COUNTS={"projects":100_000,"nodes":5_000_000,"edges":10_000_000,"content_blocks":5_000_000,"action_logs":20_000_000}
 CORE_TABLES={"projects","nodes","edges","content_blocks","suggestions","action_logs","provider_configs","provider_selection","branches","agent_artifacts","agent_sessions","agent_grants","agent_receipts","agent_proposals","agent_events","agent_readbacks"}
@@ -170,7 +170,8 @@ def schema_status(path):
    row=next((item for item in connection.execute(f'PRAGMA table_info("{spec[0]}")') if item[1]==spec[1]),None)
    if row is None:reasons.append(f"column:{spec[0]}.{spec[1]}")
    elif not column_matches(row,spec):reasons.append(f"incompatible_column:{spec[0]}.{spec[1]}")
-  for name,sql in OBJECT_SQL.items():
+  existing_tables={row[0] for row in connection.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
+  for name,sql in applicable_objects(existing_tables).items():
    row=connection.execute("SELECT sql FROM sqlite_schema WHERE name=?",(name,)).fetchone()
    if row is None:reasons.append(f"object:{name}")
    elif normalize_sql(row[0])!=normalize_sql(sql):reasons.append(f"incompatible_object:{name}")

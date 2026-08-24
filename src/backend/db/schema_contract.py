@@ -46,6 +46,29 @@ TRIGGERS = {
 "trg_provider_revision_update": """CREATE TRIGGER trg_provider_revision_update BEFORE UPDATE OF revision ON provider_configs WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'provider revision out of range'); END""",
 }
 OBJECT_SQL = {**INDEXES, **TRIGGERS}
+# Canonical ownership makes optional-object applicability one shared policy.
+# Objects owned by mandatory tables remain strict whenever schema validation runs.
+OBJECT_OWNERS = {
+    "ux_edges_one_mainline_per_parent": "edges",
+    "ux_agent_grants_one_active_workspace": "agent_grants",
+    "trg_edges_one_mainline_insert": "edges",
+    "trg_edges_one_mainline_update": "edges",
+    "trg_edges_normalize_null_insert": "edges",
+    "trg_edges_normalize_null_update": "edges",
+    "trg_provider_revision_insert": "provider_configs",
+    "trg_provider_revision_update": "provider_configs",
+}
+
+
+def applicable_objects(existing_tables):
+    """Return canonical objects whose owning table exists."""
+    tables = set(existing_tables)
+    return {name: sql for name, sql in OBJECT_SQL.items() if OBJECT_OWNERS[name] in tables}
+
+
+def authority_critical_fk_violations(rows):
+    """Classify SQLite foreign_key_check rows without exposing row identifiers."""
+    return tuple(row for row in rows if len(row) >= 1 and row[0] == "provider_selection")
 
 # affinity, NOT NULL, normalized declared default.
 def _s(affinity, not_null=False, default=None): return (affinity, not_null, default)
