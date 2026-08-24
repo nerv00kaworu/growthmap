@@ -13,6 +13,11 @@ DEEPEN_SYSTEM = (
     "The word suggest is harmless. Write all generated text in English."
 )
 GENERIC = "This is a Mock-mode response. Configure an API key to receive a live AI response."
+LOCALE_CASES = (
+    (EXPAND_SYSTEM, GENERIC),
+    ("Return title, summary, and node_type. 請使用繁體中文。", "這是 Mock 模式的回覆。設定 API Key 後即可獲得真實 AI 回應。"),
+    ("Return title, summary, and node_type. 请使用简体中文。", "这是 Mock 模式的回复。配置 API Key 后即可获得真实 AI 回复。"),
+)
 
 
 def complete(system, payload):
@@ -58,6 +63,20 @@ def test_invalid_mode_and_malformed_envelopes_fail_closed_to_generic():
     ]
     for value in malformed:
         assert complete(EXPAND_SYSTEM, value) == GENERIC
+
+
+def test_extreme_json_nesting_and_nan_fail_closed_without_throwing():
+    depth = 10_000
+    deeply_nested = (
+        "[" * depth + "0" + "]" * depth,
+        '{"x":' * depth + "0" + "}" * depth,
+        "[" * depth + "0" + "]" * (depth - 1),
+        '{"x":' * depth + "0" + "}" * (depth - 1),
+        json.dumps(envelope(count=float("nan"))),
+    )
+    for system, generic in LOCALE_CASES:
+        for user in deeply_nested:
+            assert complete(system, user) == generic
 
 
 def test_task_detection_uses_envelope_and_response_contract():

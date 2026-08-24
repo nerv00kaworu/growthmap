@@ -53,7 +53,7 @@ class MockProvider(LLMProvider):
     def _parse_payload(user: str) -> Optional[dict]:
         try:
             payload = json.loads(user)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, RecursionError):
             return None
         return payload if isinstance(payload, dict) else None
 
