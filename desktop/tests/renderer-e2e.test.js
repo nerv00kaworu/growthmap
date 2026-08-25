@@ -10,6 +10,11 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
+test('packaged E2E follows the current More-menu LLM settings surface',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(source,/getByTestId\('settings-menu-button'\)\.click\(\)/);assert.match(source,/getByTestId\('llm-provider-settings-button'\)\.click\(\)/);assert.doesNotMatch(source,/desktop-settings-button/);
+});
+
 test('packaged E2E has an independent hard deadline with phase evidence and owned-tree cleanup',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  assert.match(source,/const HARD_TIMEOUT_MS=7\*60\*1000/);assert.match(source,/E2E hard timeout after \$\{HARD_TIMEOUT_MS\}ms; phase=\$\{currentPhase\}/);assert.match(source,/process\.exit\(124\)/);assert.match(source,/function killOwnedTree\(child=activeChild\)/);assert.doesNotMatch(source,/taskkill.*\/IM/is);

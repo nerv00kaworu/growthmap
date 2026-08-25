@@ -36,7 +36,7 @@ async function launch(userData,fixture,profileMode,{injectHydrationFailure=false
   if(!browser)throw Error(JSON.stringify(await timeoutDiagnostic({child,debugPort,output,diagnosticPath,electronLogPath}),null,2));
   let page;while(Date.now()<deadline&&!page){pids=[...new Set([...pids,...descendants(child.pid)])];page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(200);}
   if(!page)throw Error(`renderer page missing; child=${output.slice(-1500)}`);
-  const run={child,browser,page,tree:pids,output:()=>output};if(!expectStartupFailure)await stageWait(run,'renderer-ready',()=>Boolean(document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="desktop-settings-button"]')),90000);return run;
+  const run={child,browser,page,tree:pids,output:()=>output};if(!expectStartupFailure)await stageWait(run,'renderer-ready',()=>Boolean(document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="settings-menu-button"]')&&document.querySelector('[data-testid="database-workspace-button"]')),90000);return run;
  }catch(error){await abortLaunch(child,browser,pids);throw error;}
 }
 async function close(run){phase('close-app');await run.page.close();const deadline=Date.now()+20000;while(run.child.exitCode===null&&Date.now()<deadline)await sleep(100);if(run.child.exitCode===null)throw Error('GrowthMap.exe did not exit');await run.browser.close().catch(()=>{});await waitForTreeGone(run.tree);if(activeChild===run.child)activeChild=null;}
@@ -61,7 +61,8 @@ async function assertRestartCredential(run,proof,credential){
  try{
   await stageWait(run,'fresh-free',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';let entitlement;try{const response=await fetch('/api/desktop/entitlement');entitlement=response.ok?await response.json():{http_status:response.status};}catch(error){return {error:`entitlement request failed: ${error?.name||'Error'}`};}if(status.startsWith('Free ·')&&entitlement.state==='free'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;if(status.includes('Read-only')||entitlement.state==='extraction')return {error:`unexpected entitlement: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`};return false;},30000);
   for(const name of ['trial-marker.bin','installation-identity.bin','trial-state.json']){const target=path.join(userData,name);if(!fs.existsSync(target)||fs.statSync(target).size===0)throw Error(`fresh-free: missing initialized Free artifact ${name}`);}
-  await run.page.getByTestId('desktop-settings-button').click();
+  await run.page.getByTestId('settings-menu-button').click();
+  await run.page.getByTestId('llm-provider-settings-button').click();
   await run.page.getByTestId('llm-provider-settings').waitFor();
   if(await run.page.getByTestId('database-workspace').count()||await run.page.getByTestId('database-management').count())throw Error('database controls leaked into LLM Provider settings');
   await run.page.getByTestId('llm-provider-settings-close').click();
