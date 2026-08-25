@@ -10,6 +10,11 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
+test('packaged E2E has an independent hard deadline with phase evidence and owned-tree cleanup',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(source,/const HARD_TIMEOUT_MS=7\*60\*1000/);assert.match(source,/E2E hard timeout after \$\{HARD_TIMEOUT_MS\}ms; phase=\$\{currentPhase\}/);assert.match(source,/process\.exit\(124\)/);assert.match(source,/function killOwnedTree\(child=activeChild\)/);assert.doesNotMatch(source,/taskkill.*\/IM/is);
+});
+
 test('packaged E2E pre-return launch failures close CDP and kill only the spawned process tree',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  assert.match(source,/async function abortLaunch\(child,browser,pids\)/);
