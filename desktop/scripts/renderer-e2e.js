@@ -46,9 +46,12 @@ async function credentialProof(run,credential){
   await window.growthmapDesktop.secrets.set(provider.id,credential);const current=await fetch(`/api/providers/${provider.id}`,{credentials:'same-origin'}).then(r=>r.json());return {id:provider.id,revision:current.revision,status:current.credential_status,type:current.provider_type};
  },credential);if(result.type==='mock'||result.status!=='ready')throw Error(`credential authority set failed: ${JSON.stringify(result)}`);return result;
 }
+async function credentialCheckpoint(run,proof,label){
+ const result=await run.page.evaluate(async proof=>{const current=await fetch(`/api/providers/${proof.id}`,{credentials:'same-origin'}).then(r=>r.json()),has=await window.growthmapDesktop.secrets.has(proof.id);return {type:current.provider_type,status:current.credential_status,revision:current.revision,has};},proof);console.log(`E2E credential checkpoint ${label}: ${JSON.stringify(result)}`);return result;
+}
 async function assertRestartCredential(run,proof,credential){
- const result=await run.page.evaluate(async({proof,credential})=>{const current=await fetch(`/api/providers/${proof.id}`,{credentials:'same-origin'}).then(r=>r.json());const denied=await fetch(`/api/desktop/secrets/${proof.id}/hydrate`,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json','X-GrowthMap-Hydration-Capability':'E'.repeat(43)},body:JSON.stringify({api_key:credential})});return {type:current.provider_type,status:current.credential_status,revision:current.revision,denied:denied.status};},{proof,credential});
- if(result.type==='mock'||result.status!=='ready'||result.revision!==proof.revision||result.denied!==403)throw Error(`restart hydration/seal proof failed: ${JSON.stringify(result)}`);
+ const checkpoint=await credentialCheckpoint(run,proof,'full-restart'),denied=await run.page.evaluate(async({proof,credential})=>(await fetch(`/api/desktop/secrets/${proof.id}/hydrate`,{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json','X-GrowthMap-Hydration-Capability':'E'.repeat(43)},body:JSON.stringify({api_key:credential})})).status,{proof,credential}),result={...checkpoint,denied};
+ if(result.type==='mock'||result.status!=='ready'||result.revision!==proof.revision||result.has!==true||result.denied!==403)throw Error(`restart hydration/seal proof failed: ${JSON.stringify(result)}`);
 }
 (async()=>{
  if(!fs.existsSync(executable))throw Error('packaged resources missing');
@@ -75,10 +78,11 @@ async function assertRestartCredential(run,proof,credential){
   await run.page.getByTestId('database-import').click();
   await stageWait(run,'import-safely-unavailable',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return /failed|preserved/i.test(e);},90000);
   const afterImport=await run.page.evaluate(async()=>{const health=await fetch('/api/health/deep',{credentials:'same-origin'});return {health:health.status,title:Boolean(document.querySelector('[data-testid="growthmap-title"]'))}});if(beforeImport.health!==200||afterImport.health!==200||!beforeImport.title||!afterImport.title)throw Error(`broker-unavailable import affected normal app operation: ${JSON.stringify({beforeImport,afterImport})}`);
-  const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential),firstSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;
+  const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential);await credentialCheckpoint(run,credentialProofResult,'after-set');const firstSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;
   await run.page.getByTestId('database-workspace').waitFor();
   await run.page.getByTestId('database-backup').click();
   await stageWait(run,'backup',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';if(e.startsWith('✅'))return true;return e?{error:e.slice(0,300)}:false;},90000);
+  const afterBackupCredential=await credentialCheckpoint(run,credentialProofResult,'after-backup-restart');if(afterBackupCredential.status!=='ready'||afterBackupCredential.revision!==credentialProofResult.revision||afterBackupCredential.has!==true)throw Error(`backup restart lost credential authority: ${JSON.stringify(afterBackupCredential)}`);
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
   phase('restart-launch');run=await launch(userData,fixture,'existing-free');
