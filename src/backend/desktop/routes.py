@@ -1,6 +1,6 @@
 import json, os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update
 from db.database import get_db
@@ -40,6 +40,7 @@ async def hydrate_secret(provider_id: str, body: HydrateSecretIn, request: Reque
 @router.post("/secrets/hydration/seal", status_code=204)
 async def seal_secret_hydration(request: Request):
     seal_hydration(request)
+    return Response(status_code=204)
 
 @router.put("/secrets/{provider_id}", status_code=204)
 async def set_secret(provider_id: str, body: SecretIn, db: AsyncSession = Depends(get_db)):
