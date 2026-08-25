@@ -71,6 +71,7 @@
       "database-workspace.js",
       "sidecar-error.js",
       "sidecar-readiness.js",
+      "sidecar-port-reservation.js",
       "activation-relaunch.js",
       "request-policy.js",
       "update-policy.js",
