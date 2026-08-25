@@ -10,9 +10,10 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
-test('packaged E2E follows the current More-menu LLM settings surface',()=>{
+test('packaged E2E follows the current More-menu LLM settings surface and reuses the open database modal',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  assert.match(source,/getByTestId\('settings-menu-button'\)\.click\(\)/);assert.match(source,/getByTestId\('llm-provider-settings-button'\)\.click\(\)/);assert.doesNotMatch(source,/desktop-settings-button/);
+ const dbOpens=source.match(/getByTestId\('database-workspace-button'\)\.click\(\)/g)||[];assert.equal(dbOpens.length,1);assert.match(source,/credentialProofResult=await credentialProof[\s\S]{0,500}getByTestId\('database-workspace'\)\.waitFor\(\)[\s\S]{0,150}getByTestId\('database-backup'\)\.click\(\)/);
 });
 
 test('packaged E2E has an independent hard deadline with phase evidence and owned-tree cleanup',()=>{

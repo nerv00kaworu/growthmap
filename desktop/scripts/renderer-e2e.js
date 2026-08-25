@@ -76,7 +76,6 @@ async function assertRestartCredential(run,proof,credential){
   await stageWait(run,'import-safely-unavailable',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return /failed|preserved/i.test(e);},90000);
   const afterImport=await run.page.evaluate(async()=>{const health=await fetch('/api/health/deep',{credentials:'same-origin'});return {health:health.status,title:Boolean(document.querySelector('[data-testid="growthmap-title"]'))}});if(beforeImport.health!==200||afterImport.health!==200||!beforeImport.title||!afterImport.title)throw Error(`broker-unavailable import affected normal app operation: ${JSON.stringify({beforeImport,afterImport})}`);
   const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential),firstSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;
-  await run.page.getByTestId('database-workspace-button').click();
   await run.page.getByTestId('database-workspace').waitFor();
   await run.page.getByTestId('database-backup').click();
   await stageWait(run,'backup',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';if(e.startsWith('✅'))return true;return e?{error:e.slice(0,300)}:false;},90000);
