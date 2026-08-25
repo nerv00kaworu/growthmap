@@ -32,7 +32,7 @@ with TestClient(app) as c:
  assert c.put(url,headers={**h,'X-GrowthMap-Hydration-Capability':'B'*43},json={'api_key':'x'}).status_code==403
  good={**h,'X-GrowthMap-Hydration-Capability':'A'*43}
  assert c.put(url,headers=good,json={'api_key':'x'}).status_code==204
- sealed=c.post('/api/desktop/secrets/hydration/seal',headers=good);assert sealed.status_code==204;assert sealed.content==b''
+ sealed=c.post('/api/desktop/secrets/hydration/seal',headers=good);assert sealed.status_code==200;assert sealed.json()=={'sealed':True}
  assert c.put(url,headers=good,json={'api_key':'y'}).status_code==403
  assert secrets.get(p['id'])=='x'
 ''');assert r.returncode==0,r.stderr

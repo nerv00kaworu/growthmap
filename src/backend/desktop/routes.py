@@ -1,6 +1,6 @@
 import json, os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Depends, Header, Request, Response
+from fastapi import APIRouter, HTTPException, Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update
 from db.database import get_db
@@ -37,10 +37,10 @@ async def hydrate_secret(provider_id: str, body: HydrateSecretIn, request: Reque
         raise HTTPException(409, detail={"code":"PROVIDER_CREDENTIAL_RECOVERY_REQUIRED","message":"Credential recovery is required before hydration"})
     put(provider_id, body.api_key)
 
-@router.post("/secrets/hydration/seal", status_code=204)
+@router.post("/secrets/hydration/seal")
 async def seal_secret_hydration(request: Request):
     seal_hydration(request)
-    return Response(status_code=204)
+    return {"sealed": True}
 
 @router.put("/secrets/{provider_id}", status_code=204)
 async def set_secret(provider_id: str, body: SecretIn, db: AsyncSession = Depends(get_db)):
