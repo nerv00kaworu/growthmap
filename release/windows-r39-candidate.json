@@ -155,7 +155,7 @@
     "desktop/tests/csp-diagnostic.test.js": "de70d2d5116dee5c9f2e435ff08d32595d69ff57dc996112747447dbe4eb66f9",
     "desktop/tests/csp-semantic-identity.test.js": "87b5cf7e70c322b4dac31f4e2316cc15eb173ad84d2f87d8776e22cc71e19a3a",
     "desktop/tests/csp.test.js": "08d2f0e02080ea6aa6e7e3a4eb03e46dd167e54e51d56cc4378f885fc5d83c85",
-    "desktop/tests/database-manager-deadline.test.js": "fd1f8ac300579fb1ff4e6b4da5e5423fc3e95f2d5c0ee579fd54989ca80a1418",
+    "desktop/tests/database-manager-deadline.test.js": "96bf4ffd18e779890e83cf3555d395418dc3f9221f74b733610fca01351334cb",
     "desktop/tests/database-manager-snapshot-drift.test.js": "811405e8d4e340bc2f3e681e0b3a383749a467216444aa73e8fa474118ff6f9a",
     "desktop/tests/database-manager-windows-preflight.test.js": "a6e7e318f16c7f1cdc1f3b550176cffde161b9c6e749918c26f610fb7a1feeb1",
     "desktop/tests/database-manager.test.js": "8e202051327603dc2393660484d6b20826e4ceac389ea4ac85acd8859a12c1b7",
