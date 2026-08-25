@@ -6,11 +6,21 @@ function pythonRunner({spawnSync,env=process.env,platform=process.platform,backe
  const interpreter=resolvePython({spawnSync,env,platform,backendRoot,fsImpl});
  const run=(args,options)=>runPython(spawnSync,interpreter,args,options);run.interpreter=interpreter.executable;run.prefixArgs=interpreter.prefixArgs;return run;
 }
+function normalizedProcess(item){return {...item,ProcessId:Number(item.ProcessId),ParentProcessId:Number(item.ParentProcessId)};}
+function processIdentityKey(item){return `${Number(item.ProcessId)}\u0000${String(item.CreationDate)}\u0000${String(item.ExecutablePath||'').toLowerCase()}`;}
+function processTimestamp(value){const text=String(value||''),wmi=text.match(/^(\d{14})\./);if(wmi)return Number(wmi[1]);const parsed=Date.parse(text);return Number.isFinite(parsed)?parsed:null;}
+function filterProcessTree(processes,rootPid){
+ const items=processes.map(normalizedProcess),byPid=new Map(items.map(item=>[item.ProcessId,item])),root=byPid.get(Number(rootPid));if(!root)return [];
+ const accepted=new Map([[root.ProcessId,root]]);let changed=true;
+ while(changed){changed=false;for(const item of items){if(accepted.has(item.ProcessId))continue;const parent=accepted.get(item.ParentProcessId);if(!parent)continue;const childCreated=processTimestamp(item.CreationDate),parentCreated=processTimestamp(parent.CreationDate);if(childCreated===null||parentCreated===null||childCreated<parentCreated)continue;accepted.set(item.ProcessId,item);changed=true;}}
+ return [...accepted.values()];
+}
+function matchingProcessIdentities(snapshot,current){const expected=new Set(snapshot.map(processIdentityKey));return current.map(normalizedProcess).filter(item=>expected.has(processIdentityKey(item)));}
 function processTree(rootPid){
- const q=`$root=${Number(rootPid)};$all=Get-CimInstance Win32_Process;$seen=@($root);do{$before=$seen.Count;$seen+=@($all|Where-Object{$seen -contains $_.ParentProcessId}|ForEach-Object ProcessId);$seen=@($seen|Sort-Object -Unique)}while($seen.Count -gt $before);$all|Where-Object{$seen -contains $_.ProcessId}|Select-Object ProcessId,ParentProcessId,Name,CommandLine|ConvertTo-Json -Compress`;
+ const q=`$all=Get-CimInstance Win32_Process;$all|Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate,ExecutablePath|ConvertTo-Json -Compress`;
  const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});
  if(r.status!==0)return {error:(r.stderr||`powershell exit ${r.status}`).trim()};
- try{const value=JSON.parse(r.stdout||'[]');return Array.isArray(value)?value:[value];}catch(error){return {error:`invalid process tree JSON: ${error.message}`,stdout:(r.stdout||'').trim()};}
+ try{const value=JSON.parse(r.stdout||'[]');return filterProcessTree(Array.isArray(value)?value:[value],rootPid);}catch(error){return {error:`invalid process tree JSON: ${error.message}`,stdout:(r.stdout||'').trim()};}
 }
 function parseDevToolsWebSocket(output,expectedPort){
  const matches=String(output).matchAll(/DevTools listening on (ws:\/\/[^\s]+)/g);let accepted=null;
@@ -41,4 +51,4 @@ function assertE2EPackage(asarPath,resourcesPath=path.dirname(asarPath)){
  const hash=require('node:crypto').createHash('sha256').update(fs.readFileSync(key)).digest('hex');if(hash!==config.licensePublicKeySha256)throw Error('E2E commercial public key hash mismatch');
  return {metadata,config};
 }
-module.exports={launchArgs,pythonRunner,processTree,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};
+module.exports={launchArgs,pythonRunner,processTree,processIdentityKey,filterProcessTree,matchingProcessIdentities,probeVersion,parseDevToolsWebSocket,tail,timeoutDiagnostic,assertE2EPackage};

@@ -23,11 +23,26 @@ test('packaged E2E has an independent hard deadline with phase evidence and owne
 
 test('packaged E2E pre-return launch failures close CDP and kill only the spawned process tree',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- assert.match(source,/async function abortLaunch\(child,browser,pids\)/);
+ assert.match(source,/async function abortLaunch\(child,browser,snapshot\)/);
  assert.match(source,/browser\?\.close\(\)\.catch/);
  assert.match(source,/taskkill.*\/PID.*String\(pid\).*\/T.*\/F/s);
- assert.match(source,/catch\(error\)\{await abortLaunch\(child,browser,pids\);throw error;\}/);
+ assert.match(source,/catch\(error\)\{await abortLaunch\(child,browser,tree\);throw error;\}/);
  assert.doesNotMatch(source,/taskkill.*\/IM|growthmap-sidecar\.exe.*taskkill/is);
+});
+
+test('packaged E2E survivor checks bind PID to creation time and executable identity',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ for(const token of ['CreationDate','ExecutablePath','processIdentityKey','matchingProcessIdentities','mergeSnapshots'])assert.ok(source.includes(token),token);
+ assert.doesNotMatch(source,/function survivingTree\(pids\)/);
+});
+
+test('process identity helpers reject PID reuse and stale-parent aliases without executable allowlists',()=>{
+ const {filterProcessTree,matchingProcessIdentities}=require('../scripts/renderer-e2e-support'),root={ProcessId:10,ParentProcessId:1,Name:'GrowthMap.exe',CreationDate:'20260825180000.000000+000',ExecutablePath:'C:\\GrowthMap.exe'},child={ProcessId:11,ParentProcessId:10,Name:'growthmap-sidecar.exe',CreationDate:'20260825180001.000000+000',ExecutablePath:'C:\\growthmap-sidecar.exe'},stale={ProcessId:12,ParentProcessId:10,Name:'RuntimeBroker.exe',CreationDate:'20260825170000.000000+000',ExecutablePath:'C:\\Windows\\RuntimeBroker.exe'};
+ assert.deepEqual(filterProcessTree([root,child,stale],10).map(item=>item.ProcessId),[10,11]);
+ assert.equal(matchingProcessIdentities([child],[{...child}]).length,1);
+ assert.equal(matchingProcessIdentities([child],[{...child,CreationDate:'20260825190000.000000+000'}]).length,0);
+ const inspector={ProcessId:11,ParentProcessId:99,Name:'powershell.exe',CreationDate:'20260825190000.000000+000',ExecutablePath:'C:\\Windows\\powershell.exe'},console={ProcessId:13,ParentProcessId:11,Name:'conhost.exe',CreationDate:'20260825190001.000000+000',ExecutablePath:'C:\\Windows\\conhost.exe'};
+ assert.deepEqual(matchingProcessIdentities([child],[inspector,console]),[]);
 });
 
 test('packaged E2E keeps import input outside the fresh profile and verifies Free writability',()=>{

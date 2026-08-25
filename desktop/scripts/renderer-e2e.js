@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),net=require('node:net'),os=require('node:os'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process'),{chromium}=require('playwright-core');
-const {launchArgs,pythonRunner,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage}=require('./renderer-e2e-support');
+const {launchArgs,pythonRunner,processTree,processIdentityKey,matchingProcessIdentities,timeoutDiagnostic,parseDevToolsWebSocket,assertE2EPackage}=require('./renderer-e2e-support');
 if(process.platform!=='win32')throw new Error('Packaged renderer E2E must run on Windows');
 if(process.env.CI!=='true')throw new Error('Renderer E2E is CI-only');
 const root=path.resolve(__dirname,'..');
@@ -13,31 +13,32 @@ function phase(name){currentPhase=name;console.log(`E2E phase: ${name}`);}
 function killOwnedTree(child=activeChild){if(child?.pid)spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true});}
 const hardWatchdog=setTimeout(()=>{console.error(`E2E hard timeout after ${HARD_TIMEOUT_MS}ms; phase=${currentPhase}; childPid=${activeChild?.pid||'none'}; childExit=${activeChild?.exitCode??'null'}; childSignal=${activeChild?.signalCode||'none'}`);killOwnedTree();process.exit(124);},HARD_TIMEOUT_MS);
 function port(){return new Promise((ok,no)=>{const s=net.createServer();s.once('error',no);s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>ok(p));});});}
-function descendants(rootPid){const q=`$root=${rootPid};$all=Get-CimInstance Win32_Process;$seen=@($root);do{$before=$seen.Count;$seen+=@($all|Where-Object{$seen -contains $_.ParentProcessId}|ForEach-Object ProcessId);$seen=@($seen|Sort-Object -Unique)}while($seen.Count -gt $before);$seen -join ','`;const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});return (r.stdout||'').trim().split(',').filter(Boolean).map(Number);}
-function survivingTree(pids){const q=`$ids=@(${pids.join(',')});@(Get-CimInstance Win32_Process|Where-Object{$ids -contains $_.ProcessId}|Select-Object ProcessId,Name,ParentProcessId)|ConvertTo-Json -Compress`;const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});if(r.status!==0)throw Error(`process tree inspection failed: ${(r.stderr||'').trim()}`);const text=(r.stdout||'').trim();if(!text)return [];const parsed=JSON.parse(text);return Array.isArray(parsed)?parsed:[parsed];}
-async function waitForTreeGone(pids,timeout=20000){const deadline=Date.now()+timeout;let survivors=[];do{survivors=survivingTree(pids);if(!survivors.length)return;await sleep(250);}while(Date.now()<deadline);throw Error(`spawned process tree remained after close: ${JSON.stringify(survivors)}`);}
+function processSnapshot(rootPid){const value=processTree(rootPid);if(!Array.isArray(value))throw Error(`process tree inspection failed: ${value?.error||'unknown error'}`);return value;}
+function mergeSnapshots(...snapshots){const byIdentity=new Map();for(const item of snapshots.flat())byIdentity.set(processIdentityKey(item),item);return [...byIdentity.values()];}
+function survivingTree(snapshot){if(!snapshot.length)return [];const ids=[...new Set(snapshot.map(item=>Number(item.ProcessId)))];const q=`$ids=@(${ids.join(',')});@(Get-CimInstance Win32_Process|Where-Object{$ids -contains $_.ProcessId}|Select-Object ProcessId,Name,ParentProcessId,CreationDate,ExecutablePath)|ConvertTo-Json -Compress`;const r=spawnSync('powershell',['-NoProfile','-Command',q],{encoding:'utf8',windowsHide:true});if(r.status!==0)throw Error(`process tree inspection failed: ${(r.stderr||'').trim()}`);const text=(r.stdout||'').trim();if(!text)return [];const value=JSON.parse(text),current=Array.isArray(value)?value:[value];return matchingProcessIdentities(snapshot,current);}
+async function waitForTreeGone(snapshot,timeout=20000){const deadline=Date.now()+timeout;let survivors=[];do{survivors=survivingTree(snapshot);if(!survivors.length)return;await sleep(250);}while(Date.now()<deadline);throw Error(`spawned process tree remained after close: ${JSON.stringify(survivors)}`);}
 async function snapshot(page){return page.evaluate(()=>({url:location.href,title:document.title,text:(document.body?.innerText||'').slice(0,2000),html:(document.body?.innerHTML||'').slice(0,1000)})).catch(()=>({unavailable:true}));}
 async function stageWait(run,name,predicate,timeout=30000){console.log(`E2E stage start: ${name}`);const deadline=Date.now()+timeout;while(Date.now()<deadline){if(run.child.exitCode!==null)throw Error(`${name}: app exited; child=${run.output().slice(-1500)}`);const state=await run.page.evaluate(predicate).catch(()=>null);if(state===true){console.log(`E2E stage pass: ${name}`);return;}if(state&&state.error)throw Error(`${name}: UI error=${state.error}; diagnostic=${JSON.stringify(await snapshot(run.page))}; child=${run.output().slice(-1500)}`);await sleep(250);}throw Error(`${name}: timeout; diagnostic=${JSON.stringify(await snapshot(run.page))}; child=${run.output().slice(-1500)}`);}
-async function abortLaunch(child,browser,pids){
+async function abortLaunch(child,browser,snapshot){
  await browser?.close().catch(()=>{});
- const targets=[...new Set([...(pids||[]),child?.pid].filter(Boolean))].reverse();
+ const targets=[...new Set([...(snapshot||[]).map(item=>item.ProcessId),child?.pid].filter(Boolean))].reverse();
  for(const pid of targets)spawnSync('taskkill',['/PID',String(pid),'/T','/F'],{stdio:'ignore',windowsHide:true});
  const deadline=Date.now()+20000;while(child?.exitCode===null&&Date.now()<deadline)await sleep(100);
- if(pids?.length)await waitForTreeGone(pids).catch(()=>{});
+ if(snapshot?.length)await waitForTreeGone(snapshot).catch(()=>{});
 }
 async function launch(userData,fixture,profileMode,{injectHydrationFailure=false,expectStartupFailure=false}={}){
  if(!['fresh','existing-free'].includes(profileMode))throw Error('invalid E2E profile mode');
  const debugPort=await port(),diagnosticPath=path.join(userData,'e2e-phases.log'),electronLogPath=path.join(userData,'electron.log');
  phase(`launch-${profileMode}${injectHydrationFailure?'-injected-failure':''}`);const child=spawn(executable,launchArgs({userData,debugPort,logPath:electronLogPath}),{env:{...process.env,CI:'true',GROWTHMAP_DESKTOP_E2E:'1',GROWTHMAP_E2E_PROFILE_MODE:profileMode,GROWTHMAP_E2E_USER_DATA:userData,GROWTHMAP_E2E_IMPORT_PATH:fixture,GROWTHMAP_E2E_DIAGNOSTIC_PATH:diagnosticPath,GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE:injectHydrationFailure?'1':'0'},stdio:['ignore','pipe','pipe'],windowsHide:true});
- activeChild=child;let output='',directWebSocket=null,browser,pids=[child.pid];const capture=x=>{output+=x;directWebSocket=parseDevToolsWebSocket(output,debugPort);};child.stdout.on('data',capture);child.stderr.on('data',capture);
+ activeChild=child;let output='',directWebSocket=null,browser,tree=processSnapshot(child.pid);const capture=x=>{output+=x;directWebSocket=parseDevToolsWebSocket(output,debugPort);};child.stdout.on('data',capture);child.stderr.on('data',capture);
  try{
   const deadline=Date.now()+120000;
   while(Date.now()<deadline){if(child.exitCode!==null)throw Error(`app exited early: ${output.slice(-1500)}`);try{browser=await chromium.connectOverCDP(directWebSocket||`http://127.0.0.1:${debugPort}`,{timeout:2000});break;}catch{await sleep(250);}}
   if(!browser)throw Error(JSON.stringify(await timeoutDiagnostic({child,debugPort,output,diagnosticPath,electronLogPath}),null,2));
-  let page;while(Date.now()<deadline&&!page){pids=[...new Set([...pids,...descendants(child.pid)])];page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(200);}
+  let page;while(Date.now()<deadline&&!page){tree=mergeSnapshots(tree,processSnapshot(child.pid));page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(200);}
   if(!page)throw Error(`renderer page missing; child=${output.slice(-1500)}`);
-  const run={child,browser,page,tree:pids,output:()=>output};if(!expectStartupFailure)await stageWait(run,'renderer-ready',()=>Boolean(document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="settings-menu-button"]')&&document.querySelector('[data-testid="database-workspace-button"]')),90000);return run;
- }catch(error){await abortLaunch(child,browser,pids);throw error;}
+  const run={child,browser,page,tree,output:()=>output};if(!expectStartupFailure)await stageWait(run,'renderer-ready',()=>Boolean(document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="settings-menu-button"]')&&document.querySelector('[data-testid="database-workspace-button"]')),90000);return run;
+ }catch(error){await abortLaunch(child,browser,tree);throw error;}
 }
 async function close(run){phase('close-app');await run.page.close();const deadline=Date.now()+20000;while(run.child.exitCode===null&&Date.now()<deadline)await sleep(100);if(run.child.exitCode===null)throw Error('GrowthMap.exe did not exit');await run.browser.close().catch(()=>{});await waitForTreeGone(run.tree);if(activeChild===run.child)activeChild=null;}
 async function credentialProof(run,credential){
@@ -86,7 +87,7 @@ async function assertRestartCredential(run,proof,credential){
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
   phase('restart-launch');run=await launch(userData,fixture,'existing-free');
-  const secondTree=descendants(run.child.pid),secondSidecar=(survivingTree(secondTree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;if(!firstSidecar||!secondSidecar||firstSidecar===secondSidecar)throw Error('restart did not create a new sidecar process');
+  const secondTree=processSnapshot(run.child.pid),secondSidecar=(survivingTree(secondTree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;if(!firstSidecar||!secondSidecar||firstSidecar===secondSidecar)throw Error('restart did not create a new sidecar process');
   await assertRestartCredential(run,credentialProofResult,syntheticCredential);
   await stageWait(run,'restart-free',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';const response=await fetch('/api/desktop/entitlement');if(!response.ok)return {error:`entitlement HTTP ${response.status}`};const entitlement=await response.json();if(status.startsWith('Free ·')&&entitlement.state==='free'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;return status.includes('Read-only')||entitlement.state==='extraction'?{error:`Free identity not preserved: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`}:false;},30000);
   await close(run);
