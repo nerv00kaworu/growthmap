@@ -57,6 +57,15 @@ test('packaged E2E keeps import input outside the fresh profile and verifies Fre
  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),/GROWTHMAP_E2E_USER_DATA|growthmap-e2e-profile-/);
 });
 
+test('expected startup failure may exit before CDP/renderer and still requires no renderer, no secret echo, and clean tree',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+ assert.match(source,/if\(child\.exitCode!==null\)\{if\(expectStartupFailure\)return \{child,browser,page:null,tree,output:/);
+ assert.match(source,/if\(!browser\)\{if\(expectStartupFailure\)return \{child,browser,page:null,tree,output:/);
+ assert.match(source,/if\(run\.page\)throw Error\('injected hydration failure exposed a renderer page'\)/);
+ assert.match(source,/run\.browser\?\.close\(\)\.catch/);
+ assert.match(source,/await waitForTreeGone\(run\.tree\)/);
+});
+
 test('packaged E2E proves broker-unavailable import is isolated from normal app health, backup, and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  for(const token of ['import-safely-unavailable','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
