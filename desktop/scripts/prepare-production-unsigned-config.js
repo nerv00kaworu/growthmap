@@ -10,6 +10,8 @@ if(!fs.statSync(key,{throwIfNoEntry:false})?.isFile())fail('G1 public key is mis
 const expectedMode={schemaVersion:1,mode:'unsigned-commercial',updatesEnabled:false,publisherDisplay:'Unknown Publisher — 月影塵（nerv00kaworu）'};
 let actualMode;try{actualMode=JSON.parse(fs.readFileSync(releaseMode,'utf8'));}catch{fail('external production release mode is missing or invalid JSON');}
 if(JSON.stringify(actualMode)!==JSON.stringify(expectedMode))fail('external production release mode metadata mismatch');
+const stagedMode=path.join(__dirname,'..','dist','production-input','release-mode.json');
+fs.mkdirSync(path.dirname(stagedMode),{recursive:true});fs.writeFileSync(stagedMode,JSON.stringify(actualMode,null,2)+'\n',{flag:'wx'});
 const keyBytes=fs.readFileSync(key),pem=keyBytes.toString('utf8');
 if(!/^-----BEGIN PUBLIC KEY-----\r?\n[\s\S]+\r?\n-----END PUBLIC KEY-----\r?\n?$/.test(pem)||pem.includes('PRIVATE KEY'))fail('G1 input must be an exact public PEM');
 const pin=crypto.createHash('sha256').update(keyBytes).digest('hex');
