@@ -102,7 +102,15 @@ jobs:
           $expected = (git rev-parse 'HEAD:desktop/generated/csp-script-hashes.json').Trim()
           if ($LASTEXITCODE -ne 0 -or $expected -notmatch '^[0-9a-f]{40,64}$') { throw 'Committed CSP blob unavailable' }
           $actual = (git hash-object -- desktop/generated/csp-script-hashes.json).Trim()
-          if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) { throw 'Generated CSP raw bytes differ from committed HEAD' }
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $expected) {
+            $expectedFile = Join-Path $env:RUNNER_TEMP 'growthmap-csp-expected.json'
+            git show 'HEAD:desktop/generated/csp-script-hashes.json' | Set-Content -LiteralPath $expectedFile -Encoding utf8NoBOM
+            if ($LASTEXITCODE -ne 0) { throw 'Committed CSP bytes could not be materialized for diagnostics' }
+            $diff = @(git diff --no-index --unified=3 -- $expectedFile desktop/generated/csp-script-hashes.json 2>&1 | Select-Object -First 160)
+            Write-Host "CSP blob expected=$expected actual=$actual"
+            $diff | ForEach-Object { Write-Host $_ }
+            throw 'Generated CSP raw bytes differ from committed HEAD'
+          }
       - name: Remove bounded test diagnostics before final integrity gate
         shell: pwsh
         run: if (Test-Path desktop/artifacts) { Remove-Item desktop/artifacts -Recurse -Force }
@@ -169,6 +177,8 @@ jobs:
             desktop/dist/win-unpacked/resources/app.asar
             desktop/artifacts/r39-renderer-e2e.log
             desktop/artifacts/growthmap-r39-renderer.png
+            desktop/generated/csp-script-hashes.json
+            ${{ runner.temp }}/growthmap-csp-expected.json
             ${{ runner.temp }}/growthmap-installed-acceptance.json
           if-no-files-found: ignore
           retention-days: 3
