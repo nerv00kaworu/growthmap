@@ -15,8 +15,8 @@ $extract=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-verify';if(Test-P
 if($LASTEXITCODE -ne 0){throw 'Repository-local ASAR extract failed'}
 $productRoots=@(Get-ChildItem $extract -Recurse -File -Filter 'package.json'|ForEach-Object{try{$metadata=Get-Content $_.FullName -Raw|ConvertFrom-Json;if($metadata.name -ceq 'growthmap-desktop' -and $metadata.main -ceq 'main.js'){$_.Directory.FullName}}catch{}})
 if($productRoots.Count -ne 1){throw 'Unique GrowthMap desktop application root absent from ASAR'}
-$appRoot=$productRoots[0];$main=Join-Path $appRoot 'main.js';$releaseMode=Join-Path $appRoot 'release-mode.json'
-$mainPresent=Test-Path $main -PathType Leaf;$releaseModePresent=Test-Path $releaseMode -PathType Leaf
+$appRoot=$productRoots[0];$main=Join-Path $appRoot 'main.js';$releaseModeFile=Join-Path $appRoot 'release-mode.json';$packageMetadata=Get-Content (Join-Path $appRoot 'package.json') -Raw|ConvertFrom-Json
+$mainPresent=Test-Path $main -PathType Leaf;$releaseModePresent=($null-ne$packageMetadata.releaseMode)-and-not(Test-Path $releaseModeFile)
 if(-not $mainPresent -or -not $releaseModePresent){
   $diagnostic=Join-Path $env:RUNNER_TEMP 'growthmap-production-asar-diagnostic.txt'
   @("app_root=$([IO.Path]::GetRelativePath($extract,$appRoot))","main_present=$mainPresent","release_mode_present=$releaseModePresent","files:") + @(Get-ChildItem $appRoot -Recurse -File|ForEach-Object{[IO.Path]::GetRelativePath($appRoot,$_.FullName)}|Sort-Object) | Set-Content $diagnostic -Encoding utf8
@@ -26,7 +26,7 @@ $relativeFiles=Get-ChildItem $appRoot -Recurse -File|ForEach-Object{[IO.Path]::G
 foreach($needle in @('e2e-main.js','e2e-commercial-config.js','create-e2e-fixture')){if($relativeFiles -contains $needle -or ($relativeFiles|Where-Object{$_ -like "*$needle*"})){throw "Forbidden ASAR material: $needle"}}
 $sourceText=(Get-Content $main -Raw)
 if($sourceText -match 'PRIVATE KEY'){throw 'Forbidden ASAR material: PRIVATE KEY'}
-$mode=Get-Content $releaseMode -Raw|ConvertFrom-Json;if($mode.mode -cne 'unsigned-commercial' -or $mode.updatesEnabled -ne $false -or $mode.publisherDisplay -cne 'Unknown Publisher — 月影塵（nerv00kaworu）'){throw 'Unsigned commercial release metadata mismatch'}
+$mode=$packageMetadata.releaseMode;if($mode.mode -cne 'unsigned-commercial' -or $mode.updatesEnabled -ne $false -or $mode.publisherDisplay -cne 'Unknown Publisher — 月影塵（nerv00kaworu）'){throw 'Unsigned commercial release metadata mismatch'}
 $installers=@(Get-ChildItem desktop/dist -File -Filter 'GrowthMap-Setup-*.exe');if($installers.Count-ne 1){throw "Expected exactly one installer, found $($installers.Count)"};$installer=$installers[0]
 if((Get-AuthenticodeSignature $installer.FullName).Status -eq 'Valid'){throw 'No fake signing: candidate must remain unsigned'}
 $installerHash=(Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant();"$installerHash  $($installer.Name)"|Set-Content "$($installer.FullName).sha256" -Encoding ascii
