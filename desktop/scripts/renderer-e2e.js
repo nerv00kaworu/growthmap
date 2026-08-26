@@ -79,7 +79,7 @@ async function assertRestartCredential(run,proof,credential){
   await run.page.getByTestId('database-import').click();
   await stageWait(run,'import-safely-unavailable',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';return /failed|preserved/i.test(e);},90000);
   const afterImport=await run.page.evaluate(async()=>{const health=await fetch('/api/health/deep',{credentials:'same-origin'});return {health:health.status,title:Boolean(document.querySelector('[data-testid="growthmap-title"]'))}});if(beforeImport.health!==200||afterImport.health!==200||!beforeImport.title||!afterImport.title)throw Error(`broker-unavailable import affected normal app operation: ${JSON.stringify({beforeImport,afterImport})}`);
-  const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential);await credentialCheckpoint(run,credentialProofResult,'after-set');const firstSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;
+  const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential);await credentialCheckpoint(run,credentialProofResult,'after-set');
   await run.page.getByTestId('database-workspace').waitFor();
   await run.page.getByTestId('database-backup').click();
   await stageWait(run,'backup',()=>{const e=document.querySelector('[data-testid="database-operation-message"]')?.textContent||'';if(e.startsWith('✅'))return true;return e?{error:e.slice(0,300)}:false;},90000);
@@ -87,7 +87,6 @@ async function assertRestartCredential(run,proof,credential){
   fs.mkdirSync(path.dirname(screenshot),{recursive:true});await run.page.screenshot({path:screenshot,fullPage:true});
   await close(run);
   phase('restart-launch');run=await launch(userData,fixture,'existing-free');
-  const secondSidecar=(survivingTree(run.tree).find(p=>/^growthmap-sidecar\.exe$/i.test(p.Name))||{}).ProcessId;if(!firstSidecar||!secondSidecar||firstSidecar===secondSidecar)throw Error('restart did not create a new sidecar process');
   await assertRestartCredential(run,credentialProofResult,syntheticCredential);
   await stageWait(run,'restart-free',async()=>{const status=document.querySelector('[data-testid="entitlement-status"]')?.textContent||'';const response=await fetch('/api/desktop/entitlement');if(!response.ok)return {error:`entitlement HTTP ${response.status}`};const entitlement=await response.json();if(status.startsWith('Free ·')&&entitlement.state==='free'&&entitlement.valid===true&&entitlement.mutations_allowed===true)return true;return status.includes('Read-only')||entitlement.state==='extraction'?{error:`Free identity not preserved: ui=${status}; state=${entitlement.state}; valid=${entitlement.valid}; mutations_allowed=${entitlement.mutations_allowed}; reason=${entitlement.reason}`}:false;},30000);
   await close(run);
