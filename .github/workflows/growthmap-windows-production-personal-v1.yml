@@ -111,7 +111,10 @@ jobs:
             $diff | ForEach-Object { Write-Host $_ }
             throw 'Generated CSP raw bytes differ from committed HEAD'
           }
-          Copy-Item -LiteralPath $expectedFile -Destination $generatedFile -Force
+          git restore --source=HEAD --worktree -- $generatedFile
+          if ($LASTEXITCODE -ne 0) { throw 'Verified CSP file could not be restored through Git worktree rules' }
+          $cspDirty = @(git status --porcelain=v1 -- $generatedFile)
+          if ($LASTEXITCODE -ne 0 -or $cspDirty.Count) { throw "Verified CSP file remains dirty after Git restore: $($cspDirty -join '; ')" }
       - name: Remove bounded test diagnostics before final integrity gate
         shell: pwsh
         run: if (Test-Path desktop/artifacts) { Remove-Item desktop/artifacts -Recurse -Force }
