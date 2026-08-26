@@ -31,6 +31,7 @@ dialog.showOpenDialog=async(window,options)=>options?.filters?.some(x=>x.extensi
 if(process.env.GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE==='1'){
  const secretModule=require.resolve('./secret-store'),original=require(secretModule).createSecretStore;
  require.cache[secretModule].exports.createSecretStore=options=>{const store=original(options),hydrate=store.hydrate.bind(store);store.hydrate=async()=>{await hydrate();throw new Error('Injected E2E hydration failure')};return store};
+ dialog.showErrorBox=()=>phase('startup-error-box-suppressed');
  phase('hydration-failure-injected');
 }
 require('./lifecycle').enableIsolatedE2EDiagnostics();

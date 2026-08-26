@@ -57,8 +57,10 @@ test('packaged E2E keeps import input outside the fresh profile and verifies Fre
  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),/GROWTHMAP_E2E_USER_DATA|growthmap-e2e-profile-/);
 });
 
-test('expected startup failure may exit before CDP/renderer and still requires no renderer, no secret echo, and clean tree',()=>{
- const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
+test('expected startup failure suppresses only the isolated E2E modal then requires no renderer, no secret echo, and clean tree',()=>{
+ const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8'),entrypoint=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
+ assert.match(entrypoint,/if\(process\.env\.GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE==='1'\)\{[\s\S]*dialog\.showErrorBox=\(\)=>phase\('startup-error-box-suppressed'\)/);
+ assert.equal((entrypoint.match(/dialog\.showErrorBox=/g)||[]).length,1);
  assert.match(source,/if\(child\.exitCode!==null\)\{if\(expectStartupFailure\)return \{child,browser,page:null,tree,output:/);
  assert.match(source,/if\(!browser\)\{if\(expectStartupFailure\)return \{child,browser,page:null,tree,output:/);
  assert.match(source,/if\(run\.page\)throw Error\('injected hydration failure exposed a renderer page'\)/);
