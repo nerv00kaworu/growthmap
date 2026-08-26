@@ -70,7 +70,9 @@ test('expected startup failure suppresses only the isolated E2E modal then requi
 
 test('packaged E2E proves broker-unavailable import is isolated from normal app health, backup, and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- for(const token of ['import-safely-unavailable','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
+ for(const token of ['import-safely-unavailable','import-refusal-health','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
+ assert.match(source,/stageWait\(run,'import-refusal-health',[\s\S]{0,500}afterImport=\{health:'unavailable'/);
+ assert.match(source,/broker-unavailable import precondition failed/);
  assert.doesNotMatch(source,/firstSidecar|secondSidecar|restart did not create a new sidecar process/);
  assert.match(source,/await close\(run\);[\s\S]{0,160}run=await launch\(userData,fixture,'existing-free'\);[\s\S]{0,160}await assertRestartCredential/);
  assert.doesNotMatch(source,/import-canonical-api|restore-canonical-api|mutated-restart/);
