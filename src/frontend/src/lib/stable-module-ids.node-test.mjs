@@ -19,9 +19,16 @@ test("indistinguishable collisions fail closed instead of inheriting iteration o
  const rows=[0,1].map(()=>({resource:`${root}/src/a.ts`,identifier(){return `loader!${root}/src/a.ts`}}));
  assert.throws(()=>assignStableModuleIds(rows,root),/indistinguishable collision/);
 });
-test("Windows slash, drive case, and encoded roots normalize",()=>{
- const values=["C:/Work/Growth Map/src/x.ts","c:\\work\\growth map\\src\\x.ts","C%3A%2FWork%2FGrowth%20Map/src/x.ts"];
- for(const value of values) assert.equal(normalizeModuleIdentifier(value,root),"<PROJECT_ROOT>/src/x.ts");
+test("Windows slash, drive case, and mixed component-encoded roots normalize",()=>{
+ const values=[
+  "C:/Work/Growth Map/src/x.ts",
+  "c:\\work\\growth map\\src\\x.ts",
+  "C%3A%2FWork%2FGrowth%20Map/src/x.ts",
+  "D:%5Ca%5Cgrowthmap%5Cgrowthmap%5Csrc%5Cfrontend/src/x.ts",
+  "D%3A%5Ca%5Cgrowthmap%5Cgrowthmap%5Csrc%5Cfrontend/src/x.ts",
+ ];
+ const roots=[root,root,root,"D:/a/growthmap/growthmap/src/frontend","D:/a/growthmap/growthmap/src/frontend"];
+ values.forEach((value,index)=>assert.equal(normalizeModuleIdentifier(value,roots[index]),"<PROJECT_ROOT>/src/x.ts"));
 });
 test("project-relative identity remains meaningful",()=>{
  assert.notEqual(normalizeModuleIdentifier(`${root}/src/a.ts`,root),normalizeModuleIdentifier(`${root}/src/b.ts`,root));
@@ -32,8 +39,12 @@ test("production loader identity canonicalizes POSIX and Windows encoded-root fo
  const loader="next-flight-client-entry-loader.js?modules=";
  const posix=`${posixRoot}/node_modules/next/dist/build/webpack/loaders/${loader}%2Fhome%2Frunner%2Fwork%2Frepository%2Fsrc%2Ffrontend%2Fsrc%2Fapp%2Fpage.tsx!`;
  const windows=`D:\\a\\repository\\src\\frontend\\node_modules\\next\\dist\\build\\webpack\\loaders\\${loader}D%3A%5Ca%5Crepository%5Csrc%5Cfrontend%5Csrc%5Capp%5Cpage.tsx!`;
+ const mixedWindows=`D:%5Ca%5Crepository%5Csrc%5Cfrontend/node_modules/next/dist/build/webpack/loaders/${loader}D:%5Ca%5Crepository%5Csrc%5Cfrontend/src/app/page.tsx!`;
  const normalized=normalizeModuleIdentifier(posix,posixRoot);
  assert.equal(normalizeModuleIdentifier(windows,windowsRoot),normalized);
+ const mixedNormalized=normalizeModuleIdentifier(mixedWindows,windowsRoot);
+ assert.equal(mixedNormalized,normalized.replace("<PROJECT_ROOT>/src%2Fapp%2Fpage.tsx","<PROJECT_ROOT>/src/app/page.tsx"));
+ assert.doesNotMatch(mixedNormalized,/D:|%5c|repository/i);
  assert.equal(normalized,`<PROJECT_ROOT>/node_modules/next/dist/build/webpack/loaders/${loader}<PROJECT_ROOT>/src%2Fapp%2Fpage.tsx!`);
  assert.ok(!/[A-Z]:|%5c|runner/i.test(normalized));
 });

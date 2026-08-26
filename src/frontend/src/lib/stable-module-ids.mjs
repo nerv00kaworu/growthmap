@@ -10,12 +10,16 @@ function encodedEscape(value) {
   return regexEscape(value).replace(/%([0-9A-F])([0-9A-F])/g, (_, a, b) => `%[${a.toLowerCase()}${a.toUpperCase()}][${b.toLowerCase()}${b.toUpperCase()}]`);
 }
 function rootPatterns(root) {
-  // Do not decode caller-controlled identifiers. Match only the exact raw root
-  // and its single, standard URI encodings. The component-encoded spelling may
-  // mix literal and encoded path separators, as emitted by loader composition.
+  // Do not decode caller-controlled identifiers. Match only exact component
+  // spellings and single standard URI encodings. Windows loaders may preserve
+  // the drive colon while encoding only separators (D:%5Ca...), so each path
+  // component needs its own raw/encodeURI/encodeURIComponent alternatives.
   const variants = [root, encodeURI(root), encodeURIComponent(root)];
-  const component = root.split("/").map((part) => encodedEscape(encodeURIComponent(part)))
-    .join("(?:/|%[2][fF])");
+  const component = root.split("/").map((part) => {
+    const forms = [...new Set([part, encodeURI(part), encodeURIComponent(part)])]
+      .map(encodedEscape).sort((a, b) => b.length - a.length || compareTotal(a, b));
+    return forms.length === 1 ? forms[0] : `(?:${forms.join("|")})`;
+  }).join("(?:/|%[2][fF])");
   return [...new Set([...variants.map(encodedEscape), component])]
     .sort((a, b) => b.length - a.length || compareTotal(a, b));
 }
