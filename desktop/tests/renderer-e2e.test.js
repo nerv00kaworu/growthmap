@@ -60,7 +60,8 @@ test('packaged E2E keeps import input outside the fresh profile and verifies Fre
 test('packaged E2E proves broker-unavailable import is isolated from normal app health, backup, and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  for(const token of ['import-safely-unavailable','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
- assert.doesNotMatch(source,/import-canonical-api|restore-canonical-api|mutated-restart/);
+ assert.match(source,/secondSidecar=\(survivingTree\(run\.tree\)/);
+ assert.doesNotMatch(source,/secondTree=processSnapshot|import-canonical-api|restore-canonical-api|mutated-restart/);
 });
 
 test('Python runner resolves once and uses the same supplied interpreter for every subprocess',()=>{
