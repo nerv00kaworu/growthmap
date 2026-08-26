@@ -43,9 +43,9 @@ test("production loader identity canonicalizes POSIX and Windows encoded-root fo
  const normalized=normalizeModuleIdentifier(posix,posixRoot);
  assert.equal(normalizeModuleIdentifier(windows,windowsRoot),normalized);
  const mixedNormalized=normalizeModuleIdentifier(mixedWindows,windowsRoot);
- assert.equal(mixedNormalized,normalized.replace("<PROJECT_ROOT>/src%2Fapp%2Fpage.tsx","<PROJECT_ROOT>/src/app/page.tsx"));
+ assert.equal(mixedNormalized,normalized);
  assert.doesNotMatch(mixedNormalized,/D:|%5c|repository/i);
- assert.equal(normalized,`<PROJECT_ROOT>/node_modules/next/dist/build/webpack/loaders/${loader}<PROJECT_ROOT>/src%2Fapp%2Fpage.tsx!`);
+ assert.equal(normalized,`<PROJECT_ROOT>/node_modules/next/dist/build/webpack/loaders/${loader}<PROJECT_ROOT>/src/app/page.tsx!`);
  assert.ok(!/[A-Z]:|%5c|runner/i.test(normalized));
 });
 test("Unicode-equivalent ties receive deterministic IDs across shuffled input",()=>{
@@ -76,19 +76,19 @@ test("Windows encoded separators, percent signs, drive and separator case normal
 test("lexical root prefixes do not redact POSIX or Windows paths",()=>{
  const cases=[
   ["/repo/application/src/a.js","/repo/app"],
-  ["%2frepo%2fapplication%2fsrc%2fa.js","/repo/app"],
+  ["%2frepo%2fapplication%2fsrc%2fa.js","/repo/app","/repo/application/src/a.js"],
   ["C:/Work/Application/src/a.js","C:/Work/App"],
-  ["c%3a%2fwork%2fapplication%2fsrc%2fa.js","C:/Work/App"],
+  ["c%3a%2fwork%2fapplication%2fsrc%2fa.js","C:/Work/App","c%3a/work/application/src/a.js"],
  ];
- for(const [value,projectRoot] of cases) assert.equal(normalizeModuleIdentifier(value,projectRoot),value);
+ for(const [value,projectRoot,canonical=value] of cases) assert.equal(normalizeModuleIdentifier(value,projectRoot),canonical);
 });
 test("exact roots, child paths, encoded separators, and loader chains normalize",()=>{
  const posix="/repo/app";
  const cases=[
   [posix,"<PROJECT_ROOT>"],
   [`${posix}/src/a.js`,"<PROJECT_ROOT>/src/a.js"],
-  [`${posix}%2Fsrc%2Fa.js`,"<PROJECT_ROOT>/src%2Fa.js"],
-  ["%2frepo%2fapp%2fsrc%2fa.js","<PROJECT_ROOT>/src%2fa.js"],
+  [`${posix}%2Fsrc%2Fa.js`,"<PROJECT_ROOT>/src/a.js"],
+  ["%2frepo%2fapp%2fsrc%2fa.js","<PROJECT_ROOT>/src/a.js"],
   [`loader-a!loader-b!${posix}/src/a.js`,`loader-a!loader-b!<PROJECT_ROOT>/src/a.js`],
   [`${posix}/one!${posix}/two`,`<PROJECT_ROOT>/one!<PROJECT_ROOT>/two`],
  ];
@@ -125,7 +125,7 @@ test("filesystem root only normalizes absolute path segment starts",()=>{
  const cases=[
   ["/","<PROJECT_ROOT>"],
   ["/anything/src/a.js","<PROJECT_ROOT>/anything/src/a.js"],
-  ["%2Fanything%2Fsrc%2Fa.js","<PROJECT_ROOT>/anything%2Fsrc%2Fa.js"],
+  ["%2Fanything%2Fsrc%2Fa.js","<PROJECT_ROOT>/anything/src/a.js"],
   ["loader!/anything/src/a.js","loader!<PROJECT_ROOT>/anything/src/a.js"],
   ["relative/path.js","relative/path.js"],
  ];
@@ -137,7 +137,7 @@ test("literal percent, Unicode, regex metacharacters, and trailing slashes are l
  for(const projectRoot of roots){
   const trimmed=projectRoot.replace(/\/+$/,"");
   assert.equal(normalizeModuleIdentifier(`${trimmed}/src/x.ts`,projectRoot),"<PROJECT_ROOT>/src/x.ts");
-  assert.equal(normalizeModuleIdentifier(`${encodeURIComponent(trimmed)}%2fsrc%2fx.ts`,projectRoot),"<PROJECT_ROOT>/src%2fx.ts");
+  assert.equal(normalizeModuleIdentifier(`${encodeURIComponent(trimmed)}%2fsrc%2fx.ts`,projectRoot),"<PROJECT_ROOT>/src/x.ts");
   assert.equal(normalizeModuleIdentifier(`${trimmed}suffix/src/x.ts`,projectRoot),`${trimmed}suffix/src/x.ts`);
  }
 });
