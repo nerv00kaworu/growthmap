@@ -43,9 +43,10 @@ foreach($p in $q.paths){
 function nativeWindowsPolicy(paths,runner=spawnSync,containerOnly=false,env=process.env){
  const encoded=Buffer.from(WINDOWS_POLICY,'utf16le').toString('base64');
  const r=runner(trustedPowerShell(env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({paths,...(containerOnly?{containerOnly:true}:{})}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:WINDOWS_NATIVE_POLICY_TIMEOUT_MS});
- if(r.error||r.status!==0)throw Error('Windows native secret-path policy unavailable or unsafe');
- let value;try{value=JSON.parse(r.stdout)}catch{throw Error('Windows native secret-path policy unavailable or unsafe')}
- if(!value||!Array.isArray(value.identities)||value.identities.length!==paths.length)throw Error('Windows native secret-path policy unavailable or unsafe');
+ if(r.error){const code=/^[A-Z0-9_]{1,32}$/.test(String(r.error.code||''))?r.error.code:'unknown';throw Error(`Windows native secret-path policy unavailable or unsafe stage=spawn-${code}`)}
+ if(r.status!==0){const status=Number.isInteger(r.status)&&r.status>=0&&r.status<=255?r.status:'unknown',signal=/^[A-Z0-9_]{1,32}$/.test(String(r.signal||''))?r.signal:'none';throw Error(`Windows native secret-path policy unavailable or unsafe stage=exit-${status}-${signal}`)}
+ let value;try{value=JSON.parse(r.stdout)}catch{throw Error('Windows native secret-path policy unavailable or unsafe stage=json')}
+ if(!value||!Array.isArray(value.identities)||value.identities.length!==paths.length)throw Error('Windows native secret-path policy unavailable or unsafe stage=schema');
  return value.identities.map((entry,index)=>{if(!entry||entry.path!==paths[index]||typeof entry.identity!=='string'||!/^[0-9A-F]{8}:[0-9A-F]{16}$/.test(entry.identity))throw Error('Windows native secret-path identity unavailable');return entry.identity});
 }
 function applyWindowsPrivateAcl(target,options={}){
