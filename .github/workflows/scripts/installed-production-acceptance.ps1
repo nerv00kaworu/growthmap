@@ -110,7 +110,18 @@ try {
  $accept=Start-Process -FilePath $nodePath -ArgumentList @('.github/workflows/scripts/run-installed-production-acceptance.js') -WorkingDirectory (Get-Location).Path -Environment $acceptEnv -Wait -PassThru -NoNewWindow
  if ($accept.ExitCode -ne 0) { throw 'installed production credential-restart acceptance failed' }
 } finally {
- try { if ($installerStarted) { Assert-Owned; $uninstaller=Join-Path $install 'Uninstall GrowthMap.exe'; if (Test-Path $uninstaller -PathType Leaf) { & $uninstaller /S; if ($LASTEXITCODE -ne 0) { throw "uninstaller exit $LASTEXITCODE" }; Start-Sleep -Seconds 3 } elseif (Test-Path $install) { throw 'partial install has no owned uninstaller; refusing unproven deletion' } } } catch { $cleanupErrors.Add("uninstall: $($_.Exception.Message)") }
+ try {
+  if ($installerStarted) {
+   Assert-Owned; $uninstaller=Join-Path $install 'Uninstall GrowthMap.exe'
+   if (Test-Path $uninstaller -PathType Leaf) {
+    $uninstallProcess=Start-Process -FilePath $uninstaller -ArgumentList @('/S') -Wait -PassThru
+    if ($uninstallProcess.ExitCode -ne 0) { throw "uninstaller exit $($uninstallProcess.ExitCode)" }
+    $deadline=[DateTime]::UtcNow.AddSeconds(30)
+    while ((Test-Path $install) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 250 }
+    if (Test-Path $install) { throw 'uninstaller completed but task install directory survived bounded wait' }
+   } elseif (Test-Path $install) { throw 'partial install has no owned uninstaller; refusing unproven deletion' }
+  }
+ } catch { $cleanupErrors.Add("uninstall: $($_.Exception.Message)") }
  try { if (Test-Path $profile) { $pm=Join-Path $profile '.growthmap-ci-owned'; if (-not (Test-Path $pm -PathType Leaf) -or (Get-Content $pm -Raw).Trim() -cne 'growthmap-installed-acceptance-v1') { throw 'profile ownership marker mismatch' }; Remove-Item $profile -Recurse -Force } } catch { $cleanupErrors.Add("profile: $($_.Exception.Message)") }
  try { Assert-Owned; if (Test-Path $stage) { Remove-Item $stage -Recurse -Force } } catch { $cleanupErrors.Add("staging: $($_.Exception.Message)") }
  try { if (Test-Path $install) { throw 'task install directory survived cleanup' }; $after=Footprint; if ((Canonical $after) -cne (Canonical $before)) { throw 'GrowthMap registry/path/shortcut/process footprint was not exactly restored' } } catch { $cleanupErrors.Add("footprint: $($_.Exception.Message)") }
