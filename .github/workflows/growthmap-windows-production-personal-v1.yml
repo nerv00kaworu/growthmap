@@ -23,9 +23,10 @@ jobs:
         id: trusted-node
         shell: pwsh
         run: |
-          $source=(Get-Command node -CommandType Application -ErrorAction Stop).Source
-          $source=[IO.Path]::GetFullPath($source); $toolRoot=[IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE)
-          if (-not $source.StartsWith($toolRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path $source -PathType Leaf)) { throw 'setup-node runtime is not a trusted tool-cache file' }
+          $toolRoot=[IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE).TrimEnd('\')+'\'
+          $source=@(Get-Command node -CommandType Application -All -ErrorAction Stop | ForEach-Object { if ($_.Path) { [IO.Path]::GetFullPath($_.Path) } elseif ($_.Source) { [IO.Path]::GetFullPath($_.Source) } } | Where-Object { $_ -and [IO.Path]::GetFileName($_) -ieq 'node.exe' -and $_.StartsWith($toolRoot,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1)
+          if ($source.Count -ne 1) { throw 'setup-node trusted tool-cache executable was not uniquely resolved' }; $source=[string]$source[0]
+          $sourceVersion=(& $source --version).Trim(); if ($LASTEXITCODE -ne 0 -or $sourceVersion -notmatch '^v22\.') { throw 'setup-node trusted runtime version probe failed' }
           $dir=Join-Path $env:RUNNER_TEMP 'growthmap-trusted-node-v22'; if (Test-Path $dir) { throw 'trusted Node staging directory preexists' }
           New-Item $dir -ItemType Directory | Out-Null
           $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'; $prop=[Security.AccessControl.PropagationFlags]::None
