@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const fsIdentity=Symbol('windowsFileIdentity');
 const WINDOWS_DIR_FSYNC_UNSUPPORTED=new Set(['EPERM','EINVAL','ENOTSUP','EOPNOTSUPP']);
-const WINDOWS_NATIVE_POLICY_TIMEOUT_MS=60000;
+const WINDOWS_NATIVE_POLICY_TIMEOUT_MS=120000;
 function trustedPowerShell(env=process.env){const root=env.SystemRoot||env.WINDIR;if(typeof root!=='string'||!path.win32.isAbsolute(root))throw Error('Windows PowerShell path unavailable');return path.win32.join(root,'System32','WindowsPowerShell','v1.0','powershell.exe')}
 const WINDOWS_POLICY=String.raw`
 $ErrorActionPreference='Stop'
