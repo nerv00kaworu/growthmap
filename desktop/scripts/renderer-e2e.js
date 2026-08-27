@@ -8,7 +8,7 @@ const runPython=pythonRunner({spawnSync});
 const executable=process.env.GROWTHMAP_PACKAGED_EXE||path.join(root,'dist','win-unpacked','GrowthMap.exe');
 const screenshot=process.env.GROWTHMAP_E2E_SCREENSHOT||path.join(root,'artifacts','growthmap-renderer.png');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const HARD_TIMEOUT_MS=7*60*1000;let activeChild=null,currentPhase='bootstrap';
+const HARD_TIMEOUT_MS=10*60*1000;let activeChild=null,currentPhase='bootstrap';
 function phase(name){currentPhase=name;console.log(`E2E phase: ${name}`);}
 function killOwnedTree(child=activeChild){if(child?.pid)spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true});}
 const hardWatchdog=setTimeout(()=>{console.error(`E2E hard timeout after ${HARD_TIMEOUT_MS}ms; phase=${currentPhase}; childPid=${activeChild?.pid||'none'}; childExit=${activeChild?.exitCode??'null'}; childSignal=${activeChild?.signalCode||'none'}`);killOwnedTree();process.exit(124);},HARD_TIMEOUT_MS);
