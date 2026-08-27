@@ -207,6 +207,7 @@ jobs:
             desktop/generated/csp-script-hashes.json
             ${{ runner.temp }}/growthmap-csp-expected.json
             ${{ runner.temp }}/growthmap-installed-acceptance.json
+            ${{ runner.temp }}/growthmap-installed-electron.log
           if-no-files-found: ignore
           retention-days: 3
       - name: Upload installer and manifest hashes
