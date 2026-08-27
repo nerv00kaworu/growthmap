@@ -2,9 +2,9 @@
 const fs=require('node:fs'),net=require('node:net'),path=require('node:path'),crypto=require('node:crypto'),http=require('node:http'),{spawn,spawnSync}=require('node:child_process'),{chromium}=require('../../../desktop/node_modules/playwright-core');
 if(process.platform!=='win32')throw Error('installed acceptance is Windows-only');
 const exe=path.resolve(required('GROWTHMAP_ACCEPTANCE_EXE')),profile=path.resolve(required('GROWTHMAP_ACCEPTANCE_PROFILE')),diagnostic=path.resolve(required('GROWTHMAP_ACCEPTANCE_DIAGNOSTIC')),electronLog=path.join(path.dirname(diagnostic),'growthmap-installed-electron.log');
-const systemRoot=path.win32.resolve(required('SYSTEMROOT')),powerShell=path.win32.join(systemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'),systemPath=`${path.win32.join(systemRoot,'System32')};${systemRoot}`;
-for(const trusted of [powerShell]){const s=fs.lstatSync(trusted);if(!s.isFile()||s.isSymbolicLink())throw Error('trusted system executable unavailable')}
-const launchEnv=Object.freeze({...Object.fromEntries(['SYSTEMROOT','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE'].flatMap(k=>process.env[k]?[[k,process.env[k]]]:[])),PATH:systemPath});
+const systemRoot=path.win32.resolve(required('SYSTEMROOT')),system32=path.win32.join(systemRoot,'System32'),powerShell=path.win32.join(system32,'WindowsPowerShell','v1.0','powershell.exe'),comSpec=path.win32.join(system32,'cmd.exe'),systemPath=`${system32};${systemRoot}`,pathExt='.COM;.EXE;.BAT;.CMD';
+for(const trusted of [powerShell,comSpec]){const s=fs.lstatSync(trusted);if(!s.isFile()||s.isSymbolicLink())throw Error('trusted system executable unavailable')}
+const launchEnv=Object.freeze({...Object.fromEntries(['SYSTEMROOT','WINDIR','TEMP','TMP','LOCALAPPDATA','APPDATA','USERPROFILE'].flatMap(k=>process.env[k]?[[k,process.env[k]]]:[])),PATH:systemPath,Path:systemPath,PATHEXT:pathExt,ComSpec:comSpec,COMSPEC:comSpec});
 function required(k){const v=process.env[k];if(!v)throw Error(`${k} is required`);return v}
 const sleep=n=>new Promise(r=>setTimeout(r,n)),STARTUP_TIMEOUT_MS=240000,HARD_TIMEOUT_MS=10*60*1000;let activeRun=null;
 const hardWatchdog=setTimeout(()=>{try{if(activeRun)killOwned(activeRun.snapshot)}finally{console.error('installed acceptance hard timeout');process.exit(124)}},HARD_TIMEOUT_MS);
