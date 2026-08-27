@@ -105,9 +105,18 @@ try {
  $nodeCommand=Get-Command node -CommandType Application -ErrorAction Stop; $nodePath=[IO.Path]::GetFullPath($nodeCommand.Source); $toolRoot=[IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE)
  if (-not $toolRoot -or -not $nodePath.StartsWith($toolRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Node executable is outside the trusted runner tool cache' }
  Assert-NoReparseAncestors $nodePath
+ if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) { throw 'Trusted runner Node executable disappeared before staging' }
+ $nodeSourceHash=(Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant(); $nodeSourceVersion=(& $nodePath --version).Trim()
+ if ($LASTEXITCODE -ne 0 -or $nodeSourceVersion -notmatch '^v22\.') { throw 'Trusted runner Node version probe failed' }
+ $acceptNode=[IO.Path]::GetFullPath((Join-Path $stage 'node.exe')); Copy-Item -LiteralPath $nodePath -Destination $acceptNode
+ Assert-NoReparseAncestors $acceptNode; $acceptNodeItem=Get-Item -LiteralPath $acceptNode -Force
+ if (($acceptNodeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-FileHash -LiteralPath $acceptNode -Algorithm SHA256).Hash.ToLowerInvariant() -cne $nodeSourceHash) { throw 'Staged acceptance Node identity mismatch' }
  $systemPath=(Join-Path $env:SystemRoot 'System32')+';'+$env:SystemRoot
  $acceptEnv=@{GROWTHMAP_ACCEPTANCE_EXE=$exe;GROWTHMAP_ACCEPTANCE_PROFILE=$profile;GROWTHMAP_ACCEPTANCE_DIAGNOSTIC=$diag;PATH=$systemPath;SYSTEMROOT=$env:SYSTEMROOT;WINDIR=$env:WINDIR;TEMP=$env:TEMP;TMP=$env:TMP;LOCALAPPDATA=$env:LOCALAPPDATA;APPDATA=$env:APPDATA;USERPROFILE=$env:USERPROFILE}
- $accept=Start-Process -FilePath $nodePath -ArgumentList @('.github/workflows/scripts/run-installed-production-acceptance.js') -WorkingDirectory (Get-Location).Path -Environment $acceptEnv -Wait -PassThru -NoNewWindow
+ $stagedVersionProbe=Start-Process -FilePath $acceptNode -ArgumentList @('--version') -WorkingDirectory $stage -Environment $acceptEnv -Wait -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $stage 'node-version.txt')
+ $stagedNodeVersion=(Get-Content (Join-Path $stage 'node-version.txt') -Raw).Trim()
+ if ($stagedVersionProbe.ExitCode -ne 0 -or $stagedNodeVersion -cne $nodeSourceVersion) { throw 'Staged acceptance Node execution probe failed' }
+ $accept=Start-Process -FilePath $acceptNode -ArgumentList @('.github/workflows/scripts/run-installed-production-acceptance.js') -WorkingDirectory (Get-Location).Path -Environment $acceptEnv -Wait -PassThru -NoNewWindow
  if ($accept.ExitCode -ne 0) { throw 'installed production credential-restart acceptance failed' }
 } finally {
  try {
