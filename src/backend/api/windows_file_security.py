@@ -22,8 +22,6 @@ public static class GMIdentity {
  [StructLayout(LayoutKind.Sequential)] public struct Info { public uint attr; public System.Runtime.InteropServices.ComTypes.FILETIME c,a,w; public uint volume,sizeHigh,sizeLow,links,indexHigh,indexLow; }
  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern SafeFileHandle CreateFile(string n,uint access,uint share,IntPtr sec,uint creation,uint flags,IntPtr template);
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle h,out Info i);
- [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool SetFileSecurity(string p,uint info,byte[] descriptor);
- public static void SetDacl(string p,byte[] descriptor) { const uint DACL=0x4,PROTECTED_DACL=0x80000000; if(!SetFileSecurity(p,DACL|PROTECTED_DACL,descriptor)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); }
  public static string Get(string p) { using(var h=CreateFile(p,0,3,IntPtr.Zero,3,0x02200000,IntPtr.Zero)) { if(h.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); Info i; if(!GetFileInformationByHandle(h,out i)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error()); if((i.attr&0x400)!=0 || i.volume==0 || (i.indexHigh==0 && i.indexLow==0)) throw new InvalidOperationException("identity"); return i.volume.ToString("X8")+":"+i.indexHigh.ToString("X8")+i.indexLow.ToString("X8"); } }
 }
 '@
@@ -46,7 +44,7 @@ if($q.action -eq 'private') {
    if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}
   }
   $stage='add';foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))}
-  $stage='set-dacl';[GMIdentity]::SetDacl([string]$q.path,$a.GetSecurityDescriptorBinaryForm())
+  $stage='set-dacl';$i.SetAccessControl($a)
  }catch{
   $x=$_.Exception;$code=0
   while($x){if($x -is [System.ComponentModel.Win32Exception]){$code=[int]$x.NativeErrorCode;break};$x=$x.InnerException}

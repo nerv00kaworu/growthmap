@@ -258,7 +258,7 @@
     "src/backend/api/provider_lock.py": "57e0e0ca27471390ae08174042e4ac2f740e2a7c98dc2c81e3a53984e29f6591",
     "src/backend/api/revisions.py": "98c41caa386ef31ad87b9d44f6357c29972e892425c2a9cb07ba09a3bebb41e1",
     "src/backend/api/routes.py": "4343faa6eba13b4a423f96fc39ea040dc0449c57ceaf0769d8c2e3b5fd56dd7e",
-    "src/backend/api/windows_file_security.py": "b78da8cd1ff6457d2ca2802ded30bd186697de63b147443d558c29daa11f7c6a",
+    "src/backend/api/windows_file_security.py": "c9e737d27748ecc7964eb93901168dde702e2efdb7a1a0bb6af2375a36f21f5d",
     "src/backend/context/__init__.py": "b4e035b7780ea5e97ffd9cf1d7bd81dd3f76a01c9471e090a3e968eccfa5ca50",
     "src/backend/db/__init__.py": "48c8890cf4e017b365833f7e00097116df366aee1cb21126b8384f8df34912fa",
     "src/backend/db/database.py": "05c75d7c94678077a4dd9d21b41e459949c5b45e0ac4c36823d01210b4dd5e81",
