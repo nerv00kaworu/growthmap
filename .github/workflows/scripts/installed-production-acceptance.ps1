@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$ManifestPath,[Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')][string]$ExpectedManifestSha256,[Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ExpectedSourceSha)
+param([Parameter(Mandatory)][string]$ManifestPath,[Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')][string]$ExpectedManifestSha256,[Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ExpectedSourceSha,[Parameter(Mandatory)][string]$TrustedNodePath,[Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{64}$')][string]$ExpectedTrustedNodeSha256,[Parameter(Mandatory)][ValidatePattern('^v22\.[0-9]+\.[0-9]+$')][string]$ExpectedTrustedNodeVersion)
 $ErrorActionPreference = 'Stop'
 $runtimeVersion=[Version]$PSVersionTable.PSVersion.ToString()
 if ($PSVersionTable.PSEdition -cne 'Core' -or $runtimeVersion -lt [Version]'7.4.0') { throw 'Production installed acceptance requires PowerShell Core 7.4 or newer' }
@@ -102,20 +102,20 @@ try {
  if (-not (Test-Path $install -PathType Container)) { throw 'isolated install directory absent' }
  $exe=Join-Path $install 'GrowthMap.exe'; $resources=Join-Path $install 'resources'; foreach($p in @($exe,(Join-Path $resources 'app.asar'),(Join-Path $resources 'sidecar/growthmap-sidecar.exe'),(Join-Path $resources 'growthmap-mcp.exe'))) { if (-not (Test-Path $p -PathType Leaf)) { throw "installed production file absent: $p" } }
  foreach($pair in @(@($exe,$m.executable_sha256),@((Join-Path $resources 'app.asar'),$m.asar_sha256),@((Join-Path $resources 'sidecar/growthmap-sidecar.exe'),$m.sidecar_sha256),@((Join-Path $resources 'growthmap-mcp.exe'),$m.mcp_sha256))) { if ((Get-FileHash $pair[0] -Algorithm SHA256).Hash.ToLowerInvariant() -cne $pair[1]) { throw "installed hash mismatch: $($pair[0])" } }
- $nodeCommand=Get-Command node -CommandType Application -ErrorAction Stop; $nodePath=[IO.Path]::GetFullPath($nodeCommand.Source); $toolRoot=[IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE)
- if (-not $toolRoot -or -not $nodePath.StartsWith($toolRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Node executable is outside the trusted runner tool cache' }
+ $nodePath=[IO.Path]::GetFullPath($TrustedNodePath); $runnerTemp=[IO.Path]::GetFullPath($env:RUNNER_TEMP)
+ if (-not $runnerTemp -or -not $nodePath.StartsWith($runnerTemp.TrimEnd('\')+'\growthmap-trusted-node-v22\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Preserved Node executable is outside the task-owned runner staging directory' }
  Assert-NoReparseAncestors $nodePath
- if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) { throw 'Trusted runner Node executable disappeared before staging' }
- $nodeSourceHash=(Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant(); $nodeSourceVersion=(& $nodePath --version).Trim()
- if ($LASTEXITCODE -ne 0 -or $nodeSourceVersion -notmatch '^v22\.') { throw 'Trusted runner Node version probe failed' }
+ if (-not (Test-Path -LiteralPath $nodePath -PathType Leaf)) { throw 'Preserved trusted Node executable disappeared before acceptance' }
+ $nodeSourceHash=(Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant()
+ if ($nodeSourceHash -cne $ExpectedTrustedNodeSha256) { throw 'Preserved trusted Node digest mismatch' }
  $acceptNode=[IO.Path]::GetFullPath((Join-Path $stage 'node.exe')); Copy-Item -LiteralPath $nodePath -Destination $acceptNode
  Assert-NoReparseAncestors $acceptNode; $acceptNodeItem=Get-Item -LiteralPath $acceptNode -Force
- if (($acceptNodeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-FileHash -LiteralPath $acceptNode -Algorithm SHA256).Hash.ToLowerInvariant() -cne $nodeSourceHash) { throw 'Staged acceptance Node identity mismatch' }
+ if (($acceptNodeItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-FileHash -LiteralPath $acceptNode -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedTrustedNodeSha256) { throw 'Staged acceptance Node identity mismatch' }
  $systemPath=(Join-Path $env:SystemRoot 'System32')+';'+$env:SystemRoot
  $acceptEnv=@{GROWTHMAP_ACCEPTANCE_EXE=$exe;GROWTHMAP_ACCEPTANCE_PROFILE=$profile;GROWTHMAP_ACCEPTANCE_DIAGNOSTIC=$diag;PATH=$systemPath;SYSTEMROOT=$env:SYSTEMROOT;WINDIR=$env:WINDIR;TEMP=$env:TEMP;TMP=$env:TMP;LOCALAPPDATA=$env:LOCALAPPDATA;APPDATA=$env:APPDATA;USERPROFILE=$env:USERPROFILE}
  $stagedVersionProbe=Start-Process -FilePath $acceptNode -ArgumentList @('--version') -WorkingDirectory $stage -Environment $acceptEnv -Wait -PassThru -NoNewWindow -RedirectStandardOutput (Join-Path $stage 'node-version.txt')
  $stagedNodeVersion=(Get-Content (Join-Path $stage 'node-version.txt') -Raw).Trim()
- if ($stagedVersionProbe.ExitCode -ne 0 -or $stagedNodeVersion -cne $nodeSourceVersion) { throw 'Staged acceptance Node execution probe failed' }
+ if ($stagedVersionProbe.ExitCode -ne 0 -or $stagedNodeVersion -cne $ExpectedTrustedNodeVersion) { throw 'Staged acceptance Node execution probe failed' }
  $accept=Start-Process -FilePath $acceptNode -ArgumentList @('.github/workflows/scripts/run-installed-production-acceptance.js') -WorkingDirectory (Get-Location).Path -Environment $acceptEnv -Wait -PassThru -NoNewWindow
  if ($accept.ExitCode -ne 0) { throw 'installed production credential-restart acceptance failed' }
 } finally {

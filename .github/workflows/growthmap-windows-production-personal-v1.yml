@@ -19,6 +19,24 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with: { node-version: '22', cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - name: Preserve trusted Node runtime before long Windows build
+        id: trusted-node
+        shell: pwsh
+        run: |
+          $source=(Get-Command node -CommandType Application -ErrorAction Stop).Source
+          $source=[IO.Path]::GetFullPath($source); $toolRoot=[IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE)
+          if (-not $source.StartsWith($toolRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path $source -PathType Leaf)) { throw 'setup-node runtime is not a trusted tool-cache file' }
+          $dir=Join-Path $env:RUNNER_TEMP 'growthmap-trusted-node-v22'; if (Test-Path $dir) { throw 'trusted Node staging directory preexists' }
+          New-Item $dir -ItemType Directory | Out-Null
+          $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'; $prop=[Security.AccessControl.PropagationFlags]::None
+          foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')),(New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl',$inherit,$prop,'Allow'))) }
+          Set-Acl -LiteralPath $dir -AclObject $acl
+          $copy=Join-Path $dir 'node.exe'; Copy-Item -LiteralPath $source -Destination $copy
+          $hash=(Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash.ToLowerInvariant(); $version=(& $copy --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $version -notmatch '^v22\.' -or $hash -notmatch '^[0-9a-f]{64}$') { throw 'preserved Node runtime validation failed' }
+          "path=$copy" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with: { python-version: '3.12', cache: pip }
       - name: Verify exact R39 candidate source metadata and integrity
@@ -174,7 +192,7 @@ jobs:
       - name: Exact final NSIS installed production acceptance
         shell: pwsh
         timeout-minutes: 10
-        run: ./.github/workflows/scripts/installed-production-acceptance.ps1 -ManifestPath desktop/dist/growthmap-windows-production-personal-v1-manifest.json -ExpectedManifestSha256 '${{ steps.package-verification.outputs.manifest_sha256 }}' -ExpectedSourceSha '${{ github.sha }}'
+        run: ./.github/workflows/scripts/installed-production-acceptance.ps1 -ManifestPath desktop/dist/growthmap-windows-production-personal-v1-manifest.json -ExpectedManifestSha256 '${{ steps.package-verification.outputs.manifest_sha256 }}' -ExpectedSourceSha '${{ github.sha }}' -TrustedNodePath '${{ steps.trusted-node.outputs.path }}' -ExpectedTrustedNodeSha256 '${{ steps.trusted-node.outputs.sha256 }}' -ExpectedTrustedNodeVersion '${{ steps.trusted-node.outputs.version }}'
       - name: Upload verifier diagnostic on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
