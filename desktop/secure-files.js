@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process');
 const fsIdentity=Symbol('windowsFileIdentity');
 const WINDOWS_DIR_FSYNC_UNSUPPORTED=new Set(['EPERM','EINVAL','ENOTSUP','EOPNOTSUPP']);
+const WINDOWS_NATIVE_POLICY_TIMEOUT_MS=30000;
 function trustedPowerShell(env=process.env){const root=env.SystemRoot||env.WINDIR;if(typeof root!=='string'||!path.win32.isAbsolute(root))throw Error('Windows PowerShell path unavailable');return path.win32.join(root,'System32','WindowsPowerShell','v1.0','powershell.exe')}
 const WINDOWS_POLICY=String.raw`
 $ErrorActionPreference='Stop'
@@ -41,7 +42,7 @@ foreach($p in $q.paths){
 `;
 function nativeWindowsPolicy(paths,runner=spawnSync,containerOnly=false,env=process.env){
  const encoded=Buffer.from(WINDOWS_POLICY,'utf16le').toString('base64');
- const r=runner(trustedPowerShell(env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({paths,...(containerOnly?{containerOnly:true}:{})}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
+ const r=runner(trustedPowerShell(env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({paths,...(containerOnly?{containerOnly:true}:{})}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:WINDOWS_NATIVE_POLICY_TIMEOUT_MS});
  if(r.error||r.status!==0)throw Error('Windows native secret-path policy unavailable or unsafe');
  let value;try{value=JSON.parse(r.stdout)}catch{throw Error('Windows native secret-path policy unavailable or unsafe')}
  if(!value||!Array.isArray(value.identities)||value.identities.length!==paths.length)throw Error('Windows native secret-path policy unavailable or unsafe');
@@ -51,7 +52,7 @@ function applyWindowsPrivateAcl(target,options={}){
  const script=String.raw`$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'
 using System;using System.Runtime.InteropServices;public static class GMPrivateDacl{[DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]static extern bool SetFileSecurity(string p,uint i,byte[] d);public static void Set(string p,byte[] d){if(!SetFileSecurity(p,0x80000004,d))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());}}
 '@;$q=[Console]::In.ReadToEnd()|ConvertFrom-Json;$me=[Security.Principal.WindowsIdentity]::GetCurrent().User;$trusted=@($me.Value,'S-1-5-18','S-1-5-32-544');$i=Get-Item -LiteralPath $q.path -Force;if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint)-ne 0){throw 'reparse'};$a=$i.GetAccessControl([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner);try{$ownerSid=([Security.Principal.NTAccount]$a.Owner).Translate([Security.Principal.SecurityIdentifier]).Value}catch{$ownerSid=([Security.Principal.SecurityIdentifier]$a.Owner).Value};if($ownerSid -notin $trusted){throw 'owner'};$inherit=if($i.PSIsContainer){[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'}else{[Security.AccessControl.InheritanceFlags]::None};$a.SetAccessRuleProtection($true,$false);$seen=@{};foreach($r in @($a.Access)){$sid=$r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]);if(!$seen.ContainsKey($sid.Value)){$a.PurgeAccessRules($sid);$seen[$sid.Value]=$true}};foreach($sid in @($me,[Security.Principal.SecurityIdentifier]::new('S-1-5-18'),[Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))){$a.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow))};[GMPrivateDacl]::Set([string]$q.path,$a.GetSecurityDescriptorBinaryForm())`;
- const encoded=Buffer.from(script,'utf16le').toString('base64'),r=(options.windowsRunner||spawnSync)(trustedPowerShell(options.env||process.env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({path:target}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:15000});
+ const encoded=Buffer.from(script,'utf16le').toString('base64'),r=(options.windowsRunner||spawnSync)(trustedPowerShell(options.env||process.env),['-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand',encoded],{input:JSON.stringify({path:target}),encoding:'utf8',windowsHide:true,maxBuffer:1024*1024,timeout:WINDOWS_NATIVE_POLICY_TIMEOUT_MS});
  if(r.error||r.status!==0)throw Error('Windows private secret path initialization failed');
 }
 function bootstrapWindowsPrivateRoot(parent,directory,io=fs,options={}){
@@ -98,4 +99,4 @@ function secureFiles(trustedRoot,directory,io=fs,options={}){
  const quarantine=name=>{const parent=verifyDir();read(name);stableParent(parent,'beforeUnlink');io.unlinkSync(safe(name));stableParent(parent,'afterUnlink');syncDir()};
  return{verifyDir,read,write,remove,exists,quarantine,list:()=>{verifyDir();return io.readdirSync(directory)}};
 }
-module.exports={secureFiles,nativeWindowsPolicy,bootstrapWindowsPrivateRoot,WINDOWS_POLICY};
+module.exports={secureFiles,nativeWindowsPolicy,bootstrapWindowsPrivateRoot,WINDOWS_POLICY,WINDOWS_NATIVE_POLICY_TIMEOUT_MS};
