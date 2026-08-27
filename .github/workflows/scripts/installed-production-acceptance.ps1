@@ -88,10 +88,10 @@ try {
  if ($m.schema_version -ne 1 -or $m.product -cne 'GrowthMap Windows Production Personal v1' -or $m.source_sha -cne $ExpectedSourceSha -or $m.unsigned -ne $true -or $m.installer -notmatch '^GrowthMap-Setup-[A-Za-z0-9._-]+\.exe$' -or [string]$m.installer_sha256 -notmatch '^[0-9a-f]{64}$') { throw 'production manifest authority mismatch' }
  $all=@(Get-ChildItem desktop/dist -File -Filter 'GrowthMap-Setup-*.exe'); if ($all.Count -ne 1) { throw "Expected exactly one installer, found $($all.Count)" }; $source=$all[0]
  if ($source.Name -cne [string]$m.installer) { throw 'manifest installer filename mismatch' }
- New-Item -ItemType Directory -Path $stage | Out-Null; Assert-NoReparseAncestors $stage
  $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); $inherit=[Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'; $prop=[Security.AccessControl.PropagationFlags]::None
  foreach($sid in @([Security.Principal.WindowsIdentity]::GetCurrent().User,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')),(New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl',$inherit,$prop,'Allow'))) }
- Set-Acl -LiteralPath $stage -AclObject $acl
+ foreach($ownedDirectory in @($stage,$profile)) { New-Item -ItemType Directory -Path $ownedDirectory | Out-Null; Set-Acl -LiteralPath $ownedDirectory -AclObject $acl; Assert-NoReparseAncestors $ownedDirectory }
+ Set-Content (Join-Path $profile '.growthmap-ci-owned') 'growthmap-installed-acceptance-v1' -NoNewline -Encoding ascii
  $installer=[IO.Path]::GetFullPath((Join-Path $stage 'GrowthMap-Setup-verified.exe')); Copy-Item -LiteralPath $source.FullName -Destination $installer
  Assert-NoReparseAncestors $installer; $staged=Get-Item -LiteralPath $installer -Force; if (($staged.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'staged installer reparse target rejected' }
  if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $m.installer_sha256) { throw 'staged installer changed after production verification' }
