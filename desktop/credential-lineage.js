@@ -1,14 +1,14 @@
 'use strict';
-const crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path'),{secureFiles,nativeWindowsPolicy}=require('./secure-files'),{validateAuthorityPayload,namespace,canonical}=require('./authority-schema');
+const crypto=require('node:crypto'),fs=require('node:fs'),path=require('node:path'),{secureFiles}=require('./secure-files'),{validateAuthorityPayload,namespace,canonical}=require('./authority-schema');
 const AUTH='lineage-authority.bin',KEY='lineage-authority-key.bin',MAX=64*1024,SECRET=/^[0-9a-f-]{36}\.(?:bin|recover)$/;
 const fail=()=>{throw Error('Credential authority is invalid')};
-function dbIdentity(databasePath,{io=fs,platform=process.platform,windowsPolicy=nativeWindowsPolicy,windowsRunner}={}){
+function dbIdentity(databasePath,{io=fs,platform=process.platform,windowsPolicy,windowsRunner}={}){
  const real=io.realpathSync(databasePath),before=io.lstatSync(real);if(before.isSymbolicLink()||!before.isFile()||before.nlink!==1)throw Error('Unsafe database identity');
  if(platform==='win32'){const ids=windowsPolicy([real],windowsRunner);if(!Array.isArray(ids)||ids.length!==1||!/^[0-9A-F]{8}:[0-9A-F]{16}$/.test(ids[0]))throw Error('Windows native database identity unavailable');const after=io.lstatSync(real),again=windowsPolicy([real],windowsRunner);if(after.isSymbolicLink()||!after.isFile()||after.nlink!==1||again[0]!==ids[0])throw Error('Unstable database identity');const [volumeSerial,fileIndex]=ids[0].split(':');return {platform:'win32',path:real,volumeSerial,fileIndex};}
  const after=io.lstatSync(real);if(before.dev!==after.dev||before.ino!==after.ino||!before.dev&&!before.ino)throw Error('Unstable database identity');return {platform:'posix',path:real,device:String(before.dev),inode:String(before.ino)};
 }
 function same(a,b){return canonical(a)===canonical(b)}
-function createLineageAuthority({userData,io=fs,hooks={},platform=process.platform,windowsPolicy=nativeWindowsPolicy,windowsRunner,protectKey,unprotectKey}={}){
+function createLineageAuthority({userData,io=fs,hooks={},platform=process.platform,windowsPolicy,windowsRunner,protectKey,unprotectKey}={}){
  if(typeof protectKey!=='function'||typeof unprotectKey!=='function')throw Error('Credential authority key protection unavailable');
  const root=path.join(userData,'secrets'),files=secureFiles(root,root,io,{hooks,maxReadBytes:MAX,platform,windowsPolicy,windowsRunner});files.verifyDir();
  function pair(){const authority=files.exists(AUTH),keyFile=files.exists(KEY);if(authority!==keyFile)return fail();return {authority,keyFile}}
@@ -29,4 +29,8 @@ function createLineageAuthority({userData,io=fs,hooks={},platform=process.platfo
  function restore(value){save(structuredClone(value));if(!matches(value))throw Error('Credential authority restore verification failed')}
  return {activate,prepare,restore,adoptLegacyOnce,directory,ownsIdentity,matches,load,root};
 }
-module.exports={createLineageAuthority,dbIdentity,namespace};
+const syncCreateLineageAuthority=createLineageAuthority,syncDbIdentity=dbIdentity;
+const asyncImpl=()=>require('./credential-lineage-async');
+function createLineageAuthorityDispatch(options={}){if((options.platform||process.platform)==='win32'){if(!options.windowsAdapter)throw Error('Windows credential authority requires shared native broker adapter');return asyncImpl().createLineageAuthorityAsync(options)}return syncCreateLineageAuthority(options)}
+function dbIdentityDispatch(databasePath,options={}){if((options.platform||process.platform)==='win32'){if(!options.windowsAdapter)throw Error('Windows database identity requires shared native broker adapter');return asyncImpl().dbIdentityAsync(databasePath,options)}return syncDbIdentity(databasePath,options)}
+module.exports={createLineageAuthority:createLineageAuthorityDispatch,dbIdentity:dbIdentityDispatch,namespace};

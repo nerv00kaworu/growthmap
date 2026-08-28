@@ -2,6 +2,7 @@
 const {createWindowsNativeBroker}=require('./windows-native-broker');
 const {createWindowsNativeOpen}=require('./windows-native-evidence');
 const {createWindowsReplacementOwner}=require('./windows-native-replacement');
+const {createWindowsSecureFilesAdapter}=require('./secure-files');
 
 function createWindowsProductionWiring({
  platform=process.platform,
@@ -9,12 +10,13 @@ function createWindowsProductionWiring({
  createNativeOpen=createWindowsNativeOpen,
  createReplacementOwner=createWindowsReplacementOwner,
 }={}){
- if(platform!=='win32')return Object.freeze({broker:null,nativeOpen:null,windowsReplacementOwner:null,assertAvailable:async()=>{}});
+ if(platform!=='win32')return Object.freeze({broker:null,nativeOpen:null,windowsReplacementOwner:null,secureFilesAdapter:null,assertAvailable:async()=>{}});
  // Production deliberately supplies no broker fault/crash hooks or payload extensions.
  const broker=createBroker();
  const nativeOpen=createNativeOpen({broker});
  const windowsReplacementOwner=createReplacementOwner({broker});
- return Object.freeze({broker,nativeOpen,windowsReplacementOwner,assertAvailable:async()=>{await broker.start();}});
+ const secureFilesAdapter=createWindowsSecureFilesAdapter({broker});
+ return Object.freeze({broker,nativeOpen,windowsReplacementOwner,secureFilesAdapter,assertAvailable:async()=>{await broker.start();}});
 }
 
 function createOrderlyShutdown({lifecycle,getDatabaseManager,getMainWindow,broker=null,quit}){

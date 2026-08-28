@@ -15,7 +15,11 @@
     "/revocation-store.js\r",
     "/license-freshness-store.js\r",
     "/protected-history.js\r",
-    "/strict-json.js\r"
+    "/strict-json.js\r",
+    "/credential-lineage-async.js\r",
+    "/replacement-journal-async.js\r",
+    "/windows-native-broker.js\r",
+    "/windows-native-broker-helper.ps1\r"
   ],
   "requiredAsarEntries": [
     "main.js",
@@ -33,7 +37,11 @@
     "revocation-store.js",
     "license-freshness-store.js",
     "protected-history.js",
-    "strict-json.js"
+    "strict-json.js",
+    "credential-lineage-async.js",
+    "replacement-journal-async.js",
+    "windows-native-broker.js",
+    "windows-native-broker-helper.ps1"
   ],
   "requiredResourceEntries": [
     "commercial-config.json",

@@ -7,12 +7,12 @@ async function completeProductionLaunch({prepare,hasStore,bind,makeStore,hydrate
  const prepared=await prepare();
  let transition=null,store=hasStore();
  try{
-  if(!store){transition=bind();store=makeStore()}
+  if(!store){transition=await bind();store=await makeStore()}
   await runCredentialStartup({store,hydrate:()=>hydrateAndSeal(prepared,store),enable:()=>enable(store)});
-  transition?.commit?.();
+  await transition?.commit?.();
   return {prepared,store};
  }catch(error){
-  try{transition?.rollback?.()}catch(rollbackError){throw new AggregateError([error,rollbackError],'Launch and authority rollback both failed')}
+  try{await transition?.rollback?.()}catch(rollbackError){throw new AggregateError([error,rollbackError],'Launch and authority rollback both failed')}
   throw error;
  }
 }

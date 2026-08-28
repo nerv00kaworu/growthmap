@@ -15,4 +15,6 @@ function createReplacementJournal({userData,encrypt,decrypt,io,platform,windowsP
  const clear=intent=>{const current=read();if(!current||current.transitionId!==intent.transitionId)throw Error('Replacement journal changed unexpectedly');files.remove(NAME)};
  return {read,begin,update,clear,markTerminalVerified};
 }
-module.exports={createReplacementJournal};
+const createReplacementJournalSync=createReplacementJournal;
+function createReplacementJournalDispatch(options={}){if((options.platform||process.platform)==='win32'){if(!options.windowsAdapter&&!options.files)throw Error('Windows replacement journal requires shared native broker adapter');return require('./replacement-journal-async').createReplacementJournalAsync(options)}return createReplacementJournalSync(options)}
+module.exports={createReplacementJournal:createReplacementJournalDispatch};
