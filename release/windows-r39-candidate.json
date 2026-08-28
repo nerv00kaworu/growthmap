@@ -152,7 +152,7 @@
     "desktop/tests/contracts.test.js": "3aa3549b6cb2dc4c998b4bd0995832eb2c1f32aa5b5d9ee075a2cbb689a0ab20",
     "desktop/tests/credential-hydration-orchestrator.test.js": "45321ccb3ee59087b4017ad723c668e18a1fab647711265523a782571d36924f",
     "desktop/tests/credential-ipc.test.js": "da10abbf6ed816df4e80a8baebdb662c1e81a83b689dab82a14d79cdc24a8a36",
-    "desktop/tests/credential-lineage.test.js": "3d3428f965361d83a1e53182c975820359ca58b5403d3feb8f3bc996e6e19824",
+    "desktop/tests/credential-lineage.test.js": "ce5dc9c16db5cd84eefc255877d3900ae3b2af2d829cb4faf2853cb5874e11dc",
     "desktop/tests/credential-startup.test.js": "ccfd88883d8bd6262c797f10c58549f7ab26ef56246e44aefde43c7b638f959d",
     "desktop/tests/csp-diagnostic.test.js": "de70d2d5116dee5c9f2e435ff08d32595d69ff57dc996112747447dbe4eb66f9",
     "desktop/tests/csp-semantic-identity.test.js": "87b5cf7e70c322b4dac31f4e2316cc15eb173ad84d2f87d8776e22cc71e19a3a",
