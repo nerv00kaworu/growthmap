@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('node:crypto'),fs=require('node:fs'),net=require('node:net'),path=require('node:path'),{spawn:defaultSpawn}=require('node:child_process');
-const PIPE=/^[0-9a-f]{32}$/,HEX64=/^[0-9a-f]{64}$/,MAX_SOURCE=256*1024,MAX_LINE=64*1024,MAX_TOTAL=1024*1024,PROTOCOL_VERSION=1;
+const PIPE=/^[0-9a-f]{32}$/,HEX64=/^[0-9a-f]{64}$/,MAX_SOURCE=256*1024,MAX_LINE=64*1024,MAX_TOTAL=1024*1024,PROTOCOL_VERSION=1,DEFAULT_SERVER_TIMEOUT_MS=60000;
 const BOOT_CODES=new Set(['BOOT_START','SOURCE_READ','SOURCE_HASH_OK','SOURCE_EXEC','HELPER_START','NATIVE_TYPE_READY','ENV_READY','IDENTITY_READY','PIPE_SECURITY_READY','SERVER_CREATED','WAIT_CLIENT','CLIENT_CONNECTED','HELLO_SENT']);
 const REMOTE_STAGES=new Set(['busy-evidence','busy-transaction','state','target','acl','evidence','path','boundary','derived','identity','final','named','owner','reparse','network','unsafe','request','action','command','injected-open','injected-rename','injected-flush']);
 function remoteStage(value){return typeof value==='string'&&REMOTE_STAGES.has(value)?`remote-${value}`:'remote'}
@@ -52,7 +52,7 @@ function createWindowsNativeBroker(options={}){
  const testCrashPhase=testMode&&['after-old-rename-directory-flush','after-old-quarantine-directory-flush'].includes(options.testCrashPhase)?options.testCrashPhase:null;
  if(options.testCrashPhase!==undefined&&!testCrashPhase)throw brokerError('test-crash-phase');
  if(options.testCrashSentinel!==undefined&&(!testCrashPhase||typeof options.testCrashSentinel!=='string'||!path.win32.isAbsolute(options.testCrashSentinel)))throw brokerError('test-crash-sentinel');
- const sourceTimeout=options.sourceTimeout||15000,serverTimeout=options.serverTimeout||30000,connectTimeout=options.connectTimeout||30000,helloTimeout=options.helloTimeout||15000,commandTimeout=options.timeout||15000,cleanupTimeout=options.cleanupTimeout||5000;
+ const sourceTimeout=options.sourceTimeout||15000,serverTimeout=options.serverTimeout||DEFAULT_SERVER_TIMEOUT_MS,connectTimeout=options.connectTimeout||30000,helloTimeout=options.helloTimeout||15000,commandTimeout=options.timeout||15000,cleanupTimeout=options.cleanupTimeout||5000;
  let started=null;
  async function start(){if(started)return started;started=(async()=>{
   const began=process.hrtime.bigint(),telemetry=[],emit=stage=>{const entry=Object.freeze({stage,elapsedMs:Number(process.hrtime.bigint()-began)/1e6});telemetry.push(entry);try{onPhase?.(entry)}catch{}};
@@ -88,4 +88,4 @@ function createWindowsNativeBroker(options={}){
  })();try{return await started}catch(e){started=null;throw e}}
  return Object.freeze({start,async request(command,payload,requestTimeout,signal){return (await start()).request(command,payload,requestTimeout,signal)},async close(){if(started)await (await started).close();started=null}})
 }
-module.exports={createWindowsNativeBroker,brokerError,BOOTSTRAP,killTree,validateSecurePath,validateSecurePathPolicyPayload,validateSecurePathPolicyResult,validateInitializePrivateAclPayload,validateInitializePrivateAclResult,validateAclInitializationPreflight,validatePrivateAclDescriptor,validateNativeAclOwnerDaclContract,validateSecureReadFilePayload,validateSecureReadFileResult,MAX_SOURCE,MAX_LINE,MAX_TOTAL,PROTOCOL_VERSION};
+module.exports={createWindowsNativeBroker,brokerError,BOOTSTRAP,killTree,validateSecurePath,validateSecurePathPolicyPayload,validateSecurePathPolicyResult,validateInitializePrivateAclPayload,validateInitializePrivateAclResult,validateAclInitializationPreflight,validatePrivateAclDescriptor,validateNativeAclOwnerDaclContract,validateSecureReadFilePayload,validateSecureReadFileResult,MAX_SOURCE,MAX_LINE,MAX_TOTAL,PROTOCOL_VERSION,DEFAULT_SERVER_TIMEOUT_MS};
