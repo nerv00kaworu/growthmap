@@ -2,7 +2,9 @@
 const {secureFiles}=require('./secure-files');
 const MAX_SECRET_CHARS=16384,MAX_SECRET_BYTES=32768;
 function validSecret(value){return typeof value==='string'&&value.length>0&&value.length<=MAX_SECRET_CHARS&&!value.includes('\0')&&Buffer.byteLength(value,'utf8')<=MAX_SECRET_BYTES}
-function createSecretStore({trustedRoot,directory,encrypt,decrypt,putRemote,hydrateRemote=putRemote,deleteRemote,recoverRemote,recoverStatus,warn=()=>{},windowsAdapter=null,platform=process.platform,files=secureFiles(trustedRoot||directory,directory,undefined,{windowsAdapter,platform})}){
+function createSecretStore(options){
+ const {trustedRoot,directory,encrypt,decrypt,putRemote,hydrateRemote=putRemote,deleteRemote,recoverRemote,recoverStatus,warn=()=>{},windowsAdapter=null,platform=process.platform}=options;
+ const files=options.files===undefined?secureFiles(trustedRoot||directory,directory,undefined,{windowsAdapter,platform,...(options.ownerUid===undefined?{}:{ownerUid:options.ownerUid})}):options.files;
  const valid=id=>{if(!/^[A-Za-z0-9-]{1,80}$/.test(id))throw Error('Invalid provider id');return id};
  const bin=id=>`${valid(id)}.bin`,journal=id=>`${valid(id)}.recover`;
  const decode=async(name,label)=>{let value;try{value=JSON.parse(decrypt(await files.read(name)))}catch{throw Error(`Invalid credential recovery ${label}`)}return value};
