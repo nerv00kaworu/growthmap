@@ -18,7 +18,7 @@ test('packaged E2E follows the current More-menu LLM settings surface and reuses
 
 test('packaged E2E has an independent hard deadline with phase evidence and owned-tree cleanup',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- assert.match(source,/const HARD_TIMEOUT_MS=10\*60\*1000/);assert.match(source,/E2E hard timeout after \$\{HARD_TIMEOUT_MS\}ms; phase=\$\{currentPhase\}/);assert.match(source,/process\.exit\(124\)/);assert.match(source,/function killOwnedTree\(child=activeChild\)/);assert.doesNotMatch(source,/taskkill.*\/IM/is);
+ assert.match(source,/const HARD_TIMEOUT_MS=10\*60\*1000,STARTUP_PAGE_TIMEOUT_MS=3\*60\*1000/);assert.match(source,/const deadline=Date\.now\(\)\+STARTUP_PAGE_TIMEOUT_MS/);assert.match(source,/E2E hard timeout after \$\{HARD_TIMEOUT_MS\}ms; phase=\$\{currentPhase\}/);assert.match(source,/process\.exit\(124\)/);assert.match(source,/function killOwnedTree\(child=activeChild\)/);assert.doesNotMatch(source,/taskkill.*\/IM/is);
 });
 
 test('packaged E2E pre-return launch failures close CDP and kill only the spawned process tree',()=>{

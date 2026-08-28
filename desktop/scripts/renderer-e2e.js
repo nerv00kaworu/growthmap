@@ -8,7 +8,7 @@ const runPython=pythonRunner({spawnSync});
 const executable=process.env.GROWTHMAP_PACKAGED_EXE||path.join(root,'dist','win-unpacked','GrowthMap.exe');
 const screenshot=process.env.GROWTHMAP_E2E_SCREENSHOT||path.join(root,'artifacts','growthmap-renderer.png');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const HARD_TIMEOUT_MS=10*60*1000;let activeChild=null,currentPhase='bootstrap';
+const HARD_TIMEOUT_MS=10*60*1000,STARTUP_PAGE_TIMEOUT_MS=3*60*1000;let activeChild=null,currentPhase='bootstrap';
 function phase(name){currentPhase=name;console.log(`E2E phase: ${name}`);}
 function killOwnedTree(child=activeChild){if(child?.pid)spawnSync('taskkill',['/PID',String(child.pid),'/T','/F'],{stdio:'ignore',windowsHide:true});}
 const hardWatchdog=setTimeout(()=>{console.error(`E2E hard timeout after ${HARD_TIMEOUT_MS}ms; phase=${currentPhase}; childPid=${activeChild?.pid||'none'}; childExit=${activeChild?.exitCode??'null'}; childSignal=${activeChild?.signalCode||'none'}`);killOwnedTree();process.exit(124);},HARD_TIMEOUT_MS);
@@ -32,7 +32,7 @@ async function launch(userData,fixture,profileMode,{injectHydrationFailure=false
  phase(`launch-${profileMode}${injectHydrationFailure?'-injected-failure':''}`);const child=spawn(executable,launchArgs({userData,debugPort,logPath:electronLogPath}),{env:{...process.env,CI:'true',GROWTHMAP_DESKTOP_E2E:'1',GROWTHMAP_E2E_PROFILE_MODE:profileMode,GROWTHMAP_E2E_USER_DATA:userData,GROWTHMAP_E2E_IMPORT_PATH:fixture,GROWTHMAP_E2E_DIAGNOSTIC_PATH:diagnosticPath,GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE:injectHydrationFailure?'1':'0'},stdio:['ignore','pipe','pipe'],windowsHide:true});
  activeChild=child;let output='',directWebSocket=null,browser,tree=processSnapshot(child.pid);const capture=x=>{output+=x;directWebSocket=parseDevToolsWebSocket(output,debugPort);};child.stdout.on('data',capture);child.stderr.on('data',capture);
  try{
-  const deadline=Date.now()+120000;
+  const deadline=Date.now()+STARTUP_PAGE_TIMEOUT_MS;
   while(Date.now()<deadline){if(child.exitCode!==null){if(expectStartupFailure)return {child,browser,page:null,tree,output:()=>output};throw Error(`app exited early: ${output.slice(-1500)}`);}try{browser=await chromium.connectOverCDP(directWebSocket||`http://127.0.0.1:${debugPort}`,{timeout:2000});break;}catch{await sleep(250);}}
   if(!browser){if(expectStartupFailure)return {child,browser,page:null,tree,output:()=>output};throw Error(JSON.stringify(await timeoutDiagnostic({child,debugPort,output,diagnosticPath,electronLogPath}),null,2));}
   let page;while(Date.now()<deadline&&!page){tree=mergeSnapshots(tree,processSnapshot(child.pid));if(child.exitCode!==null&&expectStartupFailure)return {child,browser,page:null,tree,output:()=>output};page=browser.contexts().flatMap(c=>c.pages()).find(p=>p.url().startsWith('http://127.0.0.1:'));if(!page)await sleep(200);}
