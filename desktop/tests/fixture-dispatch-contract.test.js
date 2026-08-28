@@ -259,7 +259,11 @@ function validateCall(base, call) {
   const nonwin = /platform\s*:\s*['"](?:linux|darwin|freebsd)['"]/.test(call.options);
   const asyncSeam = ['windowsAdapter', 'files', 'filesFactory'].some(name => hasProperty(call.options, name));
   assert(win || nonwin, `${label} must explicitly select a platform`);
-  if(nonwin)assert(hasProperty(call.options,'ownerUid'),`${label} explicit non-Windows fixture requires an ownerUid seam`);
+  if (nonwin && call.name === 'createLineageAuthority') assert(hasProperty(call.options, 'filesFactory'), `${label} explicit non-Windows lineage fixture requires a filesFactory seam`);
+  if (nonwin && call.name !== 'createLineageAuthority') assert(hasProperty(call.options, 'files'), `${label} explicit non-Windows fixture requires a files seam`);
+  if (win && call.name === 'createLineageAuthority') {
+    assert(hasProperty(call.options, 'windowsAdapter') && hasProperty(call.options, 'filesFactory'), `${label} win32 lineage constructor requires windowsAdapter and filesFactory async seams`);
+  }
   if (win && !asyncSeam) {
     assert(rejectionAllowlist.has(label), `${label} win32 constructor requires an async seam`);
     assert(enclosingAssertThrows(call), `${label} rejection must use a throwing callback and assert the shared-adapter error in assert.throws second argument`);
@@ -306,12 +310,12 @@ test('scanner sees normal and template-child constructors without lexical false 
   const valid = scanSource([
     'createSecretStore({',
     " platform: 'linux',",
-    ' ownerUid,',
+    ' files,',
     ' root',
     '});',
     'const child = `const tick = \\`ignored \\${host}\\`;',
     'const re = /createSecretStore\\\\({ platform: "win32" }/;',
-    'createReplacementJournal({platform:"linux", ownerUid, userData:${JSON.stringify(root)}});`;',
+    'createReplacementJournal({platform:"linux", files, userData:${JSON.stringify(root)}});`;',
   ].join('\n'));
   assert.deepEqual(valid.map(call => `${call.context}:${call.name}`), [
     'normal:createSecretStore',
@@ -322,13 +326,22 @@ test('scanner sees normal and template-child constructors without lexical false 
   const missingPlatform = scanSource('const child = `createReplacementJournal({userData:"/tmp"})`;');
   assert.throws(() => validateCall('self-missing.test.js', missingPlatform[0]), /explicitly select a platform/);
 
-  const missingOwner = scanSource('const child = `createReplacementJournal({platform:"linux",userData:"/tmp"})`;');
-  assert.throws(() => validateCall('self-owner.test.js', missingOwner[0]), /requires an ownerUid seam/);
+  const missingFiles = scanSource('const child = `createReplacementJournal({platform:"linux",userData:"/tmp"})`;');
+  assert.throws(() => validateCall('self-files.test.js', missingFiles[0]), /requires a files seam/);
 
   const missingAdapter = scanSource('const child = `createReplacementJournal({platform:"win32",userData:"C:\\\\u"})`;');
   assert.throws(() => validateCall('self-win.test.js', missingAdapter[0]), /requires an async seam/);
 
-  const nestedValid = scanSource('const child = `outer ${`createReplacementJournal({platform:"linux",ownerUid})`}`;');
+
+  const lineageFactory = scanSource('createLineageAuthority({platform:"linux",filesFactory})')[0];
+  validateCall('self-lineage-valid.test.js', lineageFactory);
+  const lineageFilesOnly = scanSource('createLineageAuthority({platform:"linux",files})')[0];
+  assert.throws(() => validateCall('self-lineage-files.test.js', lineageFilesOnly), /requires a filesFactory seam/);
+  const winLineageIncomplete = scanSource('createLineageAuthority({platform:"win32",windowsAdapter})')[0];
+  assert.throws(() => validateCall('self-win-lineage.test.js', winLineageIncomplete), /requires windowsAdapter and filesFactory/);
+  validateCall('self-win-lineage-valid.test.js', scanSource('createLineageAuthority({platform:"win32",windowsAdapter,filesFactory})')[0]);
+
+  const nestedValid = scanSource('const child = `outer ${`createReplacementJournal({platform:"linux",files})`}`;');
   assert.deepEqual(nestedValid.map(call => `${call.context}:${call.name}`), [
     'template#1/expression#1/template#1:createReplacementJournal',
   ]);
@@ -343,7 +356,7 @@ test('scanner sees normal and template-child constructors without lexical false 
   const nestedWinValid = scanSource('const child = `outer ${`createReplacementJournal({platform:"win32",windowsAdapter})`}`;');
   validateCall('self-nested-win-valid.test.js', nestedWinValid[0]);
 
-  const difficultExpression = scanSource('const child = `outer ${JSON.stringify({brace:"}",nested:`escaped \\` ${/}/.test("}")}`)} ${`createReplacementJournal({platform:"linux",ownerUid,userData:${JSON.stringify({x:"}"})}})`}`;');
+  const difficultExpression = scanSource('const child = `outer ${JSON.stringify({brace:"}",nested:`escaped \\` ${/}/.test("}")}`)} ${`createReplacementJournal({platform:"linux",files,userData:${JSON.stringify({x:"}"})}})`}`;');
   assert.deepEqual(difficultExpression.map(call => `${call.context}:${call.name}`), [
     'template#1/expression#1/template#2:createReplacementJournal',
   ]);
@@ -366,6 +379,13 @@ test('allowlisted assert.throws binding is structural and matcher-local', () => 
 
   const valid = scanSource('assert.throws(() => createReplacementJournal({platform:"win32"}), /requires shared native broker adapter/)')[0];
   validateCall('windows-async-credential-journal.test.js', valid);
+});
+
+
+test('host-neutral adapter remains test-only and production modules never import it',()=>{
+ const production=fs.readdirSync(path.resolve(testsDir,'..')).filter(base=>base.endsWith('.js'));
+ for(const base of production)assert.doesNotMatch(fs.readFileSync(path.resolve(testsDir,'..',base),'utf8'),/host-neutral-test-files/,base);
+ const helpers=path.resolve(testsDir,'helpers','host-neutral-test-files.js');assert.equal(fs.existsSync(helpers),true);
 });
 
 test('credential, replacement-journal, and secret-store fixtures declare host-independent dispatch', () => {
