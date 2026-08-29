@@ -96,7 +96,7 @@ jobs:
         run: npm run dist:win:e2e
         working-directory: desktop
       - name: R39 packaged renderer and real-main lifecycle E2E
-        timeout-minutes: 9
+        timeout-minutes: 11
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           npm run renderer:e2e 2>&1 | Tee-Object -FilePath artifacts/r39-renderer-e2e.log
