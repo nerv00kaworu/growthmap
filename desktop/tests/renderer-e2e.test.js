@@ -10,10 +10,10 @@ test('packaged E2E launch passes Chromium debug port directly and enables file l
  assert.doesNotMatch(source,/GROWTHMAP_E2E_DEBUG_PORT/);
 });
 
-test('packaged E2E follows the current More-menu LLM settings surface and reuses the open database modal',()=>{
+test('packaged E2E follows the current More-menu LLM settings surface and reopens the database modal after import reload',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
  assert.match(source,/getByTestId\('settings-menu-button'\)\.click\(\)/);assert.match(source,/getByTestId\('llm-provider-settings-button'\)\.click\(\)/);assert.doesNotMatch(source,/desktop-settings-button/);
- const dbOpens=source.match(/getByTestId\('database-workspace-button'\)\.click\(\)/g)||[];assert.equal(dbOpens.length,1);assert.match(source,/credentialProofResult=await credentialProof[\s\S]{0,500}getByTestId\('database-workspace'\)\.waitFor\(\)[\s\S]{0,150}getByTestId\('database-backup'\)\.click\(\)/);
+ const dbOpens=source.match(/getByTestId\('database-workspace-button'\)\.click\(\)/g)||[];assert.equal(dbOpens.length,2);assert.match(source,/credentialProofResult=await credentialProof[\s\S]{0,500}getByTestId\('database-workspace-button'\)\.click\(\)[\s\S]{0,150}getByTestId\('database-workspace'\)\.waitFor\(\)[\s\S]{0,150}getByTestId\('database-backup'\)\.click\(\)/);
 });
 
 test('packaged E2E has an independent hard deadline with phase evidence and owned-tree cleanup',()=>{
@@ -68,12 +68,13 @@ test('expected startup failure suppresses only the isolated E2E modal then requi
  assert.match(source,/await waitForTreeGone\(run\.tree\)/);
 });
 
-test('packaged E2E proves broker-unavailable import is isolated from normal app health, backup, and restart',()=>{
+test('packaged E2E proves foreign import converges to exact fixture health before backup and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- for(const token of ['import-safely-unavailable','import-refusal-health','beforeImport','afterImport','/api/health/deep','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
- assert.match(source,/stageWait\(run,'import-refusal-health',[\s\S]{0,500}afterImport=\{health:'unavailable'/);
- assert.match(source,/broker-unavailable import precondition failed/);
- assert.doesNotMatch(source,/firstSidecar|secondSidecar|restart did not create a new sidecar process/);
+ for(const token of ['import-success-health','import-transaction-committed','after-committed-journal','growthmapImportDocumentNonce','beforeImport','/api/health/deep','/api/projects/fixture','Desktop Fixture','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
+ assert.match(source,/growthmapImportDocumentNonce='pre-import-document'[\s\S]{0,1200}stageWait\(run,'import-success-health',[\s\S]{0,800}project\.id==='fixture'[\s\S]{0,300}project\.root_node_id==='root'[\s\S]{0,200}!document\.documentElement\.dataset\.growthmapImportDocumentNonce/);
+ assert.match(source,/phaseWait\(run,'import-transaction-committed','after-committed-journal',30000\)[\s\S]{0,200}credentialProofResult=await credentialProof/);
+ assert.match(source,/import precondition failed/);
+ assert.doesNotMatch(source,/import-safely-unavailable|import-refusal-health|broker-unavailable|firstSidecar|secondSidecar|restart did not create a new sidecar process/);
  assert.match(source,/await close\(run\);[\s\S]{0,160}run=await launch\(userData,fixture,'existing-free'\);[\s\S]{0,160}await assertRestartCredential/);
  assert.doesNotMatch(source,/import-canonical-api|restore-canonical-api|mutated-restart/);
 });
