@@ -296,6 +296,7 @@ const expectedInventory = [
   'replacement-supersession.test.js:normal:createReplacementJournal#2',
   'replacement-supersession.test.js:normal:createReplacementJournal#3',
   'replacement-supersession.test.js:normal:createReplacementJournal#4',
+  'replacement-supersession.test.js:normal:createReplacementJournal#5',
   'replacement-terminal-cas.test.js:normal:createReplacementJournal#1',
   'replacement-toctou.test.js:normal:createReplacementJournal#1',
   'secret-store.test.js:normal:createSecretStore#1',
