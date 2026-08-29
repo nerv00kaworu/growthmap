@@ -6,11 +6,16 @@ async function hydrateAndSeal({writable,store,getCapability,seal}){
  await seal(getCapability());
  return {hydrated:true,sealed:true};
 }
-async function restartHydration({prepare,store,getCapability,seal,reload}){
- const prepared=await prepare();
- await store.reconcile();
- await hydrateAndSeal({writable:prepared.policy.writable,store,getCapability,seal});
- await reload();
+async function restartHydration({prepare,store,getCapability,seal,reload,reportStage=()=>{}}){
+ const report=name=>{try{reportStage(name)}catch{}};
+ let prepared;report('replacement-restart-prepare-enter');
+ try{prepared=await prepare();report('replacement-restart-prepare-ready')}catch(error){report('replacement-restart-failed-prepare');throw error}
+ try{await store.reconcile();report('replacement-restart-reconcile-ready')}catch(error){report('replacement-restart-failed-reconcile');throw error}
+ if(prepared.policy.writable){
+  try{await store.hydrate();report('replacement-restart-hydrate-ready')}catch(error){report('replacement-restart-failed-hydrate');throw error}
+  try{await seal(getCapability());report('replacement-restart-seal-ready')}catch(error){report('replacement-restart-failed-seal');throw error}
+ }
+ try{await reload();report('replacement-restart-reload-ready')}catch(error){report('replacement-restart-failed-reload');throw error}
  return prepared;
 }
 function createAttemptLifecycle({writable,newCapability,setCurrent}){
