@@ -31,7 +31,7 @@ function Canon([string]$p) {
   return $f.TrimEnd([IO.Path]::DirectorySeparatorChar)
 }
 function Final-Canon($h) { $p=[GrowthMapNativeEvidence]::FinalPath($h); if($p.StartsWith('\\?\UNC\')){throw 'network'}; if($p.StartsWith('\\?\')){$p=$p.Substring(4)}; return Canon $p }
-function Identity($info,[string]$p) { @{platform='win32';path=$p;volumeSerial=('{0:X8}' -f $info.VolumeSerial);fileIndex=('{0:X8}{1:X8}' -f $info.FileIndexHigh,$info.FileIndexLow)} }
+function Identity($info,[string]$p) { @{platform='win32';volumeSerial=('{0:X8}' -f $info.VolumeSerial);fileIndex=('{0:X8}{1:X8}' -f $info.FileIndexHigh,$info.FileIndexLow)} }
 function Validate-Info($info) {
   $reparse=[uint32]0x400; $directory=[uint32]0x10; $device=[uint32]0x40
   if(($info.Attributes -band ($reparse -bor $directory -bor $device)) -ne 0 -or $info.NumberOfLinks -ne 1 -or $info.VolumeSerial -eq 0 -or ($info.FileIndexHigh -eq 0 -and $info.FileIndexLow -eq 0)){throw 'unsafe'}
