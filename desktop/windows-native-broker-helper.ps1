@@ -18,6 +18,7 @@ public static class GrowthMapBrokerNative {
  [StructLayout(LayoutKind.Sequential)] public struct FILETIME { public uint Low,High; }
  [StructLayout(LayoutKind.Sequential)] public struct Info { public uint Attributes; public FILETIME Creation,Access,Write; public uint VolumeSerial,SizeHigh,SizeLow,NumberOfLinks,FileIndexHigh,FileIndexLow; }
  [DllImport("kernel32.dll",SetLastError=true)] public static extern bool GetFileInformationByHandle(SafeFileHandle h,out Info i);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] public static extern uint GetDriveTypeW(string rootPathName);
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint GetFinalPathNameByHandleW(SafeFileHandle h,StringBuilder p,uint n,uint f);
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern SafeFileHandle CreateFileW(string p,uint a,uint s,IntPtr x,uint d,uint f,IntPtr t);
  [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(SafeFileHandle h,int c,IntPtr i,uint n);
@@ -56,7 +57,7 @@ function Validate-Acl([string]$p){
 }
 function Match-Evidence($a,$b){$null-ne$a-and$a.sha256-eq$b.sha256-and[int64]$a.size-eq[int64]$b.size}
 function Exact-Keys($o,[string]$expected){if($null-eq$o-or$o-isnot[pscustomobject]-or((@($o.PSObject.Properties.Name|Sort-Object)-join'|')-ne$expected)){throw 'request'}}
-function Strict-LocalPath([string]$raw){if([string]::IsNullOrWhiteSpace($raw)-or$raw.Length-gt4096-or$raw.IndexOf([char]0)-ge0-or$raw-notmatch'^[A-Za-z]:\\'-or$raw.Contains('/')-or$raw.Substring(2).Contains(':')-or$raw.IndexOfAny([char[]]'?*')-ge0){throw 'boundary'};$p=Canon $raw;if($p-ine$raw){throw 'path'};$p}
+function Strict-LocalPath([string]$raw){if([string]::IsNullOrWhiteSpace($raw)-or$raw.Length-gt4096-or$raw.IndexOf([char]0)-ge0-or$raw-notmatch'^[A-Za-z]:\\'-or$raw.Contains('/')-or$raw.Substring(2).Contains(':')-or$raw.IndexOfAny([char[]]'?*')-ge0){throw 'boundary'};$p=Canon $raw;$root=[IO.Path]::GetPathRoot($p);if([string]::IsNullOrWhiteSpace($root)-or[GrowthMapBrokerNative]::GetDriveTypeW($root)-ne3){throw 'network'};$p}
 function Path-Parts([string]$p){,@($p.Substring(3).Split([char]'\',[StringSplitOptions]::RemoveEmptyEntries))}
 function Assert-UnderRoot([string]$root,[string]$p){if($root.Substring(0,2)-ine$p.Substring(0,2)){throw 'boundary'};$r=Path-Parts $root;$x=Path-Parts $p;if($x.Count-lt$r.Count){throw 'boundary'};for($n=0;$n-lt$r.Count;$n++){if($r[$n]-ine$x[$n]){throw 'boundary'}}}
 function Trusted-Sids(){@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')}
