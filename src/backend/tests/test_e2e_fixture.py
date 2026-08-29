@@ -19,8 +19,33 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
         row = connection.execute(
             "SELECT id, name, status FROM projects WHERE id='fixture'"
         ).fetchone()
+        provider_columns = {
+            column[1] for column in connection.execute("PRAGMA table_info(provider_configs)")
+        }
+        connection.execute(
+            """INSERT INTO provider_configs(
+                id,name,provider_type,endpoint,auth_type,secret_env_key,model_name,
+                capabilities,cost_level,enabled,settings,created_at,updated_at,
+                revision,secret_change_pending,secret_change_claim
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "provider", "Fixture Provider", "openai_compatible",
+                "http://127.0.0.1:9", "env", "GROWTHMAP_LLM_KEY_E2E", "fixture",
+                "[]", "none", 1, "{}", None, None, 1, 0, None,
+            ),
+        )
+        provider = connection.execute(
+            "SELECT id, provider_type, revision, secret_change_pending FROM provider_configs"
+        ).fetchone()
     assert table == ("projects",)
     assert row == ("fixture", "Desktop Fixture", "active")
+    assert provider_columns == {
+        "id", "name", "provider_type", "endpoint", "auth_type", "secret_env_key",
+        "model_name", "capabilities", "cost_level", "enabled", "settings",
+        "created_at", "updated_at", "revision", "secret_change_pending",
+        "secret_change_claim",
+    }
+    assert provider == ("provider", "openai_compatible", 1, 0)
 
 
 def test_e2e_fixture_refuses_live_looking_path():
