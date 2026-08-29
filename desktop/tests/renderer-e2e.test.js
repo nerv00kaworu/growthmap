@@ -70,9 +70,10 @@ test('expected startup failure suppresses only the isolated E2E modal then requi
 
 test('packaged E2E proves foreign import converges to exact fixture health before backup and restart',()=>{
  const source=fs.readFileSync(path.join(__dirname,'../scripts/renderer-e2e.js'),'utf8');
- for(const token of ['import-success-health','import-transaction-committed','after-committed-journal','growthmapImportDocumentNonce','beforeImport','/api/health/deep','/api/projects/fixture','Desktop Fixture','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
+ for(const token of ['import-success-health','import-transaction-cleaned','after-replacement-cleanup','growthmapImportDocumentNonce','beforeImport','/api/health/deep','/api/projects/fixture','Desktop Fixture','database-backup','restart-free','assertRestartCredential'])assert.ok(source.includes(token),token);
  assert.match(source,/growthmapImportDocumentNonce='pre-import-document'[\s\S]{0,1200}stageWait\(run,'import-success-health',[\s\S]{0,800}project\.id==='fixture'[\s\S]{0,300}project\.root_node_id==='root'[\s\S]{0,200}!document\.documentElement\.dataset\.growthmapImportDocumentNonce/);
- assert.match(source,/phaseWait\(run,'import-transaction-committed','after-committed-journal',30000\)[\s\S]{0,200}credentialProofResult=await credentialProof/);
+ assert.match(source,/phaseWait\(run,'import-transaction-cleaned','after-replacement-cleanup',30000\)[\s\S]{0,200}credentialProofResult=await credentialProof/);
+ const manager=fs.readFileSync(path.join(__dirname,'..','database-manager.js'),'utf8'),cleanup=manager.indexOf("report('after-replacement-cleanup')"),recover=manager.lastIndexOf('await recoverReplacement',cleanup),result=manager.indexOf('return {ok:true,installed:result.installed,cleanup}',cleanup);assert.ok(recover>=0&&recover<cleanup&&cleanup<result,'E2E cleanup phase must be emitted only after awaited terminal recovery and before replacement resolves');
  assert.match(source,/import precondition failed/);
  assert.doesNotMatch(source,/import-safely-unavailable|import-refusal-health|broker-unavailable|firstSidecar|secondSidecar|restart did not create a new sidecar process/);
  assert.match(source,/await close\(run\);[\s\S]{0,160}run=await launch\(userData,fixture,'existing-free'\);[\s\S]{0,160}await assertRestartCredential/);

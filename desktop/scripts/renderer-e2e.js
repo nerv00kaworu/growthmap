@@ -79,7 +79,7 @@ async function assertRestartCredential(run,proof,credential){
   run.page.once('dialog',d=>d.accept());
   await run.page.getByTestId('database-import').click();
   await stageWait(run,'import-success-health',async()=>{try{const [health,projectResponse]=await Promise.all([fetch('/api/health/deep',{credentials:'same-origin'}),fetch('/api/projects/fixture',{credentials:'same-origin'})]);if(!health.ok||!projectResponse.ok)return false;const project=await projectResponse.json();return health.status===200&&project.id==='fixture'&&project.name==='Desktop Fixture'&&project.root_node_id==='root'&&!document.documentElement.dataset.growthmapImportDocumentNonce&&Boolean(document.querySelector('[data-testid="growthmap-title"]'));}catch{return false;}},90000);
-  await phaseWait(run,'import-transaction-committed','after-committed-journal',30000);
+  await phaseWait(run,'import-transaction-cleaned','after-replacement-cleanup',30000);
   const syntheticCredential=`e2e-${require('node:crypto').randomBytes(24).toString('base64url')}`,credentialProofResult=await credentialProof(run,syntheticCredential);await credentialCheckpoint(run,credentialProofResult,'after-set');
   await run.page.getByTestId('database-workspace-button').click();
   await run.page.getByTestId('database-workspace').waitFor();
