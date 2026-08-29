@@ -149,7 +149,7 @@
     "desktop/tests/agent-access-ipc.test.js": "877549de40b5d8a220ac0e27bebb5dee3a25f1d6c0dd8743ce67f71a9261c9ce",
     "desktop/tests/agent-access.test.js": "3f47e02f8ca78d62fce39a1cbcc93d3666c68667c46306e60b6e8f9f966c3d6c",
     "desktop/tests/commercial-config.test.js": "51355bb4674e324d1f4bc85fe5d94fa3c31b4383025db216822336940396e3d7",
-    "desktop/tests/contracts.test.js": "3aa3549b6cb2dc4c998b4bd0995832eb2c1f32aa5b5d9ee075a2cbb689a0ab20",
+    "desktop/tests/contracts.test.js": "e0f83e78454baf7e31d49634a6a8f2a89344ec2927e750745cf24f0cbfca2dee",
     "desktop/tests/credential-hydration-orchestrator.test.js": "9fa59ad74ab427623741c88652ee95a473f99ad9af23a78a7144bc27b5048a95",
     "desktop/tests/credential-ipc.test.js": "da10abbf6ed816df4e80a8baebdb662c1e81a83b689dab82a14d79cdc24a8a36",
     "desktop/tests/credential-lineage.test.js": "38d3916c81ceb73311169cd0f5c047a6d7ac67a8bab370928343743529507b4f",
