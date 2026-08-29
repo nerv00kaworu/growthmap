@@ -34,7 +34,7 @@ if(process.env.GROWTHMAP_E2E_INJECT_HYDRATION_FAILURE==='1'){
  dialog.showErrorBox=()=>phase('startup-error-box-suppressed');
  phase('hydration-failure-injected');
 }
-require('./lifecycle').enableIsolatedE2EDiagnostics();
+require('./lifecycle').enableIsolatedE2EDiagnostics(name=>phase(name));
 phase('main-required');
 require('./main');
 app.on('browser-window-created',(_event,window)=>window.webContents.on('did-finish-load',()=>window.webContents.executeJavaScript(`document.documentElement.dataset.growthmapRendererReady='true'`).catch(()=>{})));

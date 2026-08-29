@@ -17,7 +17,7 @@ test('entitlement probes capture bounded output while production sidecars never 
  assert.deepEqual(sidecarSpawnOptions('win32'),{detached:false,windowsHide:true,stdio:['ignore','ignore','ignore']});
  const source=fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),e2e=fs.readFileSync(path.join(__dirname,'../e2e-main.js'),'utf8');
  assert.match(source,/--entitlement-status[\s\S]*probeSpawnOptions\(\)/);
- assert.match(e2e,/enableIsolatedE2EDiagnostics\(\)/);
+ assert.match(e2e,/enableIsolatedE2EDiagnostics\(name=>phase\(name\)\)/);
  assert.doesNotMatch(source,/process\.env\.CI|GROWTHMAP_DESKTOP_E2E/);
  assert.match(source,/const spawnOptions=sidecarSpawnOptions\(\)/);
  assert.doesNotMatch(source,/spawnOptions\.stdio=\['ignore','ignore','pipe'\]/);
@@ -25,8 +25,9 @@ test('entitlement probes capture bounded output while production sidecars never 
  assert.match(source,/if\(!child\.stdout\|\|!child\.stderr\)return reject/);
 });
 
-test('isolated E2E entrypoint capability explicitly enables bounded sidecar stderr',()=>{
- const script="const l=require('./lifecycle');l.enableIsolatedE2EDiagnostics();process.stdout.write(JSON.stringify(l.sidecarSpawnOptions('win32')))";
+test('isolated E2E entrypoint capability explicitly enables bounded sidecar stderr and fixed stage reporting',()=>{
+ const script="const l=require('./lifecycle'),stages=[];l.enableIsolatedE2EDiagnostics(name=>stages.push(name));l.reportIsolatedE2EStage('replacement-restart-prepare-enter');process.stdout.write(JSON.stringify({options:l.sidecarSpawnOptions('win32'),stages}))";
  const result=require('node:child_process').spawnSync(process.execPath,['-e',script],{cwd:path.resolve(__dirname,'..'),encoding:'utf8'});
- assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),{detached:false,windowsHide:true,stdio:['ignore','ignore','pipe']});
+ assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),{options:{detached:false,windowsHide:true,stdio:['ignore','ignore','pipe']},stages:['replacement-restart-prepare-enter']});
 });
+test('isolated E2E stage reporter exceptions are fail-open and production default is inert',()=>{const script="const l=require('./lifecycle');l.reportIsolatedE2EStage('ignored');l.enableIsolatedE2EDiagnostics(()=>{throw Error('hostile')});l.reportIsolatedE2EStage('ignored-again');process.stdout.write('ok')";const result=require('node:child_process').spawnSync(process.execPath,['-e',script],{cwd:path.resolve(__dirname,'..'),encoding:'utf8'});assert.equal(result.status,0,result.stderr);assert.equal(result.stdout,'ok')});

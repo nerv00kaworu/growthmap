@@ -23,8 +23,9 @@ function createLifecycle({platform=process.platform,spawn=defaultSpawn,graceMs=2
  function shutdown(closeWindows=()=>{}){if(shutdownPromise)return shutdownPromise;beginShutdown();shutdownPromise=(async()=>{closeWindows();await cleanup();})();return shutdownPromise;}
  return {attach,cleanup,beginShutdown,shutdown,isExpectedExit:target=>expectedExits.has(target),get child(){return child;},get shuttingDown(){return shuttingDown;},get acceptingIpc(){return acceptingIpc;}};
 }
-let isolatedE2EDiagnostics=false;
-function enableIsolatedE2EDiagnostics(){isolatedE2EDiagnostics=true;}
+let isolatedE2EDiagnostics=false,isolatedE2EReporter=()=>{};
+function enableIsolatedE2EDiagnostics(reportStage=()=>{}){isolatedE2EDiagnostics=true;isolatedE2EReporter=typeof reportStage==='function'?reportStage:()=>{};}
+function reportIsolatedE2EStage(name){try{isolatedE2EReporter(name)}catch{}}
 function sidecarSpawnOptions(platform=process.platform){return {detached:platform!=='win32',windowsHide:true,stdio:isolatedE2EDiagnostics?['ignore','ignore','pipe']:['ignore','ignore','ignore']};}
 function probeSpawnOptions(platform=process.platform){return {...sidecarSpawnOptions(platform),stdio:['ignore','pipe','pipe']};}
-module.exports={createLifecycle,sidecarSpawnOptions,probeSpawnOptions,enableIsolatedE2EDiagnostics,waitForExit,signalTree,killWindowsTree,delay};
+module.exports={createLifecycle,sidecarSpawnOptions,probeSpawnOptions,enableIsolatedE2EDiagnostics,reportIsolatedE2EStage,waitForExit,signalTree,killWindowsTree,delay};
