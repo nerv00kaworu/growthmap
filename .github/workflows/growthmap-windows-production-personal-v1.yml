@@ -91,6 +91,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           node --test tests/windows-native-broker.test.js tests/windows-native-evidence.test.js tests/windows-native-replacement.test.js tests/windows-startup-recovery.test.js tests/database-manager-windows-preflight.test.js
           if ($LASTEXITCODE -ne 0) { throw "Windows replacement fail-closed policy acceptance failed with exit $LASTEXITCODE" }
+          node tests/windows-recovery-barrier-acceptance.js
+          if ($LASTEXITCODE -ne 0) { throw "Windows recovery barrier dispatch acceptance failed with exit $LASTEXITCODE" }
       - name: Build isolated non-shipped R39 E2E package
         timeout-minutes: 10
         run: npm run dist:win:e2e

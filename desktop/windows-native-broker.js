@@ -2,7 +2,7 @@
 const crypto=require('node:crypto'),fs=require('node:fs'),net=require('node:net'),path=require('node:path'),{spawn:defaultSpawn}=require('node:child_process');
 const PIPE=/^[0-9a-f]{32}$/,HEX64=/^[0-9a-f]{64}$/,MAX_SOURCE=256*1024,MAX_LINE=64*1024,MAX_TOTAL=1024*1024,PROTOCOL_VERSION=1,DEFAULT_SERVER_TIMEOUT_MS=60000;
 const BOOT_CODES=new Set(['BOOT_START','SOURCE_READ','SOURCE_HASH_OK','SOURCE_EXEC','HELPER_START','NATIVE_TYPE_READY','ENV_READY','IDENTITY_READY','PIPE_SECURITY_READY','SERVER_CREATED','WAIT_CLIENT','CLIENT_CONNECTED','HELLO_SENT']);
-const REMOTE_STAGES=new Set(['busy-evidence','busy-transaction','state','target','missing','acl','evidence','path','boundary','derived','identity','final','named','owner','reparse','network','unsafe','request','action','command','injected-open','injected-rename','injected-flush']);
+const REMOTE_STAGES=new Set(['busy-evidence','busy-transaction','state','target','missing','acl','evidence','path','boundary','derived','identity','final','named','owner','reparse','network','unsafe','request','action','command','injected-open','injected-rename','injected-flush','injected-dispose']);
 function remoteStage(value){return typeof value==='string'&&REMOTE_STAGES.has(value)?`remote-${value}`:'remote'}
 function remoteError(value){const error=brokerError(remoteStage(value));if(value==='missing')error.code='ENOENT';return error}
 const BOOTSTRAP=`$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n$InformationPreference = 'SilentlyContinue'\nSet-StrictMode -Version 3\n[Console]::Error.WriteLine('BOOT_START')\n[Console]::Error.WriteLine('SOURCE_READ')\n$s = [Console]::In.ReadToEnd()\nif ($s.Length -lt 100 -or [Text.Encoding]::UTF8.GetByteCount($s) -gt 262144) { exit 71 }\n$b = [Text.Encoding]::UTF8.GetBytes($s)\n$sha = [Security.Cryptography.SHA256]::Create()\ntry { $h = [BitConverter]::ToString($sha.ComputeHash($b)).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }\nif ($h -ne $env:GROWTHMAP_BROKER_SOURCE_SHA256) { exit 72 }\n[Console]::Error.WriteLine('SOURCE_HASH_OK')\n[Console]::Error.WriteLine('SOURCE_EXEC')\n[ScriptBlock]::Create($s).Invoke()`;
@@ -51,7 +51,7 @@ function killTree(child,spawnImpl,env,timeoutMs=5000){return new Promise((resolv
 function createWindowsNativeBroker(options={}){
  const spawnImpl=options.spawnImpl||defaultSpawn,connect=options.connect||net.createConnection,readFile=options.readFile||fs.readFileSync,env=options.env||process.env,onSpawn=options.onSpawn||null,onPhase=options.onPhase||null;
  const testMode=env.NODE_ENV==='test',onPipeAllocated=testMode&&typeof options.onPipeAllocated==='function'?options.onPipeAllocated:null,testRaw=testMode&&options.enableTestRawRequest===true;
- const nativeFault=testMode&&['open','rename','flush'].includes(options.nativeFault)?options.nativeFault:null;
+ const nativeFault=testMode&&['open','rename','flush','dispose'].includes(options.nativeFault)?options.nativeFault:null;
  const testCrashPhase=testMode&&['after-old-rename-directory-flush','after-old-quarantine-directory-flush'].includes(options.testCrashPhase)?options.testCrashPhase:null;
  if(options.testCrashPhase!==undefined&&!testCrashPhase)throw brokerError('test-crash-phase');
  if(options.testCrashSentinel!==undefined&&(!testCrashPhase||typeof options.testCrashSentinel!=='string'||!path.win32.isAbsolute(options.testCrashSentinel)))throw brokerError('test-crash-sentinel');
