@@ -226,7 +226,7 @@
     "desktop/tests/windows-r318-hard-exit-acceptance.js": "8ad6226a1746131a456ad5aedac4ba30e294c364b84cb5bd51632bae37e55c1e",
     "desktop/tests/windows-r39-acceptance.js": "912ac668f793294c6dfff2d5bba12a4f480f916327a57f3e3c5875a9a7456d88",
     "desktop/tests/windows-r39-broker-smoke.js": "4b233375dd6abbc010fd02570e4c0af6ff7374238ffac0ed16d9dcb6316f7598",
-    "desktop/tests/windows-r39-manager-acceptance.js": "1d6c35a5271083bbb0f5b63dc6a3dcd1500a98457cb5ede7b1b08b3710ee567f",
+    "desktop/tests/windows-r39-manager-acceptance.js": "cfc4f9681fa73bdea6b3dfc10d517093db7bde5705ab8be8d1f4ff9cdef6449a",
     "desktop/tests/windows-r39-release-chain.test.js": "5c6aac82581580d904e8ab07b71b7906b41549d9b468593e65131168a97bac95",
     "desktop/tests/windows-recovery-barrier-acceptance.js": "2cbbd21c2780508c2a5f62579b62eaab9ad4eb183e7dad877c9026d87bbecc24",
     "desktop/tests/windows-startup-recovery.test.js": "2c6366964fcae7d253edf1ca86b0b2549912a98a4754790578d0b32321757af0",
