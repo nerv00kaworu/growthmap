@@ -1,0 +1,3 @@
+'use strict';
+async function reloadRendererAfterRestart({getBaseUrl,window,health}){if(!window||window.isDestroyed())return false;const origin=getBaseUrl();await window.loadURL(origin);await health(origin);if(getBaseUrl()!==origin)throw new Error('Sidecar origin changed during renderer reload');const ready=await window.webContents.executeJavaScript(`Boolean(document.querySelector('[data-testid="growthmap-title"]')&&document.querySelector('[data-testid="new-project-button"]')&&document.querySelector('[data-testid="entitlement-status"]'))`);if(!ready)throw new Error('Required UI markers missing after sidecar restart');return true}
+module.exports={reloadRendererAfterRestart};
