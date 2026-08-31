@@ -430,7 +430,7 @@
     "src/frontend/src/lib/ai-panel-controller.ts": "a3d2032671212cb0da0e6207a341c0fbd6e52f0b3ed0eba25309cfe7dfa5fa41",
     "src/frontend/src/lib/ai-panel-lifecycle.test.ts": "eaba4b9a77b9721a41cad39a3e91ddb8387562af46274425746c37cc2fad18e9",
     "src/frontend/src/lib/ai-panel-lifecycle.ts": "6267c9d9373f99f03295618cce5a7897299b643be7d411ff25a4a0a50f06b9b2",
-    "src/frontend/src/lib/api.ai-error.test.ts": "729999450aa28143a4e3524b85d51f140a45e12a563d8214254a8568cc69c5d1",
+    "src/frontend/src/lib/api.ai-error.test.ts": "7bb0c7d0eeeb15e2f986a8a0fd7141641f6795173c9de740ec467357090c2165",
     "src/frontend/src/lib/api.block-cache.test.ts": "c80ca3f60574d0f09c38c433d3186b1c7354c6c4047c5ec886704039fd9183f6",
     "src/frontend/src/lib/api.ts": "9ad0feadf869f9db0915a2851cb055de814cbd4e7fefd897c9591d4c8bff80be",
     "src/frontend/src/lib/conflict.ts": "b31896541cf69416e202b30e667a4b1bcee7bad4a6b090d3260c5fe9c3dfd962",
