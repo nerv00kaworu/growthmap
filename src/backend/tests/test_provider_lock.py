@@ -214,6 +214,27 @@ def test_windows_file_security_native_abi_and_ace_contract():
  assert 'sid_offset + sid_length > ace_size' in fields and 'flags & ~0x3' in fields
  assert 'IsValidSid.argtypes=[wintypes.LPVOID]' in advapi and 'GetLengthSid.argtypes=[wintypes.LPVOID]' in advapi
  assert 'header.AceSize < 8' in acl and 'info.AclBytesInUse' in acl
+ assert 'header.AceFlags & 0x08' in acl  # INHERIT_ONLY_ACE is not effective on this object
  assert 'LocalFree.argtypes = [wintypes.LPVOID]' in kernel and 'LocalFree.restype = wintypes.LPVOID' in kernel
  assert '_kernel32().LocalFree' in sid and 'ctypes.windll' not in sid+acl
  assert '_current_user_sid' not in inspect.getsource(security)
+
+def test_windows_acl_only_skips_non_effective_inherit_only_allow_aces():
+ from api import windows_file_security as security
+ import inspect
+ source=inspect.getsource(security._validate_native_acl)
+ assert 'if header.AceFlags & 0x08: continue' in source
+ assert '0x10' not in source  # INHERITED_ACE remains effective and must be checked
+ assert source.index('_allow_ace_fields(') < source.index('if header.AceFlags & 0x08: continue')
+
+def test_windows_inherit_only_allow_layout_is_validated_before_skip():
+ from api import windows_file_security as security
+ import inspect
+ source=inspect.getsource(security._validate_native_acl)
+ parse=source.index('mask,sid=_allow_ace_fields(');skip=source.index('if header.AceFlags & 0x08: continue')
+ assert parse < skip
+ # The bounded parser itself rejects each hostile shape even when the caller's
+ # ACE header would mark the entry inherit-only.
+ import ctypes
+ raw=(ctypes.c_ubyte*8)();base=ctypes.addressof(raw)
+ with pytest.raises(RuntimeError,match='policy unavailable'):security._allow_ace_fields(base,security.ACCESS_ALLOWED_ACE_TYPE,8)

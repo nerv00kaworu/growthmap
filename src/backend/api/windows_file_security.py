@@ -283,6 +283,11 @@ def _validate_native_acl(handle) -> None:
             consumed += header.AceSize
             if header.AceType in _SUPPORTED_ALLOW_ACE_TYPES:
                 mask,sid=_allow_ace_fields(ace.value,header.AceType,header.AceSize)
+                # INHERIT_ONLY_ACE is a template for children, not an access
+                # grant on this chain component. Parse and validate it first so
+                # malformed templates still fail closed. All effective inherited
+                # ACEs remain subject to the same owner/write policy.
+                if header.AceFlags & 0x08: continue
                 entries.append((_sid_text(sid),mask))
             elif header.AceType == 4:  # obsolete compound allow layout: fail closed
                 raise RuntimeError("Windows provider-lock policy unavailable")
