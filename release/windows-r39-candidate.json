@@ -86,7 +86,7 @@
     "desktop/electron-builder-signed.js": "17c91e606770e071c86826468b41a626dd41ca1c7eff18fdeb588f5323e3f70f",
     "desktop/electron-builder-staging.js": "5bdace62d2825d097186e12a4de2cd34f14b74ebe73b64bbb1a155300d3c6777",
     "desktop/electron-builder-unsigned.js": "9c48119dd9d664c98c8d6da24079d3c636b226b8bed7fbd9c8c8d1201c9d753a",
-    "desktop/generated/csp-script-hashes.json": "01c688785b322f4c352475b5cbb149552be319a4780892683b147a6da724f77f",
+    "desktop/generated/csp-script-hashes.json": "a4b9c4d481ccec162dd0406868ce80b939a20ac0d7fbe950f887a345970a91aa",
     "desktop/license-file.js": "178d6abae537d51ae2332fae79945c2f9d34a2db34303ab29d92f0025191da8f",
     "desktop/license-freshness-store.js": "bc36953df3a45bb13f917e2a4df0ee8cdb16297b2011c6fe33e157250623c925",
     "desktop/license-refresh-orchestrator.js": "e6f385152bb3c639665964fa64a1a13d13cd197347214c9efe5f7fcece21b79e",
