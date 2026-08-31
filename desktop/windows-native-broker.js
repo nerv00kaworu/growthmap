@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('node:crypto'),fs=require('node:fs'),net=require('node:net'),path=require('node:path'),{spawn:defaultSpawn}=require('node:child_process');
-const PIPE=/^[0-9a-f]{32}$/,HEX64=/^[0-9a-f]{64}$/,MAX_SOURCE=256*1024,MAX_LINE=64*1024,MAX_TOTAL=1024*1024,PROTOCOL_VERSION=1,DEFAULT_SERVER_TIMEOUT_MS=60000;
+const PIPE=/^[0-9a-f]{32}$/,HEX64=/^[0-9a-f]{64}$/,MAX_SOURCE=256*1024,MAX_LINE=64*1024,MAX_TOTAL=1024*1024,PROTOCOL_VERSION=1,DEFAULT_SERVER_TIMEOUT_MS=120000;
 const BOOT_CODES=new Set(['BOOT_START','SOURCE_READ','SOURCE_HASH_OK','SOURCE_EXEC','HELPER_START','NATIVE_TYPE_READY','ENV_READY','IDENTITY_READY','PIPE_SECURITY_READY','SERVER_CREATED','WAIT_CLIENT','CLIENT_CONNECTED','HELLO_SENT']);
 const REMOTE_STAGES=new Set(['busy-evidence','busy-transaction','state','target','missing','acl','evidence','path','boundary','derived','identity','final','named','owner','reparse','network','unsafe','request','action','command','injected-open','injected-rename','injected-flush','injected-dispose']);
 function remoteStage(value){return typeof value==='string'&&REMOTE_STAGES.has(value)?`remote-${value}`:'remote'}
