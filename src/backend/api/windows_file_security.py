@@ -8,8 +8,10 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 import json
+import ntpath
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+import re
 import subprocess
 
 _TRUSTED = ("S-1-5-18", "S-1-5-32-544")
@@ -74,12 +76,70 @@ foreach($e in $q.entries){
 _ENCODED = __import__("base64").b64encode(_PS_POLICY.encode("utf-16le")).decode("ascii")
 
 
+def _native_windows_directory() -> str:
+    if os.name != "nt":
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    kernel = _kernel32()
+    buffer = ctypes.create_unicode_buffer(32768)
+    size = kernel.GetWindowsDirectoryW(buffer, len(buffer))
+    if not size or size >= len(buffer):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    return buffer.value
+
+
+def _canonical_local_path(value: str) -> str:
+    if not isinstance(value, str) or not value or value != value.rstrip(" .") or not ntpath.isabs(value):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    if value.startswith(("\\\\", "\\\\?\\", "\\??\\")) or re.search(r'[<>"|?*\x00-\x1f]', value) or ":" in value[2:]:
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    parsed = PureWindowsPath(value)
+    if not re.fullmatch(r"[A-Za-z]:", parsed.drive) or parsed.root != "\\" or any(part in {".", ".."} or part != part.rstrip(" .") for part in parsed.parts[1:]):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    return str(parsed)
+
+
+def _verified_existing_component(path: str, directory: bool) -> tuple[int, int]:
+    kernel = _kernel32(); flags = 0x00200000 | (0x02000000 if directory else 0)
+    handle = kernel.CreateFileW(path, 0x00020000 | 0x80, 0x00000001 | 0x00000002, None, 3, flags, None)
+    invalid = wintypes.HANDLE(-1).value
+    if handle == invalid:
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    try:
+        info = _BY_HANDLE_FILE_INFORMATION()
+        if not kernel.GetFileInformationByHandle(handle, ctypes.byref(info)) or info.attributes & 0x400 or bool(info.attributes & 0x10) != directory:
+            raise RuntimeError("Windows provider-lock policy unavailable")
+        final = ctypes.create_unicode_buffer(32768)
+        size = kernel.GetFinalPathNameByHandleW(handle, final, len(final), 0)
+        observed = final.value[4:] if final.value.startswith("\\\\?\\") else final.value
+        if not size or size >= len(final) or ntpath.normcase(observed) != ntpath.normcase(path):
+            raise RuntimeError("Windows provider-lock policy unavailable")
+        _validate_native_acl(handle)
+        return int(info.volume), (int(info.index_high) << 32) | int(info.index_low)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def _powershell_path() -> str:
+    """Resolve and no-follow verify inbox Windows PowerShell without PATH/env trust."""
+    root = _canonical_local_path(_native_windows_directory())
+    parts = [root, ntpath.join(root,"System32"), ntpath.join(root,"System32","WindowsPowerShell"), ntpath.join(root,"System32","WindowsPowerShell","v1.0")]
+    for component in parts: _verified_existing_component(component, True)
+    candidate = ntpath.join(parts[-1], "powershell.exe")
+    identity = _verified_existing_component(candidate, False)
+    # subprocess cannot be created from an already-open executable handle. Keep
+    # the no-follow canonical check adjacent to launch and require stable file ID.
+    if _verified_existing_component(candidate, False) != identity:
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    return candidate
+
+
 def _run(payload: dict) -> dict:
     if os.name != "nt":
         raise RuntimeError("Windows native file policy called off Windows")
+    executable = _powershell_path()
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive",
+            [executable, "-NoLogo", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-EncodedCommand", _ENCODED],
             input=json.dumps(payload), text=True, capture_output=True,
             timeout=20, check=False, creationflags=0x08000000,
@@ -144,6 +204,14 @@ class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
                 ("index_low", wintypes.DWORD)]
 
 
+class _ACE_HEADER(ctypes.Structure):
+    _fields_ = [("AceType", ctypes.c_ubyte), ("AceFlags", ctypes.c_ubyte), ("AceSize", wintypes.WORD)]
+
+
+class _ACL_SIZE_INFORMATION(ctypes.Structure):
+    _fields_ = [("AceCount", wintypes.DWORD), ("AclBytesInUse", wintypes.DWORD), ("AclBytesFree", wintypes.DWORD)]
+
+
 class _OVERLAPPED(ctypes.Structure):
     _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t),
                 ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
@@ -151,6 +219,64 @@ class _OVERLAPPED(ctypes.Structure):
 
 
 _kernel = None
+_advapi = None
+SE_FILE_OBJECT = 1
+OWNER_SECURITY_INFORMATION = 0x1
+DACL_SECURITY_INFORMATION = 0x4
+ACCESS_ALLOWED_ACE_TYPE = 0
+_UNPARSED_ALLOW_ACE_TYPES = frozenset((4, 5, 9, 11))
+
+
+def _sid_text(sid) -> str:
+    string = wintypes.LPWSTR()
+    if not _advapi32().ConvertSidToStringSidW(sid, ctypes.byref(string)):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    try: return string.value
+    finally: _kernel32().LocalFree(ctypes.cast(string, wintypes.LPVOID))
+
+
+def _acl_policy(owner: str, allow_entries: list[tuple[str, int]]) -> None:
+    trusted={"S-1-5-18","S-1-5-32-544","S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"}
+    write_mask=0x10000000|0x40000000|0x00010000|0x00040000|0x00080000|0x00000156
+    if owner not in trusted or any(mask & write_mask and sid not in trusted for sid,mask in allow_entries):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+
+
+def _validate_native_acl(handle) -> None:
+    """Validate owner and reject write-capable allow ACEs for untrusted SIDs."""
+    advapi=_advapi32(); owner=wintypes.LPVOID(); dacl=wintypes.LPVOID(); descriptor=wintypes.LPVOID()
+    if advapi.GetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,ctypes.byref(owner),None,ctypes.byref(dacl),None,ctypes.byref(descriptor)):
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    try:
+        if not dacl: raise RuntimeError("Windows provider-lock policy unavailable")
+        info=_ACL_SIZE_INFORMATION()
+        if not advapi.GetAclInformation(dacl,ctypes.byref(info),ctypes.sizeof(info),2): raise RuntimeError("Windows provider-lock policy unavailable")
+        entries=[]; consumed=ctypes.sizeof(wintypes.DWORD)*2
+        for index in range(info.AceCount):
+            ace=wintypes.LPVOID()
+            if not advapi.GetAce(dacl,index,ctypes.byref(ace)): raise RuntimeError("Windows provider-lock policy unavailable")
+            header=ctypes.cast(ace,ctypes.POINTER(_ACE_HEADER)).contents
+            if header.AceSize < 8 or consumed + header.AceSize > info.AclBytesInUse: raise RuntimeError("Windows provider-lock policy unavailable")
+            consumed += header.AceSize
+            if header.AceType in _UNPARSED_ALLOW_ACE_TYPES: raise RuntimeError("Windows provider-lock policy unavailable")
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE: continue
+            mask=ctypes.cast(ace.value+4,ctypes.POINTER(wintypes.DWORD)).contents.value
+            sid=ctypes.c_void_p(ace.value+8)
+            entries.append((_sid_text(sid),mask))
+        _acl_policy(_sid_text(owner),entries)
+    finally: _kernel32().LocalFree(descriptor)
+
+
+def _advapi32():
+    global _advapi
+    if _advapi is None:
+        api=ctypes.WinDLL("advapi32",use_last_error=True)
+        api.GetSecurityInfo.argtypes=[wintypes.HANDLE,wintypes.DWORD,wintypes.DWORD,ctypes.POINTER(wintypes.LPVOID),ctypes.POINTER(wintypes.LPVOID),ctypes.POINTER(wintypes.LPVOID),ctypes.POINTER(wintypes.LPVOID),ctypes.POINTER(wintypes.LPVOID)];api.GetSecurityInfo.restype=wintypes.DWORD
+        api.GetAclInformation.argtypes=[wintypes.LPVOID,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD];api.GetAclInformation.restype=wintypes.BOOL
+        api.GetAce.argtypes=[wintypes.LPVOID,wintypes.DWORD,ctypes.POINTER(wintypes.LPVOID)];api.GetAce.restype=wintypes.BOOL
+        api.ConvertSidToStringSidW.argtypes=[wintypes.LPVOID,ctypes.POINTER(wintypes.LPWSTR)];api.ConvertSidToStringSidW.restype=wintypes.BOOL
+        _advapi=api
+    return _advapi
 
 
 def _kernel32():
@@ -165,8 +291,14 @@ def _kernel32():
         kernel.GetFileInformationByHandle.argtypes = [wintypes.HANDLE,
                                                        ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION)]
         kernel.GetFileInformationByHandle.restype = wintypes.BOOL
+        kernel.GetWindowsDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+        kernel.GetWindowsDirectoryW.restype = wintypes.UINT
+        kernel.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+        kernel.GetFinalPathNameByHandleW.restype = wintypes.DWORD
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel.CloseHandle.restype = wintypes.BOOL
+        kernel.LocalFree.argtypes = [wintypes.LPVOID]
+        kernel.LocalFree.restype = wintypes.LPVOID
         kernel.LockFileEx.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
                                       wintypes.DWORD, wintypes.DWORD,
                                       ctypes.POINTER(_OVERLAPPED)]

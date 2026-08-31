@@ -20,7 +20,7 @@ CREATE TABLE nodes(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,title T
 CREATE TABLE edges(id TEXT PRIMARY KEY NOT NULL,project_id TEXT NOT NULL,from_node_id TEXT NOT NULL,to_node_id TEXT NOT NULL,relation_type TEXT NOT NULL,weight FLOAT DEFAULT 1.0,note TEXT,is_mainline BOOLEAN NOT NULL,created_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE content_blocks(id TEXT PRIMARY KEY NOT NULL,node_id TEXT NOT NULL,block_type TEXT NOT NULL,content JSON NOT NULL,order_index INTEGER NOT NULL,created_by TEXT,created_at DATETIME NOT NULL,updated_at DATETIME NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
 CREATE TABLE action_logs(id TEXT PRIMARY KEY,project_id TEXT,node_id TEXT,actor_type TEXT,actor_id TEXT,action_type TEXT,payload JSON,created_at DATETIME);
-CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,secret_change_pending BOOLEAN NOT NULL DEFAULT 0,secret_change_claim VARCHAR(64));
+CREATE TABLE provider_configs(id TEXT PRIMARY KEY,name TEXT,provider_type TEXT,model_name TEXT,enabled INTEGER,secret_env_key VARCHAR(128) DEFAULT '',revision INTEGER NOT NULL DEFAULT 1,secret_change_pending BOOLEAN NOT NULL DEFAULT 0,secret_change_claim VARCHAR(64),secret_change_operation_id VARCHAR(64));
 """
 
 GRANT_SQL = """CREATE TABLE agent_grants(
@@ -46,7 +46,7 @@ def _rows(c: sqlite3.Connection) -> None:
     c.execute("INSERT INTO nodes(id,project_id,title,node_type,status,maturity,workflow_status,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?)", ("fixture-node-child",PROJECT,"Child","idea","active","seed","draft",STAMP,STAMP,4))
     c.execute("INSERT INTO edges VALUES(?,?,?,?,?,?,?,?,?,?)", ("fixture-edge",PROJECT,"fixture-node-root","fixture-node-child","child_of",1.0,"",1,STAMP,5))
     c.execute("INSERT INTO content_blocks VALUES(?,?,?,?,?,?,?,?,?)", ("fixture-block","fixture-node-root","note",'{"body":"generated fixture"}',0,"fixture",STAMP,STAMP,6))
-    c.execute("INSERT INTO provider_configs VALUES(?,?,?,?,?,?,?,?,?)", (PROVIDER,"Generated Provider","openai","fixture-model",1,"FIXTURE_API_KEY",9,0,None))
+    c.execute("INSERT INTO provider_configs VALUES(?,?,?,?,?,?,?,?,?,?)", (PROVIDER,"Generated Provider","openai","fixture-model",1,"FIXTURE_API_KEY",9,0,None,None))
 
 
 def _canonical(c: sqlite3.Connection, grants: bool = False) -> None:
@@ -77,11 +77,13 @@ def generate(path: Path, variant: str) -> Path:
         # fixture.  The v2 baseline intentionally proves it was genuinely absent.
         grants = variant != "v2"
         _canonical(c, grants)
-        if variant == "v12": pass
+        if variant == "v13": pass
+        elif variant == "v12":
+            _drop(c,"provider_configs","secret_change_operation_id"); c.execute("PRAGMA user_version=12")
         elif variant == "v2":
             c.execute("DROP TABLE provider_selection")
             c.execute("DROP TRIGGER trg_provider_revision_insert"); c.execute("DROP TRIGGER trg_provider_revision_update")
-            _drop(c,"provider_configs","revision","secret_change_pending","secret_change_claim")
+            _drop(c,"provider_configs","revision","secret_change_pending","secret_change_claim","secret_change_operation_id")
             for table in ("projects","nodes","edges","content_blocks","branches"): _drop(c,table,"revision")
             c.execute("PRAGMA user_version=2")
         elif variant in ("grant_nullable_legacy", "grant_not_null_missing"):
@@ -96,13 +98,13 @@ def generate(path: Path, variant: str) -> Path:
             c.execute("PRAGMA user_version=2")
         elif variant == "v8_no_provider_revision":
             c.execute("DROP TRIGGER trg_provider_revision_insert"); c.execute("DROP TRIGGER trg_provider_revision_update")
-            _drop(c,"provider_configs","revision","secret_change_pending","secret_change_claim")
+            _drop(c,"provider_configs","revision","secret_change_pending","secret_change_claim","secret_change_operation_id")
             c.execute("DROP TABLE provider_selection"); c.execute("PRAGMA user_version=8")
         elif variant == "v9_provider_revision":
             c.execute("DROP TABLE provider_selection"); c.execute("PRAGMA user_version=9")
         elif variant == "v11_no_selection":
             c.execute("DROP TABLE provider_selection"); c.execute("PRAGMA user_version=11")
-        elif variant == "newer_v13": c.execute("PRAGMA user_version=13")
+        elif variant == "newer_v14": c.execute("PRAGMA user_version=14")
         elif variant == "bad_column":
             c.execute("ALTER TABLE projects DROP COLUMN settings"); c.execute("ALTER TABLE projects ADD COLUMN settings INTEGER")
         elif variant == "missing_object": c.execute("DROP TRIGGER trg_edges_normalize_null_insert")

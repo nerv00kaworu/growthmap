@@ -184,6 +184,9 @@ class ProviderConfig(Base):
     # external store. Only a successfully reconciled transition clears it.
     secret_change_pending = Column(Boolean, nullable=False, default=False, server_default="0")
     secret_change_claim = Column(String(64), nullable=True)
+    # Durable opaque idempotency/terminal evidence. This is distinct from the
+    # short-lived recovery ownership claim and remains after successful finalize.
+    secret_change_operation_id = Column(String(64), nullable=True)
 
     __table_args__ = (
         CheckConstraint("revision >= 1 AND revision <= 9007199254740991", name="ck_provider_revision_safe"),

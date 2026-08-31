@@ -5,22 +5,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update
 from db.database import get_db
 from models.models import ProviderConfig
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from desktop.entitlements import LICENSE_PATH, _atomic_json, checkpoint_current_entitlement, peek_current_entitlement, initialize_trial, verify_document, verify_revocation_assertion, strict_json_loads, stable_json_file
 from desktop.startup_verdict import effective_entitlement, verdict_mode
 from desktop.secrets import put, delete
 from desktop.hydration_auth import require as require_hydration, seal as seal_hydration
 from api.provider_authority import change_external_secret, recover_external_secret
 from models.schemas import ProviderSecretRecovery, validate_provider_credential
+from models.provider_authority import MAX_PROVIDER_REVISION
 router = APIRouter(prefix="/desktop")
 class SecretIn(BaseModel):
-    model_config = ConfigDict(hide_input_in_errors=True)
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    api_key: str
+    expected_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    operation_id: str = Field(pattern=r"^[0-9a-f]{48}$")
+    @field_validator("api_key")
+    @classmethod
+    def credential_bound(cls, value: str) -> str:
+        return validate_provider_credential(value)
+class HydrateSecretIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     api_key: str
     @field_validator("api_key")
     @classmethod
     def credential_bound(cls, value: str) -> str:
         return validate_provider_credential(value)
-class HydrateSecretIn(SecretIn): pass
+class DeleteSecretIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    operation_id: str = Field(pattern=r"^[0-9a-f]{48}$")
 class LicenseIn(BaseModel): document: dict
 class RevocationIn(BaseModel): document: dict
 class TrialStartIn(BaseModel): started_at: str; installation_id: str
@@ -49,21 +62,21 @@ async def set_secret(provider_id: str, body: SecretIn, db: AsyncSession = Depend
         raise HTTPException(404, "Provider not found")
     if provider.provider_type == "mock":
         raise HTTPException(400, "Mock provider does not use an API key")
-    await change_external_secret(db, provider, lambda: put(provider_id, body.api_key))
+    await change_external_secret(db, provider, body.expected_revision, body.operation_id, lambda: put(provider_id, body.api_key))
 
 @router.post("/secrets/{provider_id}/recover", status_code=204)
 async def recover_secret(provider_id: str, body: ProviderSecretRecovery, db: AsyncSession = Depends(get_db)):
     provider = await db.get(ProviderConfig, provider_id)
     if not provider: raise HTTPException(404, "Provider not found")
     mutate = (lambda: put(provider_id, body.api_key)) if body.operation == "set" else (lambda: delete(provider_id))
-    await recover_external_secret(db, provider, body.revision, mutate)
+    await recover_external_secret(db, provider, body.revision, body.operation_id, mutate)
 
 @router.delete("/secrets/{provider_id}", status_code=204)
-async def remove_secret(provider_id: str, db: AsyncSession = Depends(get_db)):
+async def remove_secret(provider_id: str, body: DeleteSecretIn, db: AsyncSession = Depends(get_db)):
     provider = await db.get(ProviderConfig, provider_id)
     if not provider:
         raise HTTPException(404, "Provider not found")
-    await change_external_secret(db, provider, lambda: delete(provider_id))
+    await change_external_secret(db, provider, body.expected_revision, body.operation_id, lambda: delete(provider_id))
 @router.get("/entitlement")
 def entitlement(): return effective_entitlement().public()
 @router.post("/entitlement/checkpoint")

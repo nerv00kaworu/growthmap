@@ -41,6 +41,12 @@ def expect_unsafe(fn):
 
 async def main():
     fixture.mkdir(); dbfile.write_bytes(b"db")
+    # Production acceptance intentionally excludes WindowsPowerShell from PATH;
+    # the policy runner must resolve the inbox executable from the native Windows
+    # directory and successfully read owner/DACL metadata on every chain handle.
+    os.environ["PATH"] = os.path.join(os.environ["SystemRoot"], "System32") + ";" + os.environ["SystemRoot"]
+    powershell = sec._powershell_path()
+    assert os.path.isabs(powershell) and os.path.basename(powershell).lower() == "powershell.exe"
     # End-to-end root/leaf creation and mandatory byte zero.
     async with lock.ProviderLock("new", 2): pass
     root = fixture / ".growthmap-locks"; leaf = next(root.glob("*.lock"))

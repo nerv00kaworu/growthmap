@@ -66,6 +66,16 @@ jobs:
           New-Item -ItemType Directory -Path $env:GROWTHMAP_WINDOWS_BACKEND_ROOT | Out-Null
           $env:PYTHONPATH = 'src/backend'
           python -c "from pathlib import Path; from api.windows_file_security import apply_private,verify; p=Path(r'$env:GROWTHMAP_WINDOWS_BACKEND_ROOT'); apply_private(p); verify(p,kind='dir')"
+      - name: Native Windows provider-lock and inbox PowerShell-chain gate
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:LOCALAPPDATA ("Temp\growthmap-provider-lock-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT-$([Guid]::NewGuid().ToString('N'))")
+          try {
+            $env:GM_LOCK_FIXTURE = $fixture
+            python src/backend/tests/windows_provider_lock_harness.py
+          } finally {
+            if (Test-Path -LiteralPath $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
+          }
       - name: Cross-platform backend contracts (exclude POSIX custody and deployment rails)
         run: python -m pytest -q --ignore=tests/test_authority_composition.py --ignore=tests/test_authority_service.py --ignore=tests/test_pem_signer_hardening.py --ignore=tests/test_r14_deployment_contract.py --ignore=tests/test_r15_deployment_contract.py --ignore=tests/test_r16_deployment_contract.py --ignore=tests/test_r17_deployment_contract.py --ignore=tests/test_r18_deployment_contract.py --ignore=tests/test_r19_deployment_contract.py --ignore=tests/test_r20_deployment_contract.py --ignore=tests/test_r21_deployment_contract.py --ignore=tests/test_r22_deployment_contract.py --ignore=tests/test_r23_deployment_contract.py --ignore=tests/test_r24_deployment_contract.py --ignore=tests/test_security_remediation.py
         working-directory: src/backend

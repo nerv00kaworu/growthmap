@@ -5,6 +5,6 @@ function registerCredentialIpc({ipcMain,guard,getStore}){
  ipcMain.handle('secrets:has',(e,id)=>invoke(e,'has',[id]));
  ipcMain.handle('secrets:set',(e,id,value)=>invoke(e,'set',[id,value]));
  ipcMain.handle('secrets:delete',(e,id)=>invoke(e,'delete',[id]));
- ipcMain.handle('secrets:recover',(e,id,revision,operation,value)=>invoke(e,'recover',[id,revision,operation,value]));
+ ipcMain.handle('secrets:recover',(e,id,revision,operation,value,operationId)=>invoke(e,'recover',operationId===undefined?[id,revision,operation,value]:[id,revision,operation,value,operationId]));
 }
 module.exports={registerCredentialIpc};

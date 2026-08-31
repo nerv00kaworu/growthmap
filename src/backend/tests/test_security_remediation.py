@@ -73,13 +73,13 @@ class SecurityRemediationTest(unittest.TestCase):
         self.assertTrue(_is_local_client("127.0.0.1"))
         with TestClient(app, client=("192.0.2.10", 50000)) as remote_client:
             remote_provider = remote_client.post("/api/providers", json={"name": "Remote", "provider_type": "openai_compatible", "secret_env_key": "GROWTHMAP_LLM_KEY_REMOTE_REJECT"}).json()
-            rejected = remote_client.put(f"/api/providers/{remote_provider['id']}/secret", json={"api_key": "must-not-write"})
+            rejected = remote_client.put(f"/api/providers/{remote_provider['id']}/secret", json={"api_key": "must-not-write", "operation_id":"a"*48, "expected_revision": remote_provider["revision"]})
             self.assertEqual(rejected.status_code, 403, rejected.text)
         env_path = Path(os.environ["GROWTHMAP_ENV_FILE"])
         env_path.unlink(missing_ok=True)
         with TestClient(app) as client:
             provider = client.post("/api/providers", json={"name": "Secret", "provider_type": "openai_compatible", "secret_env_key": "GROWTHMAP_LLM_KEY_SECURITY_TEST", "model_name": "demo"}).json()
-            response = client.put(f"/api/providers/{provider['id']}/secret", json={"api_key": "not-returned"})
+            response = client.put(f"/api/providers/{provider['id']}/secret", json={"api_key": "not-returned", "operation_id":"a"*48, "expected_revision": provider["revision"]})
             self.assertEqual(response.status_code, 204)
             self.assertEqual(response.content, b"")
             if os.name == "posix":
@@ -117,13 +117,13 @@ class SecurityRemediationTest(unittest.TestCase):
                     return legacy.id, selection.selection_revision
             for provider_type in ("openai_compatible", "mock"):
                 legacy_id, legacy_selection_revision = asyncio.run(seed_unsafe(provider_type))
-                rejected = client.put(f"/api/providers/{legacy_id}/secret", json={"api_key": "***"})
+                legacy_version=client.get("/api/providers").json()
+                legacy_version=next(x["revision"] for x in legacy_version if x["id"]==legacy_id)
+                rejected = client.put(f"/api/providers/{legacy_id}/secret", json={"api_key": "***", "operation_id":"a"*48, "expected_revision": legacy_version})
                 self.assertEqual(rejected.status_code, 400, (provider_type, rejected.text))
                 self.assertIn("rebind", rejected.text)
                 self.assertIn("GROWTHMAP_LLM_KEY_", rejected.text)
                 self.assertNotIn("legacy-secret-value", rejected.text)
-                legacy_version=client.get("/api/providers").json()
-                legacy_version=next(x["revision"] for x in legacy_version if x["id"]==legacy_id)
                 legacy_test = client.post("/api/ai/test-connection", json={"provider_id": legacy_id,"provider_revision":legacy_version,"selection_revision":legacy_selection_revision})
                 self.assertEqual(legacy_test.status_code, 400, (provider_type, legacy_test.text))
                 self.assertIn("rebind", legacy_test.text)
@@ -136,7 +136,7 @@ class SecurityRemediationTest(unittest.TestCase):
                 self.assertEqual(detail["code"], "LLM_CONFIGURATION_ERROR")
                 self.assertIn("rebind", detail["message"])
                 self.assertRegex(detail["request_id"], r"^[0-9a-f]{16}$")
-            valid = client.put(f"/api/providers/{provider_id}/secret", json={"api_key": "***"})
+            valid = client.put(f"/api/providers/{provider_id}/secret", json={"api_key": "***", "operation_id":"a"*48, "expected_revision": provider.json()["revision"]})
             self.assertEqual(valid.status_code, 204, valid.text)
 
     @unittest.skipUnless(os.name == "posix", "POSIX launcher policy is covered by the Windows desktop preflight on Windows")
@@ -195,7 +195,7 @@ def test_provider_revision_exact_upper_bound_and_exhaustion(monkeypatch):
         for method,path,body in (
             ('patch',f'/api/providers/{pid}',{'name':'overflow'}),
             ('patch',f'/api/providers/{pid}/model',{'model_name':'overflow'}),
-            ('put',f'/api/providers/{pid}/secret',{'api_key':'must-not-write'}),
+            ('put',f'/api/providers/{pid}/secret',{'api_key':'must-not-write','operation_id':'a'*48,'expected_revision':MAX_PROVIDER_REVISION}),
         ):
             response=getattr(client,method)(path,json=body)
             assert response.status_code==409 and response.json()['detail']['code']=='PROVIDER_REVISION_EXHAUSTED'

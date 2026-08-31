@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Body, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, func, or_, update, exists
 from sqlalchemy.exc import StatementError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from api.revisions import claim_project_revision, check_entity_revision, bump_ex
 from api.content_ordering import ordered_blocks as _ordered_blocks, rewrite_dense as _rewrite_dense, insert_blocks as _insert_blocks
 from api.branching import deep_copy_branch
 from api.provider_authority import guarded_provider_update, change_external_secret, recover_external_secret
+from models.provider_authority import MAX_PROVIDER_REVISION
 from models.schemas import (
     ProjectCreate, ProjectUpdate, ProjectOut,
     NodeCreate, NodeUpdate, NodeOut, NodeBrief,
@@ -89,7 +90,10 @@ SAFE_ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 
 
 class ProviderSecretWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     api_key: str
+    expected_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
+    operation_id: str = Field(pattern=r"^[0-9a-f]{48}$")
 
 
 def _write_env_value(env_key: str, secret: str) -> None:
@@ -245,7 +249,7 @@ async def write_provider_secret(provider_id: str, data: ProviderSecretWrite, req
     # Commit a durable dispatch fence before touching the external store. If the
     # store or final DB publish fails, resolution remains closed on the latch.
     mutate = (lambda: put_memory_secret(provider.id, data.api_key)) if desktop_mode() else (lambda: _write_env_value(provider.secret_env_key, data.api_key))
-    await change_external_secret(db, provider, mutate)
+    await change_external_secret(db, provider, data.expected_revision, data.operation_id, mutate)
 
 
 @router.post("/providers/{provider_id}/secret/recover", status_code=204)
@@ -263,7 +267,7 @@ async def recover_provider_secret(provider_id: str, data: ProviderSecretRecovery
         mutate = (lambda: put_memory_secret(provider.id, data.api_key)) if desktop_mode() else (lambda: _write_env_value(provider.secret_env_key, data.api_key))
     else:
         mutate = (lambda: delete_memory_secret(provider.id)) if desktop_mode() else (lambda: _delete_env_value(provider.secret_env_key))
-    await recover_external_secret(db, provider, data.revision, mutate)
+    await recover_external_secret(db, provider, data.revision, data.operation_id, mutate)
 
 
 @router.patch("/providers/{provider_id}/model", response_model=ProviderConfigOut)

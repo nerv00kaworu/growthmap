@@ -29,7 +29,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
         return client.post(f"/api/projects/{project['id']}/nodes", json=payload)
 
     def patch_node(self, client, project_id, node_id, data):
-        return client.patch(f"/api/nodes/{node_id}", json={"expected_project_revision": self.project_revision(client, project_id), "expected_revision": self.node_revision(client, node_id), **data})
+        return client.patch(f"/api/nodes/{node_id}", json={"expected_project_revision": self.project_revision(client, project_id), "operation_id":"a"*48, "expected_revision": self.node_revision(client, node_id), **data})
 
     @classmethod
     def tearDownClass(cls):
@@ -150,7 +150,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(listed.status_code, 200)
             self.assertNotIn("api_key", listed.json()[0])
 
-            secret = client.put(f"/api/providers/{provider['id']}/secret", json={"api_key": "test-secret-value"})
+            secret = client.put(f"/api/providers/{provider['id']}/secret", json={"api_key": "test-secret-value", "operation_id":"a"*48, "expected_revision": provider["revision"]})
             self.assertEqual(secret.status_code, 204)
             env_path = os.environ["GROWTHMAP_ENV_FILE"]
             with open(env_path, encoding="utf-8") as handle:
@@ -234,14 +234,14 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "supports"}).status_code, 409)
             self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": root_id, "relation_type": "supports"}).status_code, 400)
             self.assertEqual(client.post("/api/edges", json={"expected_project_revision": self.project_revision(client, project["id"]), "from_node_id": root_id, "to_node_id": other["id"], "relation_type": "unknown"}).status_code, 400)
-            changed = client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": edge.json()["revision"], "weight": 0.65, "note": "人工確認的支持關係"})
+            changed = client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": edge.json()["revision"], "weight": 0.65, "note": "人工確認的支持關係"})
             self.assertEqual(changed.status_code, 200)
             self.assertEqual(changed.json()["weight"], 0.65)
             self.assertEqual(changed.json()["note"], "人工確認的支持關係")
-            self.assertEqual(client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": changed.json()["revision"], "weight": 1.1}).status_code, 400)
-            self.assertEqual(client.request("DELETE", f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": changed.json()["revision"]}).status_code, 204)
+            self.assertEqual(client.patch(f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": changed.json()["revision"], "weight": 1.1}).status_code, 400)
+            self.assertEqual(client.request("DELETE", f"/api/edges/{edge_id}", json={"expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": changed.json()["revision"]}).status_code, 204)
             tree_edge = next(item for item in client.get(f"/api/projects/{project['id']}/edges").json() if item["relation_type"] == "child_of")
-            self.assertEqual(client.request("DELETE", f"/api/edges/{tree_edge['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": tree_edge["revision"]}).status_code, 400)
+            self.assertEqual(client.request("DELETE", f"/api/edges/{tree_edge['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": tree_edge["revision"]}).status_code, 400)
 
     def test_legacy_null_edge_fields_are_tolerated(self):
         """歷史 NULL 欄位不得再讓 edges/mainline-path 回傳 500。"""
@@ -407,7 +407,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
 
             invalid_target = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": branch_root["id"], "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": branch["revision"], "expected_target_revision": branch_root["revision"]},
+                json={"target_node_id": branch_root["id"], "expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": branch["revision"], "expected_target_revision": branch_root["revision"]},
             )
             self.assertEqual(invalid_target.status_code, 400)
 
@@ -416,7 +416,7 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
             project_before_merge = self.project_revision(client, project["id"])
             merged = client.post(
                 f"/api/branches/{branch['id']}/merge",
-                json={"target_node_id": root_id, "expected_project_revision": project_before_merge, "expected_revision": branch["revision"], "expected_target_revision": root_before_merge["revision"]},
+                json={"target_node_id": root_id, "expected_project_revision": project_before_merge, "operation_id":"a"*48, "expected_revision": branch["revision"], "expected_target_revision": root_before_merge["revision"]},
             )
             self.assertEqual(merged.status_code, 200)
             self.assertTrue(merged.json()["ok"])
@@ -436,11 +436,11 @@ class GrowthMapApiSmokeTest(unittest.TestCase):
                 f"/api/projects/{project['id']}/branches",
                 json={"expected_project_revision": self.project_revision(client, project["id"]), "name": "Archive me", "source_node_id": child["id"]},
             ).json()
-            archived_response = client.request("DELETE", f"/api/branches/{archived['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"]})
+            archived_response = client.request("DELETE", f"/api/branches/{archived['id']}", json={"expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": archived["revision"]})
             self.assertEqual(archived_response.status_code, 204)
             self.assertEqual(client.get(f"/api/branches/{archived['id']}").json()["status"], "archived")
             self.assertEqual(
-                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "expected_revision": archived["revision"] + 1, "expected_target_revision": client.get(f"/api/nodes/{root_id}").json()["revision"]}).status_code,
+                client.post(f"/api/branches/{archived['id']}/merge", json={"target_node_id": root_id, "expected_project_revision": self.project_revision(client, project["id"]), "operation_id":"a"*48, "expected_revision": archived["revision"] + 1, "expected_target_revision": client.get(f"/api/nodes/{root_id}").json()["revision"]}).status_code,
                 400,
             )
 

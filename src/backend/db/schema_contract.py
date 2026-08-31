@@ -6,7 +6,7 @@ import re
 # deliberately done before the one-mainline unique index is created.
 # v9 adds the monotonic provider authority revision. A version bump is required
 # so already-valid v8 databases are migrated instead of being rejected at startup.
-CURRENT_USER_VERSION = 12
+CURRENT_USER_VERSION = 13
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
@@ -16,6 +16,7 @@ COLUMNS = (
     ("provider_configs", "revision", "INTEGER", True, "1", "ALTER TABLE provider_configs ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("provider_configs", "secret_change_pending", "BOOLEAN", True, "0", "ALTER TABLE provider_configs ADD COLUMN secret_change_pending BOOLEAN NOT NULL DEFAULT 0"),
     ("provider_configs", "secret_change_claim", "VARCHAR(64)", False, None, "ALTER TABLE provider_configs ADD COLUMN secret_change_claim VARCHAR(64)"),
+    ("provider_configs", "secret_change_operation_id", "VARCHAR(64)", False, None, "ALTER TABLE provider_configs ADD COLUMN secret_change_operation_id VARCHAR(64)"),
     ("projects", "revision", "INTEGER", True, "1", "ALTER TABLE projects ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("nodes", "revision", "INTEGER", True, "1", "ALTER TABLE nodes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
     ("edges", "revision", "INTEGER", True, "1", "ALTER TABLE edges ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"),
@@ -91,7 +92,7 @@ ORM_READ_COLUMNS = {
   "id":_s("TEXT",True),"project_id":_s("TEXT",True),"from_node_id":_s("TEXT",True),"to_node_id":_s("TEXT",True),"relation_type":_s("TEXT",True),"weight":_s("REAL",False,(None,"1.0","1")),"note":_s("TEXT",False,(None,"")),"is_mainline":_s(("INTEGER","NUMERIC"),True,(None,"0")),"created_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
  "content_blocks": {
   "id":_s("TEXT",True),"node_id":_s("TEXT",True),"block_type":_s("TEXT",True),"content":_s("JSON",True),"order_index":_s("INTEGER",True),"created_by":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC"),True),"updated_at":_s(("TEXT","NUMERIC"),True),"revision":_s("INTEGER",True,"1")},
- "provider_configs": {"revision":_s("INTEGER",True,"1"),"secret_change_pending":_s(("INTEGER","NUMERIC"),True,"0"),"secret_change_claim":_s("TEXT") },
+ "provider_configs": {"revision":_s("INTEGER",True,"1"),"secret_change_pending":_s(("INTEGER","NUMERIC"),True,"0"),"secret_change_claim":_s("TEXT"),"secret_change_operation_id":_s("TEXT") },
  "provider_selection": {"singleton_id":_s("INTEGER",True),"provider_id":_s("TEXT"),"selection_revision":_s("INTEGER",True,"1"),"updated_at":_s(("TEXT","NUMERIC"),True)},
  "branches": {
   "id":_s("TEXT",(False,True)),"project_id":_s("TEXT",(False,True)),"name":_s("TEXT",(False,True)),"description":_s("TEXT"),"source_node_id":_s("TEXT"),"status":_s("TEXT"),"created_at":_s(("TEXT","NUMERIC")),"revision":_s("INTEGER",True,"1")},

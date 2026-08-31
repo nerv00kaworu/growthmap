@@ -136,6 +136,7 @@ export interface ProviderConfig {
   updated_at: string;
   revision: number;
   secret_change_pending: boolean;
+  secret_change_operation_id: string | null;
   credential_status: "ready" | "unavailable" | "recovery_required";
   is_default?: boolean;
   selection_revision?: number;

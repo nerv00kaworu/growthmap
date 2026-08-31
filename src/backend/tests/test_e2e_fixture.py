@@ -26,12 +26,12 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
             """INSERT INTO provider_configs(
                 id,name,provider_type,endpoint,auth_type,secret_env_key,model_name,
                 capabilities,cost_level,enabled,settings,created_at,updated_at,
-                revision,secret_change_pending,secret_change_claim
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                revision,secret_change_pending,secret_change_claim,secret_change_operation_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 "provider", "Fixture Provider", "openai_compatible",
                 "http://127.0.0.1:9", "env", "GROWTHMAP_LLM_KEY_E2E", "fixture",
-                "[]", "none", 1, "{}", None, None, 1, 0, None,
+                "[]", "none", 1, "{}", None, None, 1, 0, None, None,
             ),
         )
         provider = connection.execute(
@@ -44,6 +44,7 @@ def test_e2e_fixture_initializes_fresh_canonical_schema(tmp_path):
         "model_name", "capabilities", "cost_level", "enabled", "settings",
         "created_at", "updated_at", "revision", "secret_change_pending",
         "secret_change_claim",
+        "secret_change_operation_id",
     }
     assert provider == ("provider", "openai_compatible", 1, 0)
 

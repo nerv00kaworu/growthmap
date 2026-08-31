@@ -30,7 +30,7 @@ def _child(db_url, provider_id, revision, operation, recorder, start, result, cu
                     return await original()
                 session.commit=commit
             try:
-                await recover_external_secret(session,provider,revision,record,after_claim=after_claim,after_mutate=after_mutate)
+                await recover_external_secret(session,provider,revision,None,record,after_claim=after_claim,after_mutate=after_mutate)
                 result.put(("ok",None))
             except BaseException as e:
                 result.put(("error",getattr(e,"status_code",type(e).__name__),str(e)))
@@ -43,8 +43,8 @@ def _child(db_url, provider_id, revision, operation, recorder, start, result, cu
 def _db(tmp_path):
     path=tmp_path/"recovery.sqlite"
     con=sqlite3.connect(path)
-    con.execute("CREATE TABLE provider_configs (id VARCHAR(36) PRIMARY KEY,name TEXT NOT NULL,provider_type VARCHAR(30) NOT NULL,endpoint TEXT,auth_type VARCHAR(20),secret_env_key VARCHAR(128),model_name TEXT,capabilities JSON,cost_level VARCHAR(10),enabled BOOLEAN,settings JSON,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL,secret_change_pending BOOLEAN NOT NULL,secret_change_claim VARCHAR(64))")
-    con.execute("INSERT INTO provider_configs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",("provider","P","mock","","env","KEY","m","[]","none",1,"{}",None,None,2,1,None))
+    con.execute("CREATE TABLE provider_configs (id VARCHAR(36) PRIMARY KEY,name TEXT NOT NULL,provider_type VARCHAR(30) NOT NULL,endpoint TEXT,auth_type VARCHAR(20),secret_env_key VARCHAR(128),model_name TEXT,capabilities JSON,cost_level VARCHAR(10),enabled BOOLEAN,settings JSON,created_at DATETIME,updated_at DATETIME,revision INTEGER NOT NULL,secret_change_pending BOOLEAN NOT NULL,secret_change_claim VARCHAR(64),secret_change_operation_id VARCHAR(64))")
+    con.execute("INSERT INTO provider_configs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",("provider","P","mock","","env","KEY","m","[]","none",1,"{}",None,None,2,1,None,None))
     con.commit();con.close();return path
 
 def _state(path):

@@ -348,6 +348,7 @@ class ProviderSecretRecovery(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     operation: Literal["set", "delete"]
+    operation_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{48}$")
     api_key: Optional[str] = None
 
     @model_validator(mode="after")
@@ -374,6 +375,7 @@ class ProviderConfigOut(BaseModel):
     updated_at: datetime
     revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)
     secret_change_pending: bool
+    secret_change_operation_id: Optional[str] = Field(default=None, pattern=r"^[0-9a-f]{48}$")
     credential_status: Literal["ready", "unavailable", "recovery_required"]
     is_default: bool
     selection_revision: int = Field(ge=1, le=MAX_PROVIDER_REVISION)

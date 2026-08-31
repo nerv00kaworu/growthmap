@@ -270,19 +270,19 @@ function blockExpected(blockId: string) {
   listProviders: () => request<ProviderConfig[]>("/providers"),
   getProvider: (providerId: string) => request<ProviderConfig>(`/providers/${providerId}`),
   setProviderSelection: (providerId: string | null, expectedSelectionRevision: number) => request<{provider_id:string|null;selection_revision:number;updated_at:string}>(`/providers/selection`, { method: "PUT", body:JSON.stringify({provider_id:providerId,expected_selection_revision:expectedSelectionRevision}) }),
-  createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">) =>
+  createProvider: (data: Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "secret_change_operation_id" | "credential_status">) =>
     request<ProviderConfig>("/providers", { method: "POST", body: JSON.stringify(data) }),
-  updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "credential_status">>) =>
+  updateProvider: (providerId: string, data: Partial<Omit<ProviderConfig, "id" | "auth_type" | "created_at" | "updated_at" | "revision" | "secret_change_pending" | "secret_change_operation_id" | "credential_status">>) =>
     request<ProviderConfig>(`/providers/${providerId}`, { method: "PATCH", body: JSON.stringify(data) }),
   updateProviderModel: (providerId: string, modelName: string) =>
     request<ProviderConfig>(`/providers/${providerId}/model`, { method: "PATCH", body: JSON.stringify({model_name:modelName}) }),
   deleteProvider: (providerId: string) => request<void>(`/providers/${providerId}`, { method: "DELETE" }),
-  writeProviderSecret: (providerId: string, apiKey: string) =>
-    request<void>(`/providers/${providerId}/secret`, { method: "PUT", body: JSON.stringify({ api_key: apiKey }) }),
-  recoverProviderSecret: (providerId:string, revision:number, operation:"set"|"delete", apiKey?:string) =>
-    request<void>(`/providers/${providerId}/secret/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(apiKey===undefined?{}:{api_key:apiKey})})}),
-  recoverDesktopSecret: (providerId:string, revision:number, operation:"set"|"delete", apiKey?:string) =>
-    request<void>(`/desktop/secrets/${providerId}/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(apiKey===undefined?{}:{api_key:apiKey})})}),
+  writeProviderSecret: (providerId: string, apiKey: string, expectedRevision: number, operationId: string) =>
+    request<void>(`/providers/${providerId}/secret`, { method: "PUT", body: JSON.stringify({ api_key: apiKey, expected_revision: expectedRevision, operation_id: operationId }) }),
+  recoverProviderSecret: (providerId:string, revision:number, operation:"set"|"delete", operationId:string|null, apiKey?:string) =>
+    request<void>(`/providers/${providerId}/secret/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(operationId?{operation_id:operationId}:{}),...(apiKey===undefined?{}:{api_key:apiKey})})}),
+  recoverDesktopSecret: (providerId:string, revision:number, operation:"set"|"delete", operationId:string|null, apiKey?:string) =>
+    request<void>(`/desktop/secrets/${providerId}/recover`, {method:"POST",body:JSON.stringify({revision,operation,...(operationId?{operation_id:operationId}:{}),...(apiKey===undefined?{}:{api_key:apiKey})})}),
 
   // Manual agent-session workflow. This records work only; it never dispatches an LLM or external agent.
   listAgentSessions: (projectId: string, status?: AgentSessionStatus) =>

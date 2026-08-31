@@ -45,11 +45,11 @@ with TestClient(app,raise_server_exceptions=False) as c:
  missing=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision})
  assert missing.status_code==409 and 'LLM_SELECTION_CHANGED' in missing.text,missing.text
  before=provider['revision']
- saved=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'memory-key'})
+ saved=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'memory-key','operation_id':'a'*48,'expected_revision':before})
  assert saved.status_code==204,saved.text
  provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert provider['revision']==before+1,(before,provider['revision'])
- assert provider['credential_status']=='ready'
+ assert provider['credential_status']=='ready' and provider['secret_change_operation_id']=='a'*48
  selected=c.put('/api/providers/selection',headers=h,json={'provider_id':pid,'expected_selection_revision':provider['selection_revision']})
  assert selected.status_code==200,selected.text
  selection_revision=selected.json()['selection_revision']
@@ -70,10 +70,10 @@ with TestClient(app,raise_server_exceptions=False) as c:
  rehydrated=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert rehydrated['credential_status']=='ready' and rehydrated['revision']==provider['revision']
  before=provider['revision']
- deleted=c.delete(f'/api/desktop/secrets/{pid}',headers=h)
+ deleted=c.request('DELETE',f'/api/desktop/secrets/{pid}',headers=h,json={'operation_id':'b'*48,'expected_revision':before})
  assert deleted.status_code==204,deleted.text
  provider=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
- assert provider['revision']==before+1,(before,provider['revision'])
+ assert provider['revision']==before+1 and provider['secret_change_operation_id']=='b'*48,(before,provider['revision'])
  removed=c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':provider['revision'],'selection_revision':selection_revision})
  assert removed.status_code==400 and 'LLM_CONFIGURATION_ERROR' in removed.text
  # A failed store exposes only safe pending state and is explicitly recoverable
@@ -81,22 +81,24 @@ with TestClient(app,raise_server_exceptions=False) as c:
  original=dr.put
  def fail(*_): raise RuntimeError('store failure')
  dr.put=fail
- failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***'})
+ failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***','operation_id':'c'*48,'expected_revision':provider['revision']})
  assert failed.status_code==500 and 'memory-key' not in failed.text
  pending=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert pending['secret_change_pending'] is True and pending['credential_status']=='recovery_required'
  assert c.post('/api/ai/test-connection',headers=h,json={'provider_id':pid,'provider_revision':pending['revision'],'selection_revision':selection_revision}).status_code==409
- stale=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision']-1,'operation':'set','api_key':'***'})
+ stale=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision']-1,'operation':'set','operation_id':'a'*48,'api_key':'***'})
  assert stale.status_code==409
+ mismatch=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision'],'operation':'set','operation_id':'b'*48,'api_key':'***'})
+ assert mismatch.status_code==409
  dr.put=original
- recovered=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision'],'operation':'set','api_key':'***'})
+ recovered=c.post(f'/api/desktop/secrets/{pid}/recover',headers=h,json={'revision':pending['revision'],'operation':'set','operation_id':'c'*48,'api_key':'***'})
  assert recovered.status_code==204,recovered.text
  ready=next(x for x in c.get('/api/providers',headers=h).json() if x['id']==pid)
  assert ready['revision']==pending['revision'] and ready['secret_change_pending'] is False
  assert ready['credential_status']=='ready'
  # Hydration cannot bypass the transition latch.
  dr.put=fail
- failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***'})
+ failed=c.put(f'/api/desktop/secrets/{pid}',headers=h,json={'api_key':'***','operation_id':'d'*48,'expected_revision':ready['revision']})
  assert failed.status_code==500
  blocked=c.put(f'/api/desktop/secrets/{pid}/hydrate',headers={**h,'X-GrowthMap-Hydration-Capability':'H'*43},json={'api_key':'***'})
  assert blocked.status_code==409 and 'PROVIDER_CREDENTIAL_RECOVERY_REQUIRED' in blocked.text

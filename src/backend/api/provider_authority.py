@@ -14,16 +14,24 @@ def _lock(provider_id: str) -> asyncio.Lock: return _locks.setdefault(provider_i
 def transition_busy() -> HTTPException:
     return HTTPException(409, detail={"code":"PROVIDER_SECRET_CHANGE_PENDING","message":"Provider secret reconciliation is pending."})
 
+def _validate_authority_state(provider: ProviderConfig) -> None:
+    marker=provider.secret_change_operation_id
+    if provider.secret_change_claim is not None and not provider.secret_change_pending:
+        raise HTTPException(503,detail={"code":"PROVIDER_SECRET_AUTHORITY_INVALID","message":"Credential authority state is unavailable."})
+    if marker is not None and (not isinstance(marker,str) or not __import__('re').fullmatch(r'[0-9a-f]{48}',marker)):
+        raise HTTPException(503,detail={"code":"PROVIDER_SECRET_AUTHORITY_INVALID","message":"Credential authority state is unavailable."})
+
 async def guarded_provider_update(db: AsyncSession, provider: ProviderConfig, **values) -> None:
+    _validate_authority_state(provider)
     provider_id=provider.id
     revision=provider.revision
     if not isinstance(revision,int) or isinstance(revision,bool) or not 1<=revision<=MAX_PROVIDER_REVISION: raise revision_exhausted()
     if provider.secret_change_pending: raise transition_busy()
     if revision==MAX_PROVIDER_REVISION: raise revision_exhausted()
-    result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==revision,ProviderConfig.revision<MAX_PROVIDER_REVISION,ProviderConfig.secret_change_pending.is_(False)).values(**values,revision=revision+1))
+    result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==revision,ProviderConfig.revision<MAX_PROVIDER_REVISION,ProviderConfig.secret_change_pending.is_(False)).values(**values,revision=revision+1,secret_change_operation_id=None))
     if result.rowcount!=1: raise HTTPException(409,detail={"code":"PROVIDER_PROFILE_CHANGED","message":"Provider profile changed; retry."})
 
-async def recover_external_secret(db: AsyncSession, provider: ProviderConfig, expected_revision: int, mutate: Callable[[], None], *, after_claim: Callable[[], None] | None = None, after_mutate: Callable[[], None] | None = None) -> None:
+async def recover_external_secret(db: AsyncSession, provider: ProviderConfig, expected_revision: int, operation_id: str | None, mutate: Callable[[], None], *, after_claim: Callable[[], None] | None = None, after_mutate: Callable[[], None] | None = None) -> None:
     """Claim durably before external I/O; same-process lock spans claim/store/finalize.
 
     A confirmed force reclaim is serialized behind a live local winner. In another
@@ -34,10 +42,11 @@ async def recover_external_secret(db: AsyncSession, provider: ProviderConfig, ex
     async with _lock(provider_id), ProviderLock(provider_id):
         await db.rollback()  # discard stale identity-map/read transaction
         current=(await db.execute(select(ProviderConfig).where(ProviderConfig.id==provider_id))).scalar_one_or_none()
-        if not current or not current.secret_change_pending or current.revision!=expected_revision:
-            raise HTTPException(409,detail={"code":"PROVIDER_SECRET_RECOVERY_STALE","message":"Credential recovery revision is stale."})
+        if current: _validate_authority_state(current)
+        if not current or not current.secret_change_pending or current.revision!=expected_revision or current.secret_change_operation_id!=operation_id:
+            raise HTTPException(409,detail={"code":"PROVIDER_SECRET_RECOVERY_STALE","message":"Credential recovery operation is stale."})
         token=secrets.token_hex(24)
-        claim_where=[ProviderConfig.id==provider_id,ProviderConfig.revision==expected_revision,ProviderConfig.secret_change_pending.is_(True)]
+        claim_where=[ProviderConfig.id==provider_id,ProviderConfig.revision==expected_revision,ProviderConfig.secret_change_pending.is_(True),ProviderConfig.secret_change_operation_id==operation_id] if operation_id is not None else [ProviderConfig.id==provider_id,ProviderConfig.revision==expected_revision,ProviderConfig.secret_change_pending.is_(True),ProviderConfig.secret_change_operation_id.is_(None)]
         # Holding the OS lock proves any persisted claim has no live owner: every
         # participant must hold this lock across claim, external I/O and finalize.
         # A crash releases the kernel lock, so replacing its claim is safe.
@@ -49,21 +58,27 @@ async def recover_external_secret(db: AsyncSession, provider: ProviderConfig, ex
         mutate()
         if after_mutate is not None: after_mutate()
         try:
-            result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==expected_revision,ProviderConfig.secret_change_pending.is_(True),ProviderConfig.secret_change_claim==token).values(secret_change_pending=False,secret_change_claim=None))
+            operation_match=ProviderConfig.secret_change_operation_id==operation_id if operation_id is not None else ProviderConfig.secret_change_operation_id.is_(None)
+            result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==expected_revision,ProviderConfig.secret_change_pending.is_(True),ProviderConfig.secret_change_claim==token,operation_match).values(secret_change_pending=False,secret_change_claim=None))
             if result.rowcount!=1: raise transition_busy()
             await db.commit()
         except BaseException:
             await db.rollback(); raise transition_busy()
 
-async def change_external_secret(db: AsyncSession, provider: ProviderConfig, mutate: Callable[[], None]) -> None:
+async def change_external_secret(db: AsyncSession, provider: ProviderConfig, expected_revision: int, operation_id: str, mutate: Callable[[], None]) -> None:
+    _validate_authority_state(provider)
     provider_id=provider.id
     revision=provider.revision
+    if not isinstance(operation_id,str) or not __import__('re').fullmatch(r'[0-9a-f]{48}',operation_id):
+        raise HTTPException(422,detail={"code":"INVALID_SECRET_OPERATION_ID","message":"Credential operation id is invalid."})
+    if not isinstance(expected_revision,int) or isinstance(expected_revision,bool) or expected_revision!=revision:
+        raise HTTPException(409,detail={"code":"PROVIDER_PROFILE_CHANGED","message":"Provider profile changed; retry."})
     if not isinstance(revision,int) or isinstance(revision,bool) or not 1<=revision<MAX_PROVIDER_REVISION: raise revision_exhausted()
     if provider.secret_change_pending: raise transition_busy()
     try:
-        result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==revision,ProviderConfig.revision<MAX_PROVIDER_REVISION,ProviderConfig.secret_change_pending.is_(False)).values(revision=revision+1,secret_change_pending=True,secret_change_claim=None))
+        result=await db.execute(update(ProviderConfig).where(ProviderConfig.id==provider_id,ProviderConfig.revision==revision,ProviderConfig.revision<MAX_PROVIDER_REVISION,ProviderConfig.secret_change_pending.is_(False)).values(revision=revision+1,secret_change_pending=True,secret_change_claim=None,secret_change_operation_id=operation_id))
         if result.rowcount!=1: raise HTTPException(409,detail={"code":"PROVIDER_PROFILE_CHANGED","message":"Provider profile changed; retry."})
         await db.commit()
     except BaseException:
         await db.rollback(); raise
-    await recover_external_secret(db,provider,revision+1,mutate)
+    await recover_external_secret(db,provider,revision+1,operation_id,mutate)
