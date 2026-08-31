@@ -10,6 +10,7 @@ class AIDiagnostic:
     source_status: int | None = None
 
 class LLMConfigurationError(Exception): pass
+class LLMOperationTimeout(Exception): pass
 class LLMInvalidResponse(Exception): pass
 class LLMProfileChanged(Exception): pass
 class LLMSelectionChanged(Exception): pass
@@ -30,7 +31,7 @@ def classify_ai_exception(exc: Exception) -> AIDiagnostic:
     elif isinstance(exc, LLMProfileChanged): code, status = "LLM_PROFILE_CHANGED", 409
     elif isinstance(exc, LLMInvalidResponse): code, status = "LLM_INVALID_RESPONSE", 502
     elif isinstance(exc, LLMConfigurationError): code, status = "LLM_CONFIGURATION_ERROR", 400
-    elif isinstance(exc, httpx.TimeoutException): code, status = "LLM_TIMEOUT", 504
+    elif isinstance(exc, (LLMOperationTimeout, httpx.TimeoutException, TimeoutError)): code, status = "LLM_TIMEOUT", 504
     elif isinstance(exc, httpx.HTTPStatusError):
         source = exc.response.status_code
         if source in (401, 403): code, status = "LLM_AUTH_FAILED", 401

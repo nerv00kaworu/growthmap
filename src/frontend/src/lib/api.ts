@@ -27,6 +27,7 @@ const MAX_AI_ERROR_BODY = 2048;
 const SAFE_AI_FALLBACK_CODE = "LLM_INVALID_RESPONSE";
 const SAFE_AI_FALLBACK_STATUS = 502;
 const SAFE_AI_FALLBACK = "The AI diagnostic response could not be validated.";
+export const AI_TEST_CLIENT_TIMEOUT_MS = 70_000;
 
 export function parseAIError(status: number, text: string): ApiError {
   if (new TextEncoder().encode(text).byteLength > MAX_AI_ERROR_BODY) return new ApiError(SAFE_AI_FALLBACK_STATUS, SAFE_AI_FALLBACK_CODE, SAFE_AI_FALLBACK);
@@ -406,11 +407,20 @@ function blockExpected(blockId: string) {
     }, true, true),
 
   // Test LLM connection
-  testConnection: (providerId: string, providerRevision: number, selectionRevision: number) =>
-    request<{ ok: true; provider: string; model?: string; message: string; code: string; request_id: string; elapsed_ms: number }>("/ai/test-connection", {
-      method: "POST",
-      body: JSON.stringify({ provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision }),
-    }, true, true),
+  testConnection: async (providerId: string, providerRevision: number, selectionRevision: number) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AI_TEST_CLIENT_TIMEOUT_MS);
+    try {
+      return await request<{ ok: true; provider: string; model?: string; message: string; code: string; request_id: string; elapsed_ms: number }>("/ai/test-connection", {
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({ provider_id: providerId, provider_revision: providerRevision, selection_revision: selectionRevision }),
+      }, true, true);
+    } catch (error) {
+      if (controller.signal.aborted) throw new ApiError(504, "LLM_TIMEOUT", "The local AI connection test timed out.");
+      throw error;
+    } finally { clearTimeout(timer); }
+  },
 
   // Spec export (returns text)
   exportSpec: async (projectId: string): Promise<string> => {

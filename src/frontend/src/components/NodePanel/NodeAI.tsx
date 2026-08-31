@@ -111,7 +111,7 @@ export function NodeAI({
           {(modelError||panel.copyMessage||panel.generationError) && <div role="alert" className="text-red-300">{modelError||panel.copyMessage||panel.generationError}</div>}
           {modelDraft.trim()!==selectedProfile?.model_name && <div className="text-amber-300">{m("模型尚未儲存；後端仍使用已儲存模型。","模型尚未保存；后端仍使用已保存模型。","Unsaved model; the backend still uses the saved model.")}</div>}
           <div>{costHint}</div>
-          {testState && <div className="mt-1" role="status">{testState.kind.toUpperCase()} · {testState.kind==="testing"?elapsed:Math.ceil(testState.elapsed/1000)}s · {testState.message}{testState.status?` · HTTP ${testState.status}`:""}{testState.code?` · ${testState.code}`:""}{testState.requestId?` · ID ${testState.requestId}`:""}</div>}
+          {testState && <div className="mt-1" role="status">{testState.kind.toUpperCase()} · {testState.kind==="testing"?elapsed:Math.ceil(testState.elapsed/1000)}s · {testState.message}{testState.status?` · HTTP ${testState.status}`:""}{testState.code?` · ${testState.code}`:""}{testState.requestId?` · ID ${testState.requestId}`:""}{testState.requestId&&<button type="button" className="ml-2 underline" onClick={()=>void controller.copy(testState.requestId!)}>{m("複製請求 ID","复制请求 ID","Copy request ID")}</button>}</div>}
         </div>
         {profileState==="loading" && <div role="status" className="text-xs">{m("載入設定檔…","加载配置…","Loading profiles…")}</div>}
         {profileState==="error" && <div role="alert" className="rounded border border-red-800 p-2 text-xs text-red-300">{m("無法載入設定檔。","无法加载配置。","Could not load profiles.")} <button type="button" className="underline" onClick={loadProfiles}>{m("重試","重试","Retry")}</button></div>}

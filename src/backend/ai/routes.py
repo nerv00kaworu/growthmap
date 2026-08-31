@@ -19,7 +19,9 @@ from models.provider_authority import MAX_PROVIDER_REVISION
 from models.content_blocks import ContentBlockType, CONTENT_BLOCK_TYPES_PROMPT
 from desktop.secrets import desktop_mode, get as get_desktop_secret
 from ai.provider import parse_json_response  # Reuse existing JSON parser
-from ai.diagnostics import classify_ai_exception, LLMConfigurationError, LLMInvalidResponse, LLMProfileChanged, LLMSelectionChanged
+from ai.diagnostics import classify_ai_exception, LLMConfigurationError, LLMInvalidResponse, LLMOperationTimeout, LLMProfileChanged, LLMSelectionChanged
+
+TEST_CONNECTION_TIMEOUT_SECONDS = 65
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -238,7 +240,10 @@ async def test_connection(req: TestConnectionRequest, db: AsyncSession = Depends
     try:
         config, _ = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         from ai.providers.registry import test_connection as test_conn
-        result = await test_conn(config)
+        try:
+            result = await asyncio.wait_for(test_conn(config), timeout=TEST_CONNECTION_TIMEOUT_SECONDS)
+        except TimeoutError as exc:
+            raise LLMOperationTimeout() from exc
         return TestConnectionResponse(**result, request_id=request_id, elapsed_ms=int((time.monotonic()-started)*1000))
     except Exception as exc: raise _safe_error(exc, request_id) from exc
 

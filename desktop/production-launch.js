@@ -10,7 +10,7 @@ async function completeProductionLaunch({prepare,hasStore,bind,makeStore,hydrate
  let stage='prepare',prepared=null,transition=null,store=null;
  try{
   prepared=await prepare();store=hasStore();
-  if(!store){stage='bind';transition=await bind();stage='store';store=await makeStore()}
+  if(!store){stage='bind';transition=await bind();stage='store';store=await makeStore();await transition?.absorbLegacyAdoption?.()}
   stage='reconcile';await store.reconcile();
   stage='hydrate';await hydrateAndSeal(prepared,store);
   stage='enable';await enable(store);
