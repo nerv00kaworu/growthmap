@@ -224,7 +224,11 @@ SE_FILE_OBJECT = 1
 OWNER_SECURITY_INFORMATION = 0x1
 DACL_SECURITY_INFORMATION = 0x4
 ACCESS_ALLOWED_ACE_TYPE = 0
-_UNPARSED_ALLOW_ACE_TYPES = frozenset((4, 5, 9, 11))
+ACCESS_ALLOWED_OBJECT_ACE_TYPE = 5
+ACCESS_ALLOWED_CALLBACK_ACE_TYPE = 9
+ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE = 11
+_OBJECT_ACE_TYPES = frozenset((ACCESS_ALLOWED_OBJECT_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE))
+_SUPPORTED_ALLOW_ACE_TYPES = frozenset((ACCESS_ALLOWED_ACE_TYPE, ACCESS_ALLOWED_CALLBACK_ACE_TYPE, *_OBJECT_ACE_TYPES))
 
 
 def _sid_text(sid) -> str:
@@ -240,6 +244,25 @@ def _acl_policy(owner: str, allow_entries: list[tuple[str, int]]) -> None:
     write_mask=0x10000000|0x40000000|0x00010000|0x00040000|0x00080000|0x00000156
     if owner not in trusted or any(mask & write_mask and sid not in trusted for sid,mask in allow_entries):
         raise RuntimeError("Windows provider-lock policy unavailable")
+
+
+def _allow_ace_fields(ace: int, ace_type: int, ace_size: int) -> tuple[int, wintypes.LPVOID]:
+    """Return a bounded mask/SID view for supported allow ACE layouts."""
+    if ace_type not in _SUPPORTED_ALLOW_ACE_TYPES or ace_size < 16:
+        raise RuntimeError("Windows provider-lock policy unavailable")
+    mask=ctypes.cast(ace+4,ctypes.POINTER(ctypes.c_uint32)).contents.value
+    sid_offset=8
+    if ace_type in _OBJECT_ACE_TYPES:
+        if ace_size < 20: raise RuntimeError("Windows provider-lock policy unavailable")
+        flags=ctypes.cast(ace+8,ctypes.POINTER(ctypes.c_uint32)).contents.value
+        if flags & ~0x3: raise RuntimeError("Windows provider-lock policy unavailable")
+        sid_offset=12 + (16 if flags & 0x1 else 0) + (16 if flags & 0x2 else 0)
+    if sid_offset + 8 > ace_size: raise RuntimeError("Windows provider-lock policy unavailable")
+    sid=wintypes.LPVOID(ace+sid_offset); advapi=_advapi32()
+    if not advapi.IsValidSid(sid): raise RuntimeError("Windows provider-lock policy unavailable")
+    sid_length=advapi.GetLengthSid(sid)
+    if sid_length < 8 or sid_offset + sid_length > ace_size: raise RuntimeError("Windows provider-lock policy unavailable")
+    return mask,sid
 
 
 def _validate_native_acl(handle) -> None:
@@ -258,11 +281,11 @@ def _validate_native_acl(handle) -> None:
             header=ctypes.cast(ace,ctypes.POINTER(_ACE_HEADER)).contents
             if header.AceSize < 8 or consumed + header.AceSize > info.AclBytesInUse: raise RuntimeError("Windows provider-lock policy unavailable")
             consumed += header.AceSize
-            if header.AceType in _UNPARSED_ALLOW_ACE_TYPES: raise RuntimeError("Windows provider-lock policy unavailable")
-            if header.AceType != ACCESS_ALLOWED_ACE_TYPE: continue
-            mask=ctypes.cast(ace.value+4,ctypes.POINTER(wintypes.DWORD)).contents.value
-            sid=ctypes.c_void_p(ace.value+8)
-            entries.append((_sid_text(sid),mask))
+            if header.AceType in _SUPPORTED_ALLOW_ACE_TYPES:
+                mask,sid=_allow_ace_fields(ace.value,header.AceType,header.AceSize)
+                entries.append((_sid_text(sid),mask))
+            elif header.AceType == 4:  # obsolete compound allow layout: fail closed
+                raise RuntimeError("Windows provider-lock policy unavailable")
         _acl_policy(_sid_text(owner),entries)
     finally: _kernel32().LocalFree(descriptor)
 
@@ -275,6 +298,8 @@ def _advapi32():
         api.GetAclInformation.argtypes=[wintypes.LPVOID,wintypes.LPVOID,wintypes.DWORD,wintypes.DWORD];api.GetAclInformation.restype=wintypes.BOOL
         api.GetAce.argtypes=[wintypes.LPVOID,wintypes.DWORD,ctypes.POINTER(wintypes.LPVOID)];api.GetAce.restype=wintypes.BOOL
         api.ConvertSidToStringSidW.argtypes=[wintypes.LPVOID,ctypes.POINTER(wintypes.LPWSTR)];api.ConvertSidToStringSidW.restype=wintypes.BOOL
+        api.IsValidSid.argtypes=[wintypes.LPVOID];api.IsValidSid.restype=wintypes.BOOL
+        api.GetLengthSid.argtypes=[wintypes.LPVOID];api.GetLengthSid.restype=wintypes.DWORD
         _advapi=api
     return _advapi
 

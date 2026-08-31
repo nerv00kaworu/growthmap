@@ -156,8 +156,42 @@ def test_windows_acl_validator_has_fixed_trusted_sid_and_write_mask_contract():
  source=__import__('inspect').getsource(security._acl_policy)+__import__('inspect').getsource(security._validate_native_acl)
  for sid in ('S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'):
   assert sid in source
- assert 'write_mask' in source and 'ACCESS_ALLOWED_ACE_TYPE' in source
- assert 'SE_FILE_OBJECT' in source and '_UNPARSED_ALLOW_ACE_TYPES' in source and 'AceSize < 8' in source
+ assert 'write_mask' in source and '_SUPPORTED_ALLOW_ACE_TYPES' in source
+ assert 'SE_FILE_OBJECT' in source and '_SUPPORTED_ALLOW_ACE_TYPES' in source and 'AceSize < 8' in source
+
+def test_windows_supported_allow_ace_layouts_are_bounded(monkeypatch):
+ from api import windows_file_security as security
+ import ctypes
+ class Advapi:
+  def IsValidSid(self,_sid):return 1
+  def GetLengthSid(self,_sid):return 8
+ monkeypatch.setattr(security,'_advapi32',lambda:Advapi())
+ def ace(kind,flags=0,size=64):
+  raw=(ctypes.c_ubyte*size)();base=ctypes.addressof(raw)
+  ctypes.cast(base+4,ctypes.POINTER(ctypes.c_uint32)).contents.value=0x40000000
+  if kind in security._OBJECT_ACE_TYPES:ctypes.cast(base+8,ctypes.POINTER(ctypes.c_uint32)).contents.value=flags
+  return raw,base
+ for kind,flags,offset in [(0,0,8),(9,0,8),(5,0,12),(5,1,28),(5,2,28),(11,3,44)]:
+  raw,base=ace(kind,flags);mask,sid=security._allow_ace_fields(base,kind,len(raw))
+  assert mask==0x40000000 and sid.value==base+offset
+ for kind,flags,size in [(4,0,64),(5,4,64),(5,3,51),(11,3,51),(0,0,15)]:
+  raw,base=ace(kind,flags,size)
+  with pytest.raises(RuntimeError,match='policy unavailable'):security._allow_ace_fields(base,kind,size)
+
+def test_windows_allow_ace_sid_length_is_bounded(monkeypatch):
+ from api import windows_file_security as security
+ import ctypes
+ raw=(ctypes.c_ubyte*32)();base=ctypes.addressof(raw)
+ class Invalid:
+  def IsValidSid(self,_sid):return 0
+  def GetLengthSid(self,_sid):raise AssertionError
+ monkeypatch.setattr(security,'_advapi32',lambda:Invalid())
+ with pytest.raises(RuntimeError,match='policy unavailable'):security._allow_ace_fields(base,0,len(raw))
+ class Oversized:
+  def IsValidSid(self,_sid):return 1
+  def GetLengthSid(self,_sid):return 25
+ monkeypatch.setattr(security,'_advapi32',lambda:Oversized())
+ with pytest.raises(RuntimeError,match='policy unavailable'):security._allow_ace_fields(base,0,len(raw))
 
 def test_windows_policy_launches_resolved_absolute_powershell(monkeypatch):
  from api import windows_file_security as security
@@ -175,7 +209,10 @@ def test_windows_file_security_native_abi_and_ace_contract():
  assert 'GetSecurityInfo(handle,SE_FILE_OBJECT' in acl and security.SE_FILE_OBJECT==1
  component=inspect.getsource(security._verified_existing_component)
  assert '0x00020000 | 0x80' in component  # READ_CONTROL | FILE_READ_ATTRIBUTES
- assert set(security._UNPARSED_ALLOW_ACE_TYPES)>={4,5,9,11}
+ assert set(security._SUPPORTED_ALLOW_ACE_TYPES)=={0,5,9,11}
+ fields=inspect.getsource(security._allow_ace_fields);advapi=inspect.getsource(security._advapi32)
+ assert 'sid_offset + sid_length > ace_size' in fields and 'flags & ~0x3' in fields
+ assert 'IsValidSid.argtypes=[wintypes.LPVOID]' in advapi and 'GetLengthSid.argtypes=[wintypes.LPVOID]' in advapi
  assert 'header.AceSize < 8' in acl and 'info.AclBytesInUse' in acl
  assert 'LocalFree.argtypes = [wintypes.LPVOID]' in kernel and 'LocalFree.restype = wintypes.LPVOID' in kernel
  assert '_kernel32().LocalFree' in sid and 'ctypes.windll' not in sid+acl
