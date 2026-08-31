@@ -23,29 +23,53 @@ export const LLM_CONFIG_CHANGED_EVENT = "growthmap:llm-config-changed";
 
 const LS_KEY = "growthmap_llm_config";
 
-export function saveLLMConfig(config: LLMConfig): void {
-  localStorage.setItem(LS_KEY, JSON.stringify({
+export function sameLLMConfig(a: LLMConfig | null, b: LLMConfig | null): boolean {
+  return !!(a && b && a.provider === b.provider && a.providerId === b.providerId && a.model === b.model && a.revision === b.revision && a.selectionRevision === b.selectionRevision);
+}
+
+function parseStoredLLMConfig(raw: string | null): { config: LLMConfig; canonical: string } | null {
+  if (!raw) return null;
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.provider !== "string" || typeof candidate.providerId !== "string" || typeof candidate.model !== "string" || typeof candidate.revision !== "number" || !Number.isInteger(candidate.revision) || candidate.revision < 1 || typeof candidate.selectionRevision !== "number" || !Number.isSafeInteger(candidate.selectionRevision) || candidate.selectionRevision < 1) return null;
+  const config = { provider: candidate.provider as LLMProviderType, providerId: candidate.providerId, model: candidate.model, revision: candidate.revision, selectionRevision: candidate.selectionRevision };
+  return { config, canonical: JSON.stringify(config) };
+}
+
+export function saveLLMConfig(config: LLMConfig): boolean {
+  const safe = {
     provider: config.provider,
     providerId: config.providerId,
     model: config.model,
     revision: config.revision,
     selectionRevision: config.selectionRevision,
-  }));
+  };
+  const canonical = JSON.stringify(safe);
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    const stored = parseStoredLLMConfig(raw);
+    if (sameLLMConfig(stored?.config ?? null, safe)) {
+      // Preserve exact-match idempotence while still stripping extra legacy fields.
+      if (raw !== canonical) localStorage.setItem(LS_KEY, canonical);
+      return false;
+    }
+  } catch {
+    // Fall through to the existing write path; storage failures remain caller-visible.
+  }
+  localStorage.setItem(LS_KEY, canonical);
   window.dispatchEvent(new CustomEvent(LLM_CONFIG_CHANGED_EVENT, { detail: { providerId: config.providerId } }));
+  return true;
 }
 
 export function loadLLMConfig(): LLMConfig | null {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return null;
-    const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object") return null;
-    const candidate = value as Record<string, unknown>;
-    if (typeof candidate.provider !== "string" || typeof candidate.providerId !== "string" || typeof candidate.model !== "string" || typeof candidate.revision !== "number" || !Number.isInteger(candidate.revision) || candidate.revision < 1 || typeof candidate.selectionRevision !== "number" || !Number.isSafeInteger(candidate.selectionRevision) || candidate.selectionRevision < 1) return null;
-    // Rewrite legacy records so previously persisted secret/endpoint fields are removed.
-    const safe = { provider: candidate.provider as LLMProviderType, providerId: candidate.providerId, model: candidate.model, revision: candidate.revision, selectionRevision: candidate.selectionRevision };
-    localStorage.setItem(LS_KEY, JSON.stringify(safe));
-    return safe;
+    const stored = parseStoredLLMConfig(raw);
+    if (!stored) return null;
+    // Rewrite only valid noncanonical records so previously persisted extra fields are removed.
+    if (raw !== stored.canonical) localStorage.setItem(LS_KEY, stored.canonical);
+    return stored.config;
   } catch {
     return null;
   }
