@@ -162,7 +162,7 @@
     "desktop/tests/database-manager-deadline.test.js": "ff72b4b7c4b42e1c4be2126abfa14e0398b3016184c5952b5001567b385d4533",
     "desktop/tests/database-manager-snapshot-drift.test.js": "31d5fe4e9346024c82cfed2d35b72e3940b26082e3f5640f45c4b7a1a3ddba31",
     "desktop/tests/database-manager-windows-preflight.test.js": "a6e7e318f16c7f1cdc1f3b550176cffde161b9c6e749918c26f610fb7a1feeb1",
-    "desktop/tests/database-manager.test.js": "46f91415780ed086a249c4dbaddf627fc9810f5983f9acdcbd20c3483fc49b8a",
+    "desktop/tests/database-manager.test.js": "524e888a09c66de221519efb44850daded691ec87162b536cc5d61846f8455a8",
     "desktop/tests/database-workspace.test.js": "627172d967e6c90cbf0ea80d2bf14869099f33398dc0d7e8ccbabee498f86bdb",
     "desktop/tests/device-identity-store.test.js": "bc03bf7593b75ab144d47364c41826e963ae5400a48eb7273f4a319cb1dda13c",
     "desktop/tests/fixture-dispatch-contract.test.js": "75f48f1566a8cd42abeb3bdaba00a693e2b34a8b9158c4d88e62b51a156240ea",
