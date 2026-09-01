@@ -4,6 +4,8 @@ const ui=(tw:string,cn:string,en:string)=>activeMsg({"zh-TW":tw,"zh-CN":cn,en});
 import type { GNode, GrowthMode, Project, Branch, BranchComparison } from "@/lib/types";
 import { api, ApiError } from "@/lib/api";
 import type { AIProviderIdentity } from "@/lib/ai-panel-controller";
+import { applyCanonicalDelta, type CanonicalOwner } from "@/lib/canonical-sync";
+import type { CanonicalDelta } from "@/lib/api";
 import { runMutationWithConflict, type ConflictState } from "@/lib/conflict";
 import {
   findNode,
@@ -63,6 +65,7 @@ interface GrowthMapStore {
   updateNode: (nodeId: string, data: Partial<GNode>) => Promise<void>;
   deleteNode: (nodeId: string) => Promise<void>;
   refreshTree: () => Promise<"refreshed" | "superseded">;
+  applyExternalDelta: (owner: CanonicalOwner, delta: CanonicalDelta) => boolean;
   promoteMainlineChild: (parentId: string, childId: string) => Promise<void>;
   reparentNode: (nodeId: string, newParentId: string) => Promise<void>;
   undo: () => Promise<void>;
@@ -416,6 +419,18 @@ export const useStore = create<GrowthMapStore>((set, get) => ({
     } catch (error) {
       if (ownsOperation(owner)) throw error;
     }
+  },
+
+  applyExternalDelta: (owner, delta) => {
+    const state=get();
+    if(!state.currentProject||!state.rootNode||(state.currentBranch?.id??null)!==owner.branchId)return false;
+    // Do not invalidate local mutation/undo/AI ownership while it is active.
+    if(state.loading||state.aiLoading||undoInFlight||state.conflict)return false;
+    const applied=applyCanonicalDelta(owner,{project:state.currentProject,root:state.rootNode,selectedId:state.selectedNodeId},delta);
+    if(!applied)return false;
+    api.rememberCanonicalDelta(delta);
+    set({currentProject:applied.project,projects:state.projects.map(p=>p.id===applied.project.id?applied.project:p),rootNode:applied.root,selectedNode:applied.selected});
+    return true;
   },
 
   refreshTree: async () => {

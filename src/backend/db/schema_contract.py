@@ -6,7 +6,7 @@ import re
 # deliberately done before the one-mainline unique index is created.
 # v9 adds the monotonic provider authority revision. A version bump is required
 # so already-valid v8 databases are migrated instead of being rejected at startup.
-CURRENT_USER_VERSION = 13
+CURRENT_USER_VERSION = 15
 # table, column, declared type, NOT NULL, normalized default, additive v1 DDL
 COLUMNS = (
     ("nodes", "branch_id", "VARCHAR(36)", False, None, "ALTER TABLE nodes ADD COLUMN branch_id VARCHAR(36) REFERENCES branches(id)"),
@@ -37,8 +37,20 @@ INDEXES = {
  "ux_agent_grants_one_active_workspace": WORKSPACE_GRANT_INDEX_SQL,
 }
 PROVIDER_SELECTION_TABLE_SQL = """CREATE TABLE provider_selection (singleton_id INTEGER NOT NULL PRIMARY KEY, provider_id VARCHAR(36) REFERENCES provider_configs(id) ON DELETE SET NULL, selection_revision INTEGER NOT NULL DEFAULT 1, updated_at DATETIME NOT NULL, CONSTRAINT ck_provider_selection_singleton CHECK (singleton_id = 1), CONSTRAINT ck_provider_selection_revision_safe CHECK (selection_revision >= 1 AND selection_revision <= 9007199254740991))"""
+CANONICAL_CHANGES_TABLE_SQL = """CREATE TABLE canonical_changes (id VARCHAR(36) NOT NULL PRIMARY KEY, project_id VARCHAR(36) NOT NULL, project_revision INTEGER NOT NULL, kind VARCHAR(24) NOT NULL, hints JSON NOT NULL DEFAULT '{}', created_at DATETIME NOT NULL, CONSTRAINT ck_canonical_change_revision CHECK (project_revision >= 0 AND project_revision <= 9007199254740991), CONSTRAINT ck_canonical_change_kind CHECK (kind IN ('graph','full_refresh','workspace')))"""
+CANONICAL_CHANGES_INDEX_SQL = "CREATE UNIQUE INDEX idx_canonical_changes_project_revision ON canonical_changes(project_id,project_revision)"
 
 TRIGGERS = {
+ "trg_project_revision_safe_insert":"CREATE TRIGGER trg_project_revision_safe_insert BEFORE INSERT ON projects WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'project revision outside safe integer range'); END",
+ "trg_project_revision_safe_update":"CREATE TRIGGER trg_project_revision_safe_update BEFORE UPDATE OF revision ON projects WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'project revision outside safe integer range'); END",
+ "trg_nodes_revision_safe_insert":"CREATE TRIGGER trg_nodes_revision_safe_insert BEFORE INSERT ON nodes WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'node revision outside safe integer range'); END",
+ "trg_nodes_revision_safe_update":"CREATE TRIGGER trg_nodes_revision_safe_update BEFORE UPDATE OF revision ON nodes WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'node revision outside safe integer range'); END",
+ "trg_edges_revision_safe_insert":"CREATE TRIGGER trg_edges_revision_safe_insert BEFORE INSERT ON edges WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'edge revision outside safe integer range'); END",
+ "trg_edges_revision_safe_update":"CREATE TRIGGER trg_edges_revision_safe_update BEFORE UPDATE OF revision ON edges WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'edge revision outside safe integer range'); END",
+ "trg_content_blocks_revision_safe_insert":"CREATE TRIGGER trg_content_blocks_revision_safe_insert BEFORE INSERT ON content_blocks WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'content block revision outside safe integer range'); END",
+ "trg_content_blocks_revision_safe_update":"CREATE TRIGGER trg_content_blocks_revision_safe_update BEFORE UPDATE OF revision ON content_blocks WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'content block revision outside safe integer range'); END",
+ "trg_branches_revision_safe_insert":"CREATE TRIGGER trg_branches_revision_safe_insert BEFORE INSERT ON branches WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'branch revision outside safe integer range'); END",
+ "trg_branches_revision_safe_update":"CREATE TRIGGER trg_branches_revision_safe_update BEFORE UPDATE OF revision ON branches WHEN typeof(NEW.revision) != 'integer' OR NEW.revision < 1 OR NEW.revision > 9007199254740991 BEGIN SELECT RAISE(ABORT, 'branch revision outside safe integer range'); END",
 "trg_edges_one_mainline_insert": """CREATE TRIGGER trg_edges_one_mainline_insert BEFORE INSERT ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1); END""",
 "trg_edges_one_mainline_update": """CREATE TRIGGER trg_edges_one_mainline_update BEFORE UPDATE OF from_node_id, relation_type, is_mainline ON edges WHEN NEW.relation_type = 'child_of' AND NEW.is_mainline = 1 BEGIN SELECT RAISE(ABORT, 'duplicate mainline for parent') WHERE EXISTS (SELECT 1 FROM edges WHERE from_node_id = NEW.from_node_id AND relation_type = 'child_of' AND is_mainline = 1 AND id != OLD.id); END""",
 "trg_edges_normalize_null_insert": """CREATE TRIGGER trg_edges_normalize_null_insert AFTER INSERT ON edges WHEN NEW.weight IS NULL OR NEW.note IS NULL BEGIN UPDATE edges SET weight = COALESCE(weight, 1.0), note = COALESCE(note, '') WHERE id = NEW.id; END""",
@@ -50,6 +62,11 @@ OBJECT_SQL = {**INDEXES, **TRIGGERS}
 # Canonical ownership makes optional-object applicability one shared policy.
 # Objects owned by mandatory tables remain strict whenever schema validation runs.
 OBJECT_OWNERS = {
+ "trg_project_revision_safe_insert":"projects","trg_project_revision_safe_update":"projects",
+ "trg_nodes_revision_safe_insert":"nodes","trg_nodes_revision_safe_update":"nodes",
+ "trg_edges_revision_safe_insert":"edges","trg_edges_revision_safe_update":"edges",
+ "trg_content_blocks_revision_safe_insert":"content_blocks","trg_content_blocks_revision_safe_update":"content_blocks",
+ "trg_branches_revision_safe_insert":"branches","trg_branches_revision_safe_update":"branches",
     "ux_edges_one_mainline_per_parent": "edges",
     "ux_agent_grants_one_active_workspace": "agent_grants",
     "trg_edges_one_mainline_insert": "edges",
@@ -232,7 +249,7 @@ CANONICAL_TABLES = frozenset({
     "projects","nodes","edges","content_blocks","suggestions","action_logs",
     "provider_configs","provider_selection","branches","agent_artifacts",
     "agent_sessions","agent_grants","agent_receipts","agent_proposals",
-    "agent_events","agent_readbacks",
+    "agent_events","agent_readbacks","canonical_changes",
 })
 REQUIRED_TABLE_COLUMNS = {
  "projects":frozenset({"id","name","status","created_at","updated_at"}),

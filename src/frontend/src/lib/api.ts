@@ -54,6 +54,22 @@ function activeLocale(): "zh-TW" | "zh-CN" | "en" {
 }
 
 
+export interface CanonicalDelta {
+  schema: 1;
+  project_id: string;
+  since_revision: number;
+  current_revision: number;
+  complete: boolean;
+  full_refresh_required: boolean;
+  gap: boolean;
+  truncated?: boolean;
+  changes: { schema: 1; kind: "graph" | "full_refresh" | "workspace"; project_id: string; revision: number; cursor: string; hints: Record<string, unknown> }[];
+  nodes: Partial<GNode>[];
+  edges: Edge[];
+  content_blocks: { id: string; node_id: string; block_type: string; content: Record<string,string>; order_index: number; revision: number }[];
+  branches: Branch[];
+}
+
 export interface AgentPortRecord {
   name: string;
   status?: string;
@@ -374,6 +390,16 @@ function blockExpected(blockId: string) {
   deleteBlock: (blockId: string, expectedProjectRevision?: number, expectedNodeRevision?: number, expectedRevision?: number) => {
     const { expected } = blockExpected(blockId);
     return request<void>(`/blocks/${blockId}`, { method: "DELETE", body: JSON.stringify({ ...expected, expected_project_revision: expectedProjectRevision ?? expected.expected_project_revision, expected_node_revision: expectedNodeRevision ?? expected.expected_node_revision, expected_revision: expectedRevision ?? expected.expected_revision }) });
+  },
+
+  getProjectRevision: (projectId: string) =>
+    request<{ project_id: string; revision: number }>(`/projects/${projectId}/revision`, { cache: "no-store" }, false),
+  getProjectChanges: (projectId: string, sinceRevision: number) =>
+    request<CanonicalDelta>(`/projects/${projectId}/changes?since_revision=${encodeURIComponent(String(sinceRevision))}`, { cache: "no-store" }, false),
+  rememberCanonicalDelta: (delta: CanonicalDelta) => {
+    if (delta.schema !== 1 || !Number.isSafeInteger(delta.current_revision) || delta.current_revision < 1) throw new Error("Invalid canonical delta");
+    setProjectRevision(delta.project_id, delta.current_revision);
+    remember(delta.nodes); remember(delta.edges); remember(delta.content_blocks); remember(delta.branches);
   },
 
   // History

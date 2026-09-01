@@ -2,7 +2,7 @@
 import os
 import re
 from sqlalchemy import text
-from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_METADATA, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, applicable_objects, authority_critical_fk_violations, column_matches, normalize_sql, orm_column_problem, provider_selection_contract_problem, evaluate_snapshot
+from db.schema_contract import CURRENT_USER_VERSION, COLUMNS, TABLE_CONDITIONAL_COLUMNS, OBJECT_METADATA, ORM_READ_COLUMNS, ROW_REQUIRED_NON_NULL, PROVIDER_SELECTION_TABLE_SQL, CANONICAL_CHANGES_TABLE_SQL, CANONICAL_CHANGES_INDEX_SQL, applicable_objects, authority_critical_fk_violations, column_matches, normalize_sql, normalize_default, orm_column_problem, provider_selection_contract_problem, evaluate_snapshot
 
 async def _canonical_snapshot(conn, foreign_key_rows=None):
     tables={row[0] for row in (await conn.execute(text("SELECT name FROM sqlite_schema WHERE type='table'"))).all()}
@@ -138,6 +138,10 @@ _LEGACY_REQUIRED_TIMESTAMP_COLUMNS = {
 
 async def _validate_before_mutation(conn, migration_specs, upgrading, version, orm_read_columns=ORM_READ_COLUMNS):
     """Reject unsupported/NULL legacy states before the first write."""
+    for table in ("projects", "nodes", "edges", "content_blocks", "branches"):
+        if await _table_exists(conn, table) and await _column(conn, table, "revision"):
+            if (await conn.execute(text(f"SELECT 1 FROM {table} WHERE typeof(revision) != 'integer' OR revision < 1 OR revision > 9007199254740991 LIMIT 1"))).first():
+                raise RuntimeError(f"{table.removesuffix('s')} revision outside exact JSON integer range")
     if await _table_exists(conn, "provider_configs") and await _column(conn, "provider_configs", "revision"):
         if (await conn.execute(text("SELECT 1 FROM provider_configs WHERE typeof(revision) != 'integer' OR revision < 1 OR revision > 9007199254740991 LIMIT 1"))).first():
             raise RuntimeError("provider revision outside exact JSON integer range")
@@ -206,6 +210,47 @@ async def _enforce_legacy_required_timestamps(conn, upgrading, version):
         raise RuntimeError("injected migration failure after timestamp DDL")
 
 
+async def _validate_canonical_changes_contract(conn):
+    """Validate the v14 journal structurally and semantically, not by name alone."""
+    info=(await conn.execute(text("PRAGMA table_info('canonical_changes')"))).all()
+    expected={
+        "id":("VARCHAR(36)",True,None,1),
+        "project_id":("VARCHAR(36)",True,None,0),
+        "project_revision":("INTEGER",True,None,0),
+        "kind":("VARCHAR(24)",True,None,0),
+        "hints":("JSON",True,"{}",0),
+        "created_at":("DATETIME",True,None,0),
+    }
+    rows={row[1]:row for row in info}
+    if set(rows)!=set(expected):raise RuntimeError("incompatible canonical_changes journal columns")
+    for name,want in expected.items():
+        row=rows[name]
+        got=(str(row[2]).upper(),bool(row[3]),normalize_default(row[4]),int(row[5]))
+        if got!=want:raise RuntimeError(f"incompatible canonical_changes journal column {name}")
+    sql=(await conn.execute(text("SELECT sql FROM sqlite_schema WHERE type='table' AND name='canonical_changes'"))).scalar() or ""
+    normalized=normalize_sql(sql)
+    if not re.search(r"check\(+project_revision\s*>=0\s+and\s+project_revision\s*<=9007199254740991\)+",normalized):
+        raise RuntimeError("incompatible canonical_changes revision check")
+    if not re.search(r"check\(+kind\s+in\('graph','full_refresh','workspace'\)\)+",normalized):
+        raise RuntimeError("incompatible canonical_changes kind check")
+    indexes=(await conn.execute(text("PRAGMA index_list('canonical_changes')"))).all()
+    named=[row for row in indexes if row[1]=="idx_canonical_changes_project_revision"]
+    if len(named)!=1 or not bool(named[0][2]) or (len(named[0])>4 and bool(named[0][4])):
+        raise RuntimeError("incompatible canonical_changes journal index")
+    index_columns=(await conn.execute(text("PRAGMA index_info('idx_canonical_changes_project_revision')"))).all()
+    if [row[2] for row in index_columns] != ["project_id","project_revision"]:
+        raise RuntimeError("incompatible canonical_changes journal index columns")
+    # Reject malformed rows even if they were imported with constraint checking disabled.
+    if (await conn.execute(text("""SELECT 1 FROM canonical_changes WHERE
+      typeof(project_id)!='text' OR length(project_id)>64 OR
+      typeof(project_revision)!='integer' OR project_revision<0 OR project_revision>9007199254740991 OR
+      kind NOT IN ('graph','full_refresh','workspace') OR typeof(hints)!='text' OR NOT json_valid(hints) OR
+      created_at IS NULL LIMIT 1"""))).first():
+        raise RuntimeError("incompatible canonical_changes journal data")
+    if (await conn.execute(text("SELECT 1 FROM canonical_changes GROUP BY project_id,project_revision HAVING COUNT(*)>1 LIMIT 1"))).first():
+        raise RuntimeError("duplicate canonical_changes journal revision")
+
+
 async def _validate_provider_selection_contract(conn, require_row=True):
     info=(await conn.execute(text("PRAGMA table_info('provider_selection')"))).all()
     foreign_keys=(await conn.execute(text("PRAGMA foreign_key_list('provider_selection')"))).all()
@@ -261,6 +306,12 @@ async def _migrate_sqlite_body(conn):
             raise RuntimeError("malformed provider_selection rows before v12 upgrade")
         await conn.execute(text("INSERT INTO provider_selection(singleton_id,provider_id,selection_revision,updated_at) VALUES(1,NULL,1,CURRENT_TIMESTAMP)"))
     await _validate_provider_selection_contract(conn)
+    changes_exists=await _table_exists(conn,"canonical_changes")
+    if not changes_exists:
+        if not upgrading:raise RuntimeError("missing canonical_changes journal table")
+        await conn.execute(text(CANONICAL_CHANGES_TABLE_SQL))
+        await conn.execute(text(CANONICAL_CHANGES_INDEX_SQL))
+    await _validate_canonical_changes_contract(conn)
     await _enforce_legacy_required_timestamps(conn,upgrading,version)
     for ordinal,spec in enumerate(migration_specs,1):
         present=await _validate_column(conn,spec)

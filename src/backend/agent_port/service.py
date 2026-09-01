@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError,OperationalError
 from models.models import Project,Node,Edge,ContentBlock,Branch,ActionLog,AgentReceipt
 from api.branching import deep_copy_branch
 from api.content_ordering import insert_blocks
+from models.revisions import MAX_SAFE_REVISION
 
 def canonical(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 
@@ -22,12 +23,16 @@ def digest(v): return hashlib.sha256(canonical(v).encode()).hexdigest()
 def conflict(msg,**extra): raise HTTPException(409,{"code":"REVISION_CONFLICT","message":msg,**extra})
 
 def bump(entities=()):
-    # Existing entities change once per transaction. New entities remain revision 1.
-    seen=set()
-    for e in entities:
-        key=(type(e),str(e.id))
-        if key in seen: continue
-        seen.add(key);e.revision=(e.revision or 1)+1
+    # Preflight all unique existing entities before the first mutation.
+    unique={}
+    for entity in entities:
+        unique[(type(entity),str(entity.id))]=entity
+    for entity in unique.values():
+        current=entity.revision
+        if not isinstance(current,int) or isinstance(current,bool) or current>=MAX_SAFE_REVISION:
+            raise HTTPException(409,{"code":"REVISION_EXHAUSTED","message":"Entity revision exhausted",
+                "entity":entity.__class__.__name__.lower(),"entity_id":str(entity.id),"current":current})
+    for entity in unique.values(): entity.revision+=1
 
 async def validated_scoped_graph(db,project_id,root_id,limit=5000,allow_external_root_parent=False):
     """Validate an exact project/branch child closure before projecting it."""
@@ -182,6 +187,21 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     if not project:raise HTTPException(404,"Project not found")
     if body["expected_project_revision"]!=project.revision:conflict("Project revision is stale",expected=body["expected_project_revision"],current=project.revision)
     ops=await validate_operations(db,grant,body["operations"]);results=[];existing_touched=[]
+    # Every reference changes the referenced existing node. Reject exhaustion
+    # before claiming (writing) the shared project revision.
+    referenced_existing_ids=set()
+    for op in ops:
+        kind=op["op"]
+        if kind=="update_node": referenced_existing_ids.add(op["node_id"])
+        elif kind=="create_node" and op.get("parent_id"): referenced_existing_ids.add(op["parent_id"])
+        elif kind=="create_edge": referenced_existing_ids.update((op["from_node_id"],op["to_node_id"]))
+        elif kind=="create_content_block": referenced_existing_ids.add(op["node_id"])
+        elif kind=="create_branch": referenced_existing_ids.add(op["source_node_id"])
+    referenced_existing=[n for n in (await db.execute(select(Node).where(Node.id.in_(referenced_existing_ids)))).scalars().all()] if referenced_existing_ids else []
+    for entity in referenced_existing:
+        if entity.revision>=MAX_SAFE_REVISION:
+            raise HTTPException(409,{"code":"REVISION_EXHAUSTED","message":"Entity revision exhausted",
+                "entity":"node","entity_id":entity.id,"current":entity.revision})
     # A single expected revision per existing entity governs the whole pre-batch
     # snapshot. Reject contradictory values rather than depending on op order.
     expectations={}
@@ -220,10 +240,13 @@ async def _apply_batch_serialized(db,grant,body,actor=None,commit=True,proposal=
     # validation and before any canonical insert/update. This closes true
     # separate-session GUI/Agent and Agent/Agent races.
     now=datetime.now(timezone.utc)
-    claim=await db.execute(update(Project).where(Project.id==project_id,Project.revision==body["expected_project_revision"]).values(revision=body["expected_project_revision"]+1,updated_at=now))
+    claim=await db.execute(update(Project).where(Project.id==project_id,Project.revision==body["expected_project_revision"],Project.revision<MAX_SAFE_REVISION).values(revision=body["expected_project_revision"]+1,updated_at=now))
     if claim.rowcount!=1:
         await db.rollback()
         current=await db.get(Project,project_id)
+        if current and current.revision>=MAX_SAFE_REVISION:
+            raise HTTPException(409,{"code":"REVISION_EXHAUSTED","message":"Project revision exhausted",
+                "entity":"project","entity_id":project_id,"current":current.revision})
         conflict("Project revision is stale",expected=body["expected_project_revision"],current=current.revision if current else None)
     project.revision=body["expected_project_revision"]+1;project.updated_at=now
     # Snapshot which node references predate this atomic batch. References to

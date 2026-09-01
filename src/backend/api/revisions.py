@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from models.models import Project
+from models.revisions import MAX_SAFE_REVISION
 
 
 def revision_conflict(*, entity: str, entity_id: str, expected: int, current: int | None):
@@ -21,7 +22,7 @@ def revision_conflict(*, entity: str, entity_id: str, expected: int, current: in
 async def claim_project_revision(db: AsyncSession, project_id: str, expected: int) -> Project:
     """Atomically claim expected revision and increment project exactly once."""
     result = await db.execute(
-        update(Project).where(Project.id == project_id, Project.revision == expected)
+        update(Project).where(Project.id == project_id, Project.revision == expected, Project.revision < MAX_SAFE_REVISION)
         .values(revision=Project.revision + 1, updated_at=datetime.now(timezone.utc))
     )
     if result.rowcount != 1:
@@ -29,6 +30,8 @@ async def claim_project_revision(db: AsyncSession, project_id: str, expected: in
         current = await db.get(Project, project_id)
         if not current:
             raise HTTPException(404, "Project not found")
+        if current.revision >= MAX_SAFE_REVISION:
+            raise HTTPException(409, {"code":"REVISION_EXHAUSTED","entity":"project","entity_id":project_id,"current":current.revision})
         revision_conflict(entity="project", entity_id=project_id,
                           expected=expected, current=current.revision)
     # SQLAlchemy synchronizes matching identity-map objects for this ORM UPDATE.
@@ -40,10 +43,13 @@ async def claim_project_revision(db: AsyncSession, project_id: str, expected: in
 
 
 def check_entity_revision(entity, expected: int, *, kind: str | None = None) -> None:
-    current = entity.revision or 1
+    current = entity.revision
+    entity_kind = kind or entity.__class__.__name__.lower()
     if expected != current:
-        revision_conflict(entity=kind or entity.__class__.__name__.lower(),
-                          entity_id=str(entity.id), expected=expected, current=current)
+        revision_conflict(entity=entity_kind, entity_id=str(entity.id), expected=expected, current=current)
+    if not isinstance(current, int) or isinstance(current, bool) or current >= MAX_SAFE_REVISION:
+        raise HTTPException(409, {"code": "REVISION_EXHAUSTED", "entity": entity_kind,
+                                  "entity_id": str(entity.id), "current": current})
 
 
 class TouchedEntities:
@@ -61,8 +67,16 @@ class TouchedEntities:
                 self._entities[(type(entity), str(entity.id))] = entity
 
     def apply(self) -> None:
+        # Preflight the complete unique set before changing the first object.
+        # This keeps multi-entity mutations atomic even before session rollback.
         for entity in self._entities.values():
-            entity.revision = (entity.revision or 1) + 1
+            current = entity.revision
+            if not isinstance(current, int) or isinstance(current, bool) or current >= MAX_SAFE_REVISION:
+                raise HTTPException(409, {"code": "REVISION_EXHAUSTED",
+                    "entity": entity.__class__.__name__.lower(),
+                    "entity_id": str(entity.id), "current": current})
+        for entity in self._entities.values():
+            entity.revision += 1
 
 
 def bump_existing(*entities) -> None:

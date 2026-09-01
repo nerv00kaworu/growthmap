@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional, Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from models.content_blocks import ContentBlockType
+from models.revisions import MAX_SAFE_REVISION
 
 
 # === Project ===
@@ -17,7 +18,7 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    expected_project_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     name: Optional[str] = None
     description: Optional[str] = None
     goal: Optional[str] = None
@@ -35,7 +36,7 @@ class ProjectOut(BaseModel):
     settings: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
-    revision: int = 1
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
 
     model_config = {"from_attributes": True}
 
@@ -43,8 +44,8 @@ class ProjectOut(BaseModel):
 # === Node ===
 
 class NodeCreate(BaseModel):
-    expected_project_revision: int
-    expected_parent_revision: Optional[int] = None
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_parent_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
     title: str
     summary: str = ""
     node_type: str = "idea"
@@ -63,8 +64,8 @@ class NodeCreate(BaseModel):
 
 
 class NodeUpdate(BaseModel):
-    expected_project_revision: int
-    expected_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     title: Optional[str] = None
     summary: Optional[str] = None
     node_type: Optional[str] = None
@@ -111,10 +112,10 @@ class NodeOut(BaseModel):
     branch_id: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    revision: int = 1
-    authoritative_project_revision: Optional[int] = None
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
+    authoritative_project_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
     authoritative_parent_id: Optional[str] = None
-    authoritative_parent_revision: Optional[int] = None
+    authoritative_parent_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
 
     model_config = {"from_attributes": True}
 
@@ -122,7 +123,7 @@ class NodeOut(BaseModel):
 class NodeBrief(BaseModel):
     """輕量版，用於樹狀列表"""
     id: str
-    revision: int = 1
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
     title: str
     node_type: str
     status: str
@@ -135,7 +136,7 @@ class NodeBrief(BaseModel):
 # === Edge ===
 
 class EdgeCreate(BaseModel):
-    expected_project_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     from_node_id: str
     to_node_id: str
     relation_type: str = "child_of"
@@ -145,8 +146,8 @@ class EdgeCreate(BaseModel):
 
 
 class EdgeUpdate(BaseModel):
-    expected_project_revision: int
-    expected_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     weight: Optional[float] = None
     note: Optional[str] = None
 
@@ -161,7 +162,7 @@ class EdgeOut(BaseModel):
     note: Optional[str] = None
     is_mainline: bool
     created_at: datetime
-    revision: int = 1
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
 
     model_config = {"from_attributes": True}
 
@@ -169,17 +170,17 @@ class EdgeOut(BaseModel):
 # === Content Block ===
 
 class ContentBlockCreate(BaseModel):
-    expected_project_revision: int
-    expected_node_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_node_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     block_type: ContentBlockType = ContentBlockType.paragraph
     content: Any = {}
     order_index: Optional[int] = None
 
 
 class ContentBlockUpdate(BaseModel):
-    expected_project_revision: int
-    expected_node_revision: int
-    expected_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_node_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     block_type: Optional[ContentBlockType] = None
     content: Optional[Any] = None
     order_index: Optional[int] = None
@@ -194,7 +195,7 @@ class ContentBlockOut(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    revision: int = 1
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
 
     model_config = {"from_attributes": True}
 
@@ -203,10 +204,10 @@ class ContentBlockOut(BaseModel):
 
 class NodeMoveRequest(BaseModel):
     new_parent_id: str
-    expected_project_revision: int
-    expected_revision: int
-    expected_new_parent_revision: int
-    expected_old_parent_revision: Optional[int] = None
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_new_parent_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
+    expected_old_parent_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
 
 
 class AncestorNode(BaseModel):
@@ -394,7 +395,7 @@ class ProviderConfigOut(BaseModel):
 
 
 class BranchCreate(BaseModel):
-    expected_project_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
     source_node_id: str
     name: str
     description: str = ""
@@ -408,26 +409,26 @@ class BranchOut(BaseModel):
     source_node_id: Optional[str]
     status: str
     created_at: datetime
-    revision: int = 1
+    revision: int = Field(default=1, ge=1, le=MAX_SAFE_REVISION)
 
     model_config = {"from_attributes": True}
 
 
 class ProjectRevisionRequest(BaseModel):
-    expected_project_revision: int
+    expected_project_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
 
 
 class EntityRevisionRequest(ProjectRevisionRequest):
-    expected_revision: int
+    expected_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
 
 
 class NodeEntityRevisionRequest(EntityRevisionRequest):
-    expected_node_revision: int
+    expected_node_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
 
 
 class BranchMergeRequest(EntityRevisionRequest):
     target_node_id: str
-    expected_target_revision: int
+    expected_target_revision: int = Field(ge=1, le=MAX_SAFE_REVISION)
 
 
 # === Agent Session ===
@@ -440,8 +441,8 @@ class AgentArtifactCreate(BaseModel):
 
 class AgentArtifactReview(BaseModel):
     review_note: str = ""
-    expected_project_revision: Optional[int] = None
-    expected_node_revision: Optional[int] = None
+    expected_project_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
+    expected_node_revision: Optional[int] = Field(default=None, ge=1, le=MAX_SAFE_REVISION)
 
 
 class AgentArtifactOut(BaseModel):

@@ -16,7 +16,7 @@ HISTORICAL = (
     "v8_no_provider_revision", "v9_provider_revision", "v11_no_selection",
 )
 NEAR_MISSES = (
-    "newer_v14", "bad_column", "missing_object", "forged_object",
+    "newer_v16", "bad_column", "missing_object", "forged_object",
     "bad_selection_table", "bad_selection_missing_row", "bad_selection_row",
 )
 
@@ -94,7 +94,7 @@ def test_v11_absence_is_historical_not_hostile_and_seeds_exact_authority(tmp_pat
 
 
 def test_generic_current_acceptance_and_migration_are_byte_idempotent(tmp_path):
-    path=generate(tmp_path/"generic-v13.db","v13")
+    path=generate(tmp_path/"generic-v15.db","v15")
     assert dm.validate(path)["valid"]
     status=dm.schema_status(path)
     assert status["compatible"] and not status["migrationNeeded"]
@@ -108,7 +108,7 @@ def test_generic_current_acceptance_and_migration_are_byte_idempotent(tmp_path):
 
 
 def test_generator_is_logically_deterministic(tmp_path):
-    for variant in HISTORICAL + ("v12","v13",) + NEAR_MISSES:
+    for variant in HISTORICAL + ("v12","v13","v14","v15",) + NEAR_MISSES:
         one=generate(tmp_path/f"one-{variant}.db",variant)
         two=generate(tmp_path/f"two-{variant}.db",variant)
         assert logical_snapshot(one) == logical_snapshot(two), variant
@@ -119,7 +119,7 @@ def test_current_near_misses_are_fail_closed_without_migration_mutation(tmp_path
     path=generate(tmp_path/f"near-{variant}.db",variant)
     before_bytes=path.read_bytes(); before=sql_snapshot(path)
     with pytest.raises(ValueError): dm.validate(path)
-    if variant in ("newer_v14","bad_selection_table","bad_selection_row"):
+    if variant in ("newer_v16","bad_selection_table","bad_selection_row"):
         with pytest.raises(ValueError): dm.schema_status(path)
     else:
         status=dm.schema_status(path)
@@ -131,7 +131,7 @@ def test_current_near_misses_are_fail_closed_without_migration_mutation(tmp_path
 
 def test_optional_object_applicability_is_shared_and_owner_driven(tmp_path):
     absent=generate(tmp_path/"absent.db","v2")
-    present=generate(tmp_path/"present.db","v13")
+    present=generate(tmp_path/"present.db","v14")
     for path, expected_optional in ((absent,False),(present,True)):
         c=sqlite3.connect(path)
         tables={row[0] for row in c.execute("SELECT name FROM sqlite_schema WHERE type='table'")}
@@ -184,7 +184,7 @@ def test_historical_malformed_present_schema_rejected_consistently(tmp_path,vari
 
 
 def test_historical_required_null_data_rejected_consistently(tmp_path):
-    path=generate(tmp_path/"historical-null.db","v13")
+    path=generate(tmp_path/"historical-null.db","v14")
     c=sqlite3.connect(path)
     c.execute("PRAGMA foreign_keys=OFF")
     sql=c.execute("SELECT sql FROM sqlite_schema WHERE type='table' AND name='projects'").fetchone()[0]

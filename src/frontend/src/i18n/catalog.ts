@@ -15,6 +15,7 @@ const zhTW = {
   "locale.en": "English",
   "project.selectLabel": "選擇專案",
   "project.selectPlaceholder": "選擇專案...",
+  "sync.external": "外部更新可用 · 重新整理", "sync.externalHelp": "偵測到外部更新；請在草稿安全時重新整理。", "sync.refresh": "重新整理",
   "branch.selectLabel": "選擇分支",
   "branch.main": "🌿 主線（main）",
   "branch.option": "🔀 方案線：{name}",
@@ -98,7 +99,7 @@ type Catalog = { readonly [K in MessageKey]: string };
 
 const zhCN = {
   ...zhTW,
-  "locale.label": "语言", "llm.tooltip": "LLM Provider 设置", "llm.settings": "⚙️ LLM 设置", "license.import": "🔑 导入 License", "activation.title": "启用 GrowthMap", "activation.boundary": "桌面应用不包含钱包、付款 SDK、Base RPC、收款地址或价格设置。", "project.selectLabel": "选择项目", "project.selectPlaceholder": "选择项目...", "branch.selectLabel": "选择分支",
+  "locale.label": "语言", "llm.tooltip": "LLM Provider 设置", "llm.settings": "⚙️ LLM 设置", "license.import": "🔑 导入 License", "activation.title": "启用 GrowthMap", "activation.boundary": "桌面应用不包含钱包、付款 SDK、Base RPC、收款地址或价格设置。", "project.selectLabel": "选择项目", "project.selectPlaceholder": "选择项目...", "sync.external": "外部更新可用 · 刷新", "sync.externalHelp": "检测到外部更新；请在草稿安全时刷新。", "sync.refresh": "刷新", "branch.selectLabel": "选择分支",
   "branch.main": "🌿 主线（main）", "branch.option": "🔀 方案线：{name}", "project.new": "+ 新项目", "more.title": "⚙️ 设置", "more.tooltip": "设置",
   "search.placeholder": "🔍 搜索节点...", "search.results": "{count} 个结果", "database.tooltip": "数据库工作区", "database.cleanupPending": "数据库替换已提交；旧文件清理尚待完成，将在安全重启时收敛。", "database.replacementSafe": "✅ 数据库已安全替换。", "database.replacementUnknown": "数据库替换结果需要验证。", "database.operationFailure": "操作失败。", "shortcuts.tooltip": "键盘快捷键",
   "more.currentBranch": "当前方案线：{name}", "more.summary": "授权、LLM 与项目管理", "export.spec": "📋 导出规格",
@@ -121,7 +122,7 @@ const zhCN = {
 
 const en = {
   ...zhTW,
-  "locale.label": "Language", "locale.zh-TW": "Traditional Chinese", "locale.zh-CN": "Simplified Chinese", "project.selectLabel": "Select project", "project.selectPlaceholder": "Select project...",
+  "locale.label": "Language", "locale.zh-TW": "Traditional Chinese", "locale.zh-CN": "Simplified Chinese", "project.selectLabel": "Select project", "project.selectPlaceholder": "Select project...", "sync.external": "External updates available · Refresh", "sync.externalHelp": "External updates are available; refresh when your draft is safe.", "sync.refresh": "Refresh",
   "branch.selectLabel": "Select branch", "branch.main": "🌿 Main", "branch.option": "🔀 Scenario: {name}", "project.new": "+ New project", "more.title": "⚙️ Settings", "more.tooltip": "Settings",
   "search.placeholder": "🔍 Search nodes...", "search.results": "{count} results", "database.tooltip": "Database workspace", "database.cleanupPending": "Database replacement is committed. Old-file cleanup is pending and will converge on a safe restart.", "database.replacementSafe": "✅ Database safely replaced.", "database.replacementUnknown": "Replacement result requires verification.", "database.operationFailure": "Operation failed.", "llm.tooltip": "LLM provider settings", "shortcuts.tooltip": "Keyboard shortcuts",
   "more.currentBranch": "Current scenario: {name}", "more.summary": "License, LLM, and project management", "export.spec": "📋 Export spec", "export.markdown": "📄 Export Markdown",

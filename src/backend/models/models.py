@@ -9,6 +9,7 @@ from sqlalchemy import (
 # Use JSON instead of JSON/ARRAY for SQLite
 from sqlalchemy.orm import relationship
 from db.database import Base
+from models.revisions import MAX_SAFE_REVISION
 
 
 def utcnow():
@@ -31,6 +32,10 @@ class Project(Base):
 
     nodes = relationship("Node", back_populates="project", cascade="all, delete-orphan")
     edges = relationship("Edge", back_populates="project", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("revision >= 1 AND revision <= 9007199254740991", name="ck_project_revision_safe"),
+    )
 
 
 class Node(Base):
@@ -73,6 +78,7 @@ class Node(Base):
         Index("idx_nodes_project", "project_id"),
         Index("idx_nodes_type", "node_type"),
         Index("idx_nodes_status", "status"),
+        CheckConstraint(f"revision >= 1 AND revision <= {MAX_SAFE_REVISION}", name="ck_node_revision_safe"),
     )
 
 
@@ -98,6 +104,7 @@ class Edge(Base):
         Index("idx_edges_project", "project_id"),
         Index("idx_edges_from", "from_node_id"),
         Index("idx_edges_to", "to_node_id"),
+        CheckConstraint(f"revision >= 1 AND revision <= {MAX_SAFE_REVISION}", name="ck_edge_revision_safe"),
     )
 
 
@@ -118,6 +125,7 @@ class ContentBlock(Base):
 
     __table_args__ = (
         Index("idx_content_blocks_node", "node_id"),
+        CheckConstraint(f"revision >= 1 AND revision <= {MAX_SAFE_REVISION}", name="ck_content_block_revision_safe"),
     )
 
 
@@ -219,6 +227,24 @@ class Branch(Base):
 
     __table_args__ = (
         Index("idx_branches_project", "project_id"),
+        CheckConstraint(f"revision >= 1 AND revision <= {MAX_SAFE_REVISION}", name="ck_branch_revision_safe"),
+    )
+
+
+class CanonicalChange(Base):
+    __tablename__ = "canonical_changes"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Deliberately not FK-bound: revision 0 workspace/project deletion events must
+    # survive deletion of the canonical Project row.
+    project_id = Column(String(36), nullable=False)
+    project_revision = Column(Integer, nullable=False)
+    kind = Column(String(24), nullable=False)
+    hints = Column(JSON, nullable=False, default=dict, server_default="{}")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    __table_args__ = (
+        CheckConstraint("project_revision >= 0 AND project_revision <= 9007199254740991", name="ck_canonical_change_revision"),
+        CheckConstraint("kind IN ('graph','full_refresh','workspace')", name="ck_canonical_change_kind"),
+        Index("idx_canonical_changes_project_revision", "project_id", "project_revision", unique=True),
     )
 
 

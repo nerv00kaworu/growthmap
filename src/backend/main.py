@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from db.database import engine, Base
 from api.routes import router
+from api.change_routes import router as change_router
 from ai.routes import router as ai_router
 from desktop.routes import router as desktop_router
 from desktop.security import DesktopSessionMiddleware
@@ -130,6 +131,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(change_router, prefix="/api")
 app.include_router(ai_router, prefix="/api")
 app.include_router(agent_port_human_router, prefix="/api")
 app.include_router(agent_port_router, prefix="/agent/v1")

@@ -11,9 +11,9 @@ def test_version_policy_historical(version):
     assert p["importableHistorical"] and p["migratable"] and not p["runnableCurrent"]
 
 def test_version_policy_current_and_newer():
-    assert version_policy(12)["runnableCurrent"]
-    assert not version_policy(13)["supported"]
-    assert version_policy(13)["newer"]
+    assert version_policy(15)["runnableCurrent"]
+    assert not version_policy(16)["supported"]
+    assert version_policy(16)["newer"]
 
 def test_object_metadata_is_total_exact():
     assert set(OBJECT_METADATA)==set(OBJECT_SQL)==set(INDEXES)|set(TRIGGERS)
@@ -41,7 +41,7 @@ def test_malformed_present_provider_is_never_migratable(tmp_path):
     assert not result["importable"] and not result["migratable"]
     assert any(reason.startswith("provider_selection:") for reason in result["reasons"])
 
-@pytest.mark.parametrize("version", (True, False, 1.0, 12.0, "12", None, -1, 13, 10**100))
+@pytest.mark.parametrize("version", (True, False, 1.0, 15.0, "15", None, -1, 16, 10**100))
 def test_version_policy_rejects_hostile_values(version):
     policy=version_policy(version)
     assert not policy["supported"] and not policy["migratable"]

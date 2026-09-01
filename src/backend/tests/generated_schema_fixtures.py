@@ -50,10 +50,12 @@ def _rows(c: sqlite3.Connection) -> None:
 
 
 def _canonical(c: sqlite3.Connection, grants: bool = False) -> None:
-    from db.schema_contract import CURRENT_USER_VERSION, PROVIDER_SELECTION_TABLE_SQL
+    from db.schema_contract import CURRENT_USER_VERSION, PROVIDER_SELECTION_TABLE_SQL, CANONICAL_CHANGES_TABLE_SQL, CANONICAL_CHANGES_INDEX_SQL
     c.executescript(CORE_SQL)
     if grants: c.executescript(GRANT_SQL)
     c.execute(PROVIDER_SELECTION_TABLE_SQL)
+    c.execute(CANONICAL_CHANGES_TABLE_SQL)
+    c.execute(CANONICAL_CHANGES_INDEX_SQL)
     _objects(c, grants)
     _rows(c)
     c.execute("INSERT INTO provider_selection VALUES(1,NULL,1,?)", (STAMP,))
@@ -77,13 +79,24 @@ def generate(path: Path, variant: str) -> Path:
         # fixture.  The v2 baseline intentionally proves it was genuinely absent.
         grants = variant != "v2"
         _canonical(c, grants)
-        if variant == "v13": pass
+        if variant not in ("v14", "v15"): c.execute("DROP TABLE canonical_changes")
+        if variant == "v15": pass
+        elif variant == "v14":
+            for table in ("nodes","edges","content_blocks","branches"):
+                c.execute(f"DROP TRIGGER trg_{table}_revision_safe_insert")
+                c.execute(f"DROP TRIGGER trg_{table}_revision_safe_update")
+            c.execute("PRAGMA user_version=14")
+        elif variant == "v13": c.execute("PRAGMA user_version=13")
         elif variant == "v12":
             _drop(c,"provider_configs","secret_change_operation_id"); c.execute("PRAGMA user_version=12")
         elif variant == "v2":
             c.execute("DROP TABLE provider_selection")
+            for table in ("nodes","edges","content_blocks","branches"):
+                c.execute(f"DROP TRIGGER trg_{table}_revision_safe_insert")
+                c.execute(f"DROP TRIGGER trg_{table}_revision_safe_update")
             c.execute("DROP TRIGGER trg_provider_revision_insert"); c.execute("DROP TRIGGER trg_provider_revision_update")
             _drop(c,"provider_configs","revision","secret_change_pending","secret_change_claim","secret_change_operation_id")
+            c.execute("DROP TRIGGER trg_project_revision_safe_insert"); c.execute("DROP TRIGGER trg_project_revision_safe_update")
             for table in ("projects","nodes","edges","content_blocks","branches"): _drop(c,table,"revision")
             c.execute("PRAGMA user_version=2")
         elif variant in ("grant_nullable_legacy", "grant_not_null_missing"):
@@ -104,7 +117,7 @@ def generate(path: Path, variant: str) -> Path:
             c.execute("DROP TABLE provider_selection"); c.execute("PRAGMA user_version=9")
         elif variant == "v11_no_selection":
             c.execute("DROP TABLE provider_selection"); c.execute("PRAGMA user_version=11")
-        elif variant == "newer_v14": c.execute("PRAGMA user_version=14")
+        elif variant == "newer_v16": c.execute("PRAGMA user_version=16")
         elif variant == "bad_column":
             c.execute("ALTER TABLE projects DROP COLUMN settings"); c.execute("ALTER TABLE projects ADD COLUMN settings INTEGER")
         elif variant == "missing_object": c.execute("DROP TRIGGER trg_edges_normalize_null_insert")

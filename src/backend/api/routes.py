@@ -23,6 +23,7 @@ from models.content_blocks import CONTENT_BLOCK_TYPES
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, has as has_memory_secret, put as put_memory_secret, delete as delete_memory_secret
 from api.revisions import claim_project_revision, check_entity_revision, bump_existing, TouchedEntities
+from api.canonical_changes import mark_canonical_change
 from api.content_ordering import ordered_blocks as _ordered_blocks, rewrite_dense as _rewrite_dense, insert_blocks as _insert_blocks
 from api.branching import deep_copy_branch
 from api.provider_authority import guarded_provider_update, change_external_secret, recover_external_secret
@@ -61,12 +62,6 @@ def backup_db():
             shutil.copy2("growthmap.db", "growthmap.db.bak")
     except Exception:
         pass  # Don't fail operations due to backup issues
-
-
-def touch_project(project: Project | None):
-    if project:
-        project.updated_at = datetime.now(timezone.utc)
-        project.revision = (project.revision or 1) + 1
 
 
 def ordinary_main_nodes(project_id: str):
@@ -896,6 +891,7 @@ async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSessio
     def chunks(values,size=500):
         values=list(values)
         for offset in range(0,len(values),size):yield values[offset:offset+size]
+    mark_canonical_change(db.sync_session,node.project_id,kind="full_refresh",nodes=subtree_ids,edges=incident_ids)
     for part in chunks(incident_ids):await db.execute(Edge.__table__.delete().where(Edge.id.in_(part)))
     for part in chunks(log_ids):await db.execute(ActionLog.__table__.delete().where(ActionLog.id.in_(part)))
     for part in chunks(subtree_ids):await db.execute(Node.__table__.delete().where(Node.id.in_(part)))

@@ -55,7 +55,7 @@ async def _option2_policy_is_exact_and_idempotent(tmp_path):
         assert values["single"]==1 and values["false"]==0 and values["related"]==1
         assert (await conn.execute(text("SELECT count(*) FROM (SELECT from_node_id FROM edges WHERE relation_type='child_of' AND is_mainline=1 GROUP BY from_node_id HAVING count(*)>1)"))).scalar()==0
         assert (await conn.execute(text("PRAGMA user_version"))).scalar()==CURRENT_USER_VERSION
-        objects={r[0]:(r[1],r[2]) for r in (await conn.execute(text("SELECT name,type,sql FROM sqlite_schema WHERE name LIKE 'trg_edges_%' OR name LIKE 'trg_provider_revision_%' OR name='ux_edges_one_mainline_per_parent'"))).all()}
+        objects={r[0]:(r[1],r[2]) for r in (await conn.execute(text("SELECT name,type,sql FROM sqlite_schema WHERE type IN ('trigger','index')"))).all()}
         assert objects["ux_edges_one_mainline_per_parent"][0]=="index"
         assert normalize_sql(objects["ux_edges_one_mainline_per_parent"][1])==normalize_sql(INDEX_SQL)
         for name,sql in TRIGGERS.items():

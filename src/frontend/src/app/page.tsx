@@ -13,6 +13,7 @@ import { api } from "@/lib/api";
 import { useEntitlement } from "@/lib/entitlement";
 import { useAgentPortDesktopControl } from "@/lib/agent-port-control";
 import { LocaleSelector, useI18n } from "@/i18n/provider";
+import { LiveSyncController } from "@/lib/live-sync-controller";
 
 export default function HomePage() {
   const { t, locale } = useI18n();
@@ -37,6 +38,9 @@ export default function HomePage() {
   const expandNode = useStore((s) => s.expandNode);
   const deepenNode = useStore((s) => s.deepenNode);
   const deleteNode = useStore((s) => s.deleteNode);
+  const [externalUpdates, setExternalUpdates] = useState(false);
+  const liveController = useRef<LiveSyncController | null>(null);
+  const liveOwnerEpoch = useRef({ key: "", epoch: 0 });
 
   const branches = useStore((s) => s.branches);
   const currentBranch = useStore((s) => s.currentBranch);
@@ -87,6 +91,24 @@ export default function HomePage() {
     }
   }, [currentProject, projects, selectProject]);
 
+  // The controller owns the only live-sync loop; SSE payloads remain invalidation hints.
+  useEffect(() => {
+    const controller = new LiveSyncController({
+      getOwner: () => { const s = useStore.getState(); const p = s.currentProject; if (!p) return null; const key=`${p.id}\u0000${s.currentBranch?.id ?? "main"}`; if (key !== liveOwnerEpoch.current.key) liveOwnerEpoch.current={key,epoch:liveOwnerEpoch.current.epoch+1}; return { projectId: p.id, branchId: s.currentBranch?.id ?? null, loadedRevision: p.revision, epoch: liveOwnerEpoch.current.epoch }; },
+      getRevision: api.getProjectRevision,
+      getChanges: api.getProjectChanges,
+      applyDelta: (owner, delta) => useStore.getState().applyExternalDelta(owner, delta),
+      refresh: () => useStore.getState().refreshTree().then(() => undefined),
+      isUnsafe: () => { const e = document.activeElement; return !!e && (e instanceof HTMLInputElement || e instanceof HTMLTextAreaElement || (e as HTMLElement).isContentEditable); },
+      notice: setExternalUpdates,
+      fetch: (url, init) => fetch(url, init), document, window,
+      setInterval: (fn, ms) => window.setInterval(fn, ms), clearInterval: (id) => window.clearInterval(id),
+      sleep: (ms, signal) => new Promise<void>((resolve, reject) => { const id = window.setTimeout(resolve, ms); signal.addEventListener("abort", () => { window.clearTimeout(id); reject(new DOMException("Aborted", "AbortError")); }, { once: true }); }),
+    });
+    liveController.current = controller; controller.mount();
+    return () => { controller.unmount(); if (liveController.current === controller) liveController.current = null; };
+  },[]);
+
   // Auto-dismiss toast
   useEffect(() => {
     if (toast) {
@@ -102,6 +124,11 @@ export default function HomePage() {
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, []);
+
+  const applyExternalUpdates = async () => {
+    if (!currentProject) return;
+    await liveController.current?.manualRefresh();
+  };
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -289,6 +316,8 @@ export default function HomePage() {
         </div>
         <LocaleSelector />
         <div className="h-6 w-px bg-[var(--border)] shrink-0" />
+        {externalUpdates && <button onClick={applyExternalUpdates} className="rounded-md border border-amber-500/60 px-2.5 py-1.5 text-xs text-amber-300" title={t("sync.externalHelp")}>{t("sync.external")}</button>}
+        {currentProject && <button onClick={applyExternalUpdates} className="rounded-md border border-gray-600 px-2 py-1 text-xs" title={t("sync.refresh")}>{t("sync.refresh")}</button>}
 
         {/* Project selector */}
         <select
