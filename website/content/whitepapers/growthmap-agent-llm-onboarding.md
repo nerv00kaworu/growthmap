@@ -1268,3 +1268,7 @@ If the runtime list differs, stop and reconcile the protocol version. Never subs
   "event_type": ["started", "progress", "blocked", "completed", "failed"]
 }
 ```
+
+## Personal v1 live synchronization boundary
+
+Agent Access is a Windows-user, workspace-global master grant, not project-wide mutation authority. Every operation requires an explicit `project_id` and scoped intent. Prefer proposals for judgment-sensitive work; use Direct collaboration only after explicit user authorization. Canonical revisions/CAS are mutation truth: on conflict, re-read and reconcile. SSE journal events only indicate potential stale state and are not mutation truth or a cloud database. The installer is unsigned and updates are manual overwrite installs; project SQLite remains local and activation handles licensing-related data, never desktop project databases.

@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap License Issuance & Device Activation v1 (Phase 1)
 
 ## Scope and status

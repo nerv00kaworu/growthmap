@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # R4 blockers 3–5 report — 2026-07-29
 
 Preserved worktree: `/tmp/zhu-growthmap-r4-1785312695`, branch `zhu-r4-remediation`. No reset, commit, push, or master/live work performed.

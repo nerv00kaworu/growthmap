@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap Release 收斂清單 v1
 
 - 狀態：**authoring.2 security remediation 已完成獨立驗證；release commit、tag 與 archive 由最終封版流程產生**

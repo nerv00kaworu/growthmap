@@ -451,3 +451,7 @@ Decision notes：
 ## 18. 提供给外部 LLM 的独立指南
 
 本白皮书是面向人类用户的完整指南。若要让外部 LLM／Agent 连接 GrowthMap，请另行打开 **[Agent／LLM 操作指南](/zh-CN/whitepaper/agent)**，并把那份独立指南提供给外部 LLM；其中包含 Agent 应遵循的实际连接、工具和安全规范，不应以本篇人类 GUI 教程代替。
+
+## Personal v1 live 协作边界
+
+Agent Access 是 Windows 用户、workspace-global 的 master grant；每次操作仍必须有明确 `project_id` 与 scoped intent。建议 review-first；Direct collaboration 必须明确授权。shared canonical revisions 与 CAS 会拒绝 stale write；SSE journal 只提示可能 stale state，不是 mutation truth 或 cloud DB。Windows 安装程序未签名且更新采用手动覆盖；请核对 release evidence 并备份。project SQLite 留在本地；activation 只处理授权相关数据，不接收 project DB。

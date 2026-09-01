@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../../README.md) and [current release evidence](../../docs/RELEASE-EVIDENCE.md).
+
 # GrowthMap payments v1 candidate
 
 ## Reviewed public-config boundary
