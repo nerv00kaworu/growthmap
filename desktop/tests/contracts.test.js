@@ -73,6 +73,11 @@ test('Windows database boundary fixtures are isolated under canonical system tem
  assert.match(script,/Assert-SystemTempChild \$root/);
  assert.match(script,/Test-CanonicalChildPath -Path \$root -Parent \$repositoryRoot/);
  assert.match(script,/create-e2e-fixture\.py' \$repoFixture/);
+ const fixtureHelper=fs.readFileSync(path.resolve(__dirname,'../scripts/create-e2e-fixture.py'),'utf8');
+ assert.match(fixtureHelper,/CANONICAL_CHANGES_TABLE_SQL/);
+ assert.match(fixtureHelper,/CANONICAL_CHANGES_INDEX_SQL/);
+ assert.match(fixtureHelper,/REVISION_TRIGGER_SQL/);
+ assert.match(fixtureHelper,/TRIGGERS\[name\]/);
  assert.match(script,/Fixture helper unexpectedly accepted a repository output path/);
  assert.doesNotMatch(script,/Join-Path \$env:RUNNER_TEMP/);
 });
