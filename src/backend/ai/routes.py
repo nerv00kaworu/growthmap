@@ -22,6 +22,9 @@ from ai.provider import parse_json_response  # Reuse existing JSON parser
 from ai.diagnostics import classify_ai_exception, LLMConfigurationError, LLMInvalidResponse, LLMOperationTimeout, LLMProfileChanged, LLMSelectionChanged
 
 TEST_CONNECTION_TIMEOUT_SECONDS = 65
+EXPAND_RESPONSE_TIMEOUT_SECONDS = 90
+DEEPEN_RESPONSE_TIMEOUT_SECONDS = 120
+CHAT_RESPONSE_TIMEOUT_SECONDS = 60
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -166,6 +169,18 @@ async def _to_llm_config(provider_id: str, provider_revision: int, selection_rev
 
 def _request_id() -> str: return uuid.uuid4().hex[:16]
 
+async def _complete_with_deadline(provider, system: str, user: str, *, model, timeout_seconds: float) -> str:
+    """Bound the entire completion operation, not only HTTP inactivity.
+
+    Cancellation from the deadline reaches the single in-flight provider call;
+    the provider performs no retry, so expiry cannot dispatch a second POST.
+    """
+    async with asyncio.timeout(timeout_seconds):
+        return await provider.complete(
+            system, user, model=model,
+            response_timeout_seconds=timeout_seconds,
+        )
+
 def _safe_error(exc: Exception, request_id: str) -> HTTPException:
     d = classify_ai_exception(exc)
     return HTTPException(d.status, {"code": d.code, "message": d.message, "request_id": request_id})
@@ -273,7 +288,10 @@ async def expand_node(req: ExpandRequest, db: AsyncSession = Depends(get_db)):
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
-        raw = await provider.complete(frame["expand_system"], user_prompt, model=llm_cfg.model)
+        raw = await _complete_with_deadline(
+            provider, frame["expand_system"], user_prompt, model=llm_cfg.model,
+            timeout_seconds=EXPAND_RESPONSE_TIMEOUT_SECONDS,
+        )
             
         try:
             envelope = ExpandEnvelope.model_validate({"suggestions": parse_json_response(raw)})
@@ -326,7 +344,10 @@ async def deepen_node(req: DeepenRequest, db: AsyncSession = Depends(get_db)):
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
-        raw = await provider.complete(frame["deepen_system"], user_prompt, model=llm_cfg.model)
+        raw = await _complete_with_deadline(
+            provider, frame["deepen_system"], user_prompt, model=llm_cfg.model,
+            timeout_seconds=DEEPEN_RESPONSE_TIMEOUT_SECONDS,
+        )
             
         try:
             envelope = DeepenEnvelope.model_validate(parse_json_response(raw))
@@ -400,7 +421,10 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
     try:
         llm_cfg, provider_id = await _to_llm_config(req.provider_id, req.provider_revision, req.selection_revision, db)
         provider = get_provider(llm_cfg)
-        reply = await provider.complete(system_prompt, context_summary, model=llm_cfg.model)
+        reply = await _complete_with_deadline(
+            provider, system_prompt, context_summary, model=llm_cfg.model,
+            timeout_seconds=CHAT_RESPONSE_TIMEOUT_SECONDS,
+        )
 
         node = await db.get(Node, req.node_id)
         if node:
@@ -409,7 +433,7 @@ async def chat_node(req: ChatRequest, db: AsyncSession = Depends(get_db)):
                 node_id=req.node_id,
                 actor_type="ai",
                 action_type="ai_chat",
-                payload={"message": req.message[:200], "reply": reply[:200], "provider_id": provider_id, "model": llm_cfg.model, "outcome": "success"},
+                payload={"message_chars": len(req.message), "reply_chars": len(reply), "provider_id": provider_id, "model": llm_cfg.model, "outcome": "success"},
             ))
             await db.commit()
 

@@ -10,7 +10,7 @@ from ai.providers.base import LLMProvider
 class CapturingProvider(LLMProvider):
  @property
  def name(self): return 'fixture'
- async def complete(self,system,user,model=None,temperature=.7,max_tokens=2000):
+ async def complete(self,system,user,model=None,temperature=.7,max_tokens=2000,response_timeout_seconds=60.0):
   assert self.api_key=='memory-key'
   try: payload=__import__('json').loads(user)
   except (TypeError,ValueError): payload=None

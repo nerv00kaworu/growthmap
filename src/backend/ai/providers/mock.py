@@ -33,7 +33,7 @@ class MockProvider(LLMProvider):
     @property
     def name(self) -> str: return "mock"
 
-    async def complete(self, system: str, user: str, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+    async def complete(self, system: str, user: str, model: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 2000, response_timeout_seconds: float = 60.0) -> str:
         locale = "en" if "write all generated text in english" in system.lower() else "zh-CN" if "简体中文" in system else "zh-TW"
         payload = self._parse_payload(user)
 

@@ -9,6 +9,8 @@ from .openai_compatible import OpenAICompatibleProvider
 _mock_provider: Optional[MockProvider] = None
 _openai_provider: Optional[OpenAICompatibleProvider] = None
 
+TEST_CONNECTION_RESPONSE_TIMEOUT_SECONDS = 60
+
 
 def get_provider(config: LLMConfig) -> LLMProvider:
     """Choose and return the appropriate LLM provider based on config.
@@ -54,5 +56,9 @@ async def test_connection(config: LLMConfig) -> dict:
     provider = get_provider(config)
     model = config.model or "default"
     if config.provider == "mock": return {"ok": True, "provider": config.provider, "model": model, "message": "Mock provider ready"}
-    await provider.complete(system="Reply with only OK.", user="Connection test.", model=config.model, max_tokens=10)
+    await provider.complete(
+        system="Reply with only OK.", user="Connection test.", model=config.model,
+        max_tokens=10,
+        response_timeout_seconds=TEST_CONNECTION_RESPONSE_TIMEOUT_SECONDS,
+    )
     return {"ok": True, "provider": config.provider, "model": model, "message": "Connection successful"}

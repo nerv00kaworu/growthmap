@@ -36,6 +36,7 @@ class LLMProvider(ABC):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
+        response_timeout_seconds: float = 60.0,
     ) -> str:
-        """Make a chat completion call."""
+        """Make one chat completion call with a bounded response timeout."""
         ...

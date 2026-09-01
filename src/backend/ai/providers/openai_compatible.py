@@ -1,6 +1,6 @@
 """OpenAI-compatible API provider."""
+import math
 import os
-import asyncio
 import httpx
 from typing import Optional
 
@@ -13,7 +13,8 @@ DEFAULT_BASE_URL = os.getenv("LLM_BASE_URL", "https://models.github.ai/inference
 DEFAULT_API_KEY = os.getenv("GROWTHMAP_LLM_KEY_DEFAULT", "")
 DEFAULT_MODEL = os.getenv("LLM_MODEL", "openai/gpt-4.1-mini")
 
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+DEFAULT_RESPONSE_TIMEOUT_SECONDS = 60.0
+CONNECT_TIMEOUT_SECONDS = 10.0
 
 
 class OpenAICompatibleProvider(LLMProvider):
@@ -40,11 +41,25 @@ class OpenAICompatibleProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2000,
+        response_timeout_seconds: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS,
     ) -> str:
-        """Send a chat completion request to OpenAI-compatible API."""
+        """Send exactly one chat completion request.
+
+        ``response_timeout_seconds`` bounds response/read time. A dispatched
+        completion is never retried because the upstream may have generated a
+        billable response even when GrowthMap did not receive it.
+        """
         if not self.api_key:
             raise ValueError("API key is required for OpenAI-compatible provider")
-        
+        if (
+            isinstance(response_timeout_seconds, bool)
+            or not isinstance(response_timeout_seconds, (int, float))
+            or response_timeout_seconds <= 0
+            or response_timeout_seconds > 120
+            or not math.isfinite(response_timeout_seconds)
+        ):
+            raise ValueError("Response timeout must be a finite number in (0, 120]")
+
         model = (model or self.default_model).strip()
         if not model:
             raise ValueError("Model cannot be blank")
@@ -63,34 +78,20 @@ class OpenAICompatibleProvider(LLMProvider):
             "max_tokens": max_tokens,
         }
 
-        request_timeout = httpx.Timeout(30.0, connect=10.0)
-        data: dict | list | None = None
+        request_timeout = httpx.Timeout(
+            response_timeout_seconds,
+            connect=CONNECT_TIMEOUT_SECONDS,
+        )
 
         async with httpx.AsyncClient(timeout=request_timeout) as client:
-            for attempt in range(2):
-                try:
-                    resp = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
-                    )
-                    if resp.status_code in RETRYABLE_STATUS_CODES and attempt == 0:
-                        await asyncio.sleep(2)
-                        continue
-                    resp.raise_for_status()
-                    try: data = resp.json()
-                    except (ValueError,TypeError,AttributeError,KeyError) as exc: raise LLMInvalidResponse("invalid JSON") from exc
-                    break
-                except httpx.TimeoutException:
-                    if attempt == 0:
-                        await asyncio.sleep(2)
-                        continue
-                    raise
-                except httpx.HTTPStatusError as exc:
-                    if exc.response.status_code in RETRYABLE_STATUS_CODES and attempt == 0:
-                        await asyncio.sleep(2)
-                        continue
-                    raise
+            resp = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            resp.raise_for_status()
+            try: data = resp.json()
+            except (ValueError,TypeError,AttributeError,KeyError) as exc: raise LLMInvalidResponse("invalid JSON") from exc
 
         if not isinstance(data, dict):
             raise LLMInvalidResponse("response container")
