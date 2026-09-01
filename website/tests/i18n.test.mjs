@@ -33,6 +33,14 @@ test('catalog contract is strongly typed and component-local copy is migrated',(
 });
 
 const leaves=value=>typeof value==='string'?[value]:Array.isArray(value)?value.flatMap(leaves):value&&typeof value==='object'?Object.values(value).flatMap(leaves):[];
+test('human whitepaper locales have equivalent heading structure and translated bodies',()=>{
+  const files=Object.fromEntries(locales.map(locale=>[locale,read(`content/whitepapers/growthmap-user-whitepaper.${locale}.md`)]));
+  const headingLevels=value=>value.split('\n').filter(line=>/^#{1,6} /.test(line)).map(line=>line.match(/^#+/)[0].length);
+  for(const locale of locales) assert.deepEqual(headingLevels(files[locale]),headingLevels(files['zh-TW']),`${locale} whitepaper heading drift`);
+  const cjk=/[\u3400-\u9fff]/u;assert.ok(!cjk.test(files.en),'English whitepaper contains CJK');
+  for(const locale of locales) assert.ok(files[locale].includes(`/${locale}/whitepaper/agent`),`${locale} missing localized Agent guide link`);
+});
+
 test('workflow locale leaves are translated and catalogs do not alias zh-TW objects',()=>{
   const cjk=/[\u3400-\u9fff]/u;
   for(const text of leaves(workflowContent.en)) assert.ok(!cjk.test(text),`English workflow contains CJK: ${text}`);

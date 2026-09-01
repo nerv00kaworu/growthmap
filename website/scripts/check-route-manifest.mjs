@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 const root=process.cwd();
 const locales=['zh-TW','zh-CN','en'];
-const canonical=['','features','agents','readback','security','download','buy','docs','support','status','privacy','terms','refund'];
+const canonical=['','features','agents','readback','security','download','buy','docs','whitepaper','whitepaper/agent','support','status','privacy','terms','refund'];
 const aliases=['product','ai-neutral','showcase','pricing'];
 const manifest=JSON.parse(fs.readFileSync(path.join(root,'.next/app-path-routes-manifest.json'),'utf8'));
 const routeValues=new Set(Object.values(manifest));
