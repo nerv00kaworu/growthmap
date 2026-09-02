@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap 工程規格 v0.1
 
 > Status note: this is a **target engineering spec**. The current repository only implements a subset of this document.

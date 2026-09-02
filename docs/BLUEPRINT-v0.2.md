@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap Blueprint v0.2
 
 > Status note: this file is a **product blueprint**, not a statement of what the current MVP already ships.

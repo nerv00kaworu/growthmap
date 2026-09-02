@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap Payments v1 candidate
 
 Status: local candidate; **not production deployable**. Product: one perpetual personal major-1 license, unlimited active projects, issuer-targeted two devices, same-major updates included.

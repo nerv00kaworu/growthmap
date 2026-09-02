@@ -2,6 +2,15 @@
 
 All notable changes to the GrowthMap **authoring/editor** package are documented here.
 
+## [Personal v1 live sync] - 2026-09-01
+
+### Publicly verifiable release
+- Publishes Windows Personal v1 live canonical-sync evidence for `GrowthMap-Setup-0.1.0-desktop.2-x64.exe`: `145385238` bytes and SHA-256 `cc1a4e15a390b8b56773d531902617ee84c41526c6fedbcfd233b5960ba8b928`.
+- Documents separate installer source commit `6702f5815b5f71b996cf87a95eab6e242ed62f5f` and website deployed source `35634595392f1e75ee64725a2b1d80f735eca185`; neither is substituted for the other.
+- Documents shared canonical revisions/CAS conflict re-read and SSE stale-state signals. SSE is not mutation truth or a cloud project database.
+- Confirms the installer is unsigned and uses manual overwrite updates; public guidance requires matching filename/bytes/SHA-256 and never advises bypassing Windows security.
+
+
 ## [0.1.0-authoring.2] - 2026-07-27
 
 ### Security

@@ -451,3 +451,7 @@ File paths:
 ## 18. Separate Guide for an External LLM
 
 This whitepaper is the complete guide for human users. To connect an external LLM/Agent to GrowthMap, open the separate **[Agent/LLM Operations Guide](/en/whitepaper/agent)** and supply that guide to the external LLM. It contains the live connection, tool-use, and safety rules the Agent must follow; this human GUI tutorial is not a substitute for it.
+
+## Personal v1 live collaboration boundary
+
+Agent Access is a Windows-user, workspace-global master grant. Every operation still requires an explicit `project_id` and scoped intent. Prefer review-first; Direct collaboration requires explicit authorization. Shared canonical revisions and CAS reject stale writes; SSE journal events only signal possible stale state, not mutation truth or a cloud database. Windows installers are unsigned and updates are manual overwrite installs: verify release evidence and keep backups. Project SQLite stays local; activation handles licensing-related data, not project databases.

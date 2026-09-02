@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # GrowthMap Commercialization Contract v1
 
 Status: frozen candidate contract, 2026-07-28. Product major: **1**. This contract is stricter than UI behavior; the desktop backend is authoritative.

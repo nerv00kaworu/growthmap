@@ -1,3 +1,5 @@
+> **Historical record.** This document describes its own stated baseline/source-security record and is **not** current release or deployment guidance. See the [root README](../README.md) and [current release evidence](RELEASE-EVIDENCE.md).
+
 # R4 blocker 7 detached release gate — 2026-07-29
 
 Status: **R4 Linux detached gate PASS / ready to form a candidate commit for fresh independent Jian review**. The earlier failed attempt remains historical evidence; the entirely fresh second gate below is authoritative Linux evidence. No commit, push, tag, archive, publication, live DB, credentials, providers, payments, deployment, or master mutation was performed.
