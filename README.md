@@ -5,12 +5,16 @@ GrowthMap is a local-first visual project workspace for people and AI Agents. Sh
 ## Download GrowthMap Personal for Windows
 
 - Official site: <https://growthmap.work>
-- Current release: [growthmap-personal-v1-live-sync-20260901](https://github.com/nerv00kaworu/growthmap/releases/tag/growthmap-personal-v1-live-sync-20260901)
+- Current release: [growthmap-personal-v1-renderer-perf-20260902](https://github.com/nerv00kaworu/growthmap/releases/tag/growthmap-personal-v1-renderer-perf-20260902)
 - Installer: `GrowthMap-Setup-0.1.0-desktop.2-x64.exe` (Windows x64)
-- Size: `145385238` bytes
-- SHA-256: `cc1a4e15a390b8b56773d531902617ee84c41526c6fedbcfd233b5960ba8b928`
+- Size: `145384654` bytes
+- SHA-256: `1b2075734ed82d2bbec60cdddf65c70d88bdfec5d0a602b0e307324b8a962110`
 
 The installer is unsigned. Windows may show Unknown Publisher or SmartScreen. Download only from the official site or linked release, verify the filename, byte size, and SHA-256 above, and **stop if a warning or hash does not match**. Do not disable or bypass Windows security features. Updates are manual: download a newer installer and install it over the existing app.
+
+## Renderer responsiveness update
+
+This release computes each subtree width once and skips structural layout when only selection changes, preserving focus, graph, and relation behavior. Production-personal workflow gates passed (Security P0/P1/P2: 0/0/0; focused: 6/6; frontend: 236/236; stable modules: 20/20); GUI acceptance was completed on an installed build.
 
 ## What it does
 

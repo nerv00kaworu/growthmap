@@ -2,6 +2,15 @@
 
 All notable changes to the GrowthMap **authoring/editor** package are documented here.
 
+## [GrowthMap Personal v1 — Renderer Responsiveness] - 2026-09-02
+
+### Publicly verifiable release
+- Publishes [growthmap-personal-v1-renderer-perf-20260902](https://github.com/nerv00kaworu/growthmap/releases/tag/growthmap-personal-v1-renderer-perf-20260902): `GrowthMap-Setup-0.1.0-desktop.2-x64.exe`, `145384654` bytes, SHA-256 `1b2075734ed82d2bbec60cdddf65c70d88bdfec5d0a602b0e307324b8a962110`.
+- Installer source is `8d06f64e01d86f95b1ce361467c68f310718e991`; production-personal CI run `33621314435` passed all gates. Its manifest SHA-256 is `11d510c795f61972703562abae400affaba04362a6830dec9d9840f4ba276dd4`.
+- Improves renderer responsiveness: each node’s subtree width is computed once, and selection-only changes do not rerun structural layout, while focus, graph, and relation behavior are preserved.
+- Security P0/P1/P2 findings were `0/0/0`; focused tests passed `6/6`, frontend tests `236/236`, stable modules `20/20`, and an installed build completed GUI acceptance.
+- The installer remains unsigned (Unknown Publisher) and updates remain manual. Verify the exact filename, byte size, and SHA-256; stop on a warning or mismatch and do not bypass Windows security.
+
 ## [Personal v1 live sync] - 2026-09-01
 
 ### Publicly verifiable release
