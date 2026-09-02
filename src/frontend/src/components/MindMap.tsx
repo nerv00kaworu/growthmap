@@ -12,248 +12,18 @@ import {
   useEdgesState,
   useReactFlow,
   type Node,
-  type Edge,
   type Connection,
   BackgroundVariant,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { GrowthNode } from "./GrowthNode";
+import { decorateSelection, layoutTreeToFlow, syncFlowState, type LayoutDiagnostics } from "./mindmap-layout";
 import type { Edge as GraphEdge, GNode, Maturity } from "@/lib/types";
 import { api } from "@/lib/api";
 import { MATURITY_COLORS } from "@/lib/types";
 import { useStore } from "@/stores/useStore";
 
 const nodeTypes = { growth: GrowthNode };
-
-function getHeatColor(updatedAt: string | undefined): string {
-  if (!updatedAt) return "#a78bfa"; // never updated → purple
-  const diff = (Date.now() - new Date(updatedAt).getTime()) / (1000 * 60 * 60 * 24);
-  if (diff < 1) return "#22c55e";   // < 1 day: green
-  if (diff < 3) return "#eab308";   // 1-3 days: yellow
-  if (diff < 7) return "#f97316";   // 3-7 days: orange
-  return "#ef4444";                  // > 7 days: red
-}
-
-// Collect all descendant IDs up to `maxDepth` levels
-function collectDescendants(node: GNode, maxDepth: number): Set<string> {
-  const ids = new Set<string>();
-  function walk(n: GNode, d: number) {
-    if (d > maxDepth) return;
-    for (const c of n.children || []) {
-      ids.add(c.id);
-      walk(c, d + 1);
-    }
-  }
-  walk(node, 0);
-  return ids;
-}
-
-function collectAncestors(root: GNode, targetId: string): Set<string> {
-  const ids = new Set<string>();
-  function walk(n: GNode, path: string[]): boolean {
-    if (n.id === targetId) {
-      path.forEach((id) => ids.add(id));
-      return true;
-    }
-    for (const c of n.children || []) {
-      if (walk(c, [...path, n.id])) return true;
-    }
-    return false;
-  }
-  walk(root, []);
-  return ids;
-}
-
-function getSiblings(root: GNode, targetId: string): Set<string> {
-  const ids = new Set<string>();
-  function walk(n: GNode) {
-    const children = n.children || [];
-    if (children.some((c) => c.id === targetId)) {
-      children.forEach((c) => { if (c.id !== targetId) ids.add(c.id); });
-      return;
-    }
-    for (const c of children) walk(c);
-  }
-  walk(root);
-  return ids;
-}
-
-const RELATION_EDGE_STYLES: Record<string, Partial<Edge["style"]> & { animated?: boolean; strokeDasharray?: string }> = {
-  depends_on: { stroke: "#f97316", strokeWidth: 2 },
-  contradicts: { stroke: "#ef4444", strokeWidth: 2 },
-  references: { stroke: "#6b7280", strokeWidth: 1.5 },
-  supports: { stroke: "#22c55e", strokeWidth: 1.5 },
-};
-
-const RELATION_DASH: Record<string, string | undefined> = {
-  depends_on: "6,3",
-  contradicts: "5,3",
-  references: "3,3",
-  supports: undefined,
-};
-
-function treeToFlow(
-  root: GNode,
-  selectedId: string | null,
-  highlightedIds: string[],
-  heatmapMode: boolean,
-  focusNodeId: string | null,
-  extraEdges?: { id: string; from: string; to: string; relation: string }[],
-  graphMode = false,
-  relationFilter: Set<string> = new Set(),
-  graphVisibleIds: Set<string> | null = null
-): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = [];
-  const edges: Edge[] = [];
-
-  const NODE_W = 220;
-  const NODE_GAP = 40;
-  const LEVEL_H = 150;
-
-  // Build visible set for focus mode
-  let visibleSet: Set<string> | null = null;
-  if (focusNodeId) {
-    visibleSet = new Set<string>();
-    visibleSet.add(focusNodeId);
-    // ancestors
-    collectAncestors(root, focusNodeId).forEach((id) => visibleSet!.add(id));
-    // descendants (3 levels)
-    const focusNode = findInTree(root, focusNodeId);
-    if (focusNode) collectDescendants(focusNode, 3).forEach((id) => visibleSet!.add(id));
-    // siblings
-    getSiblings(root, focusNodeId).forEach((id) => visibleSet!.add(id));
-  }
-
-  function calcWidth(node: GNode): number {
-    const children = node.children || [];
-    if (children.length === 0) return NODE_W;
-    const childrenWidth = children.reduce((sum, c) => sum + calcWidth(c), 0);
-    return childrenWidth + (children.length - 1) * NODE_GAP;
-  }
-
-  function place(node: GNode, x: number, y: number) {
-    if (visibleSet && !visibleSet.has(node.id)) {
-      // Still recurse children to place them if visible
-      const children = node.children || [];
-      const totalWidth = children.reduce((sum, c) => sum + calcWidth(c), 0) + (children.length - 1) * NODE_GAP;
-      let cx = x + NODE_W / 2 - totalWidth / 2;
-      for (const child of children) {
-        const cw = calcWidth(child);
-        const childX = cx + cw / 2 - NODE_W / 2;
-        place(child, childX, y + LEVEL_H);
-        cx += cw + NODE_GAP;
-      }
-      return;
-    }
-
-    const isHighlighted = highlightedIds.includes(node.id);
-    const heatColor = heatmapMode ? getHeatColor(node.updated_at) : undefined;
-
-    nodes.push({
-      id: node.id,
-      type: "growth",
-      position: { x, y },
-      data: {
-        label: node.title,
-        nodeType: node.node_type,
-        maturity: node.maturity as Maturity,
-        summary: node.summary,
-        isSelected: node.id === selectedId,
-        childCount: node.children?.length || 0,
-        isMainline: Boolean(node.is_mainline),
-        isHighlighted,
-        heatColor,
-        isBranch: Boolean(node.branch_id),
-        updatedAt: node.updated_at,
-      },
-    });
-
-    const children = node.children || [];
-    if (children.length === 0) return;
-
-    const totalWidth = children.reduce((sum, c) => sum + calcWidth(c), 0) + (children.length - 1) * NODE_GAP;
-    let cx = x + NODE_W / 2 - totalWidth / 2;
-
-    for (const child of children) {
-      const cw = calcWidth(child);
-      const childX = cx + cw / 2 - NODE_W / 2;
-
-      const childVisible = !visibleSet || (visibleSet.has(node.id) && visibleSet.has(child.id));
-      if (childVisible) {
-        edges.push({
-          id: `${node.id}-${child.id}`,
-          source: node.id,
-          target: child.id,
-          style: child.is_mainline ? { stroke: "#60a5fa", strokeWidth: 2.5 } : { stroke: "#333", strokeWidth: 1.5 },
-          animated: false,
-        });
-      }
-
-      place(child, childX, y + LEVEL_H);
-      cx += cw + NODE_GAP;
-    }
-  }
-
-  place(root, 400, 0);
-
-  if (graphMode && graphVisibleIds) {
-    const visible = new Set(graphVisibleIds);
-    for (let index = nodes.length - 1; index >= 0; index--) {
-      if (!visible.has(nodes[index].id)) nodes.splice(index, 1);
-    }
-    for (let index = edges.length - 1; index >= 0; index--) {
-      if (!visible.has(edges[index].source) || !visible.has(edges[index].target)) edges.splice(index, 1);
-    }
-  }
-
-  // Stable layered graph layout: keeps the tree backbone readable; graph links cross layers.
-  if (graphMode) {
-    const byDepth = new Map<number, Node[]>();
-    const depthById = new Map<string, number>();
-    const walkDepth = (node: GNode, depth: number) => { depthById.set(node.id, depth); (node.children || []).forEach((child) => walkDepth(child, depth + 1)); };
-    walkDepth(root, 0);
-    nodes.forEach((flowNode) => {
-      const depth = depthById.get(flowNode.id) || 0;
-      byDepth.set(depth, [...(byDepth.get(depth) || []), flowNode]);
-    });
-    Array.from(byDepth.entries()).sort(([a], [b]) => a - b).forEach(([depth, layer]) => {
-      layer.sort((a, b) => a.id.localeCompare(b.id));
-      layer.forEach((flowNode, index) => { flowNode.position = { x: 300 + index * 280, y: depth * 180 }; });
-    });
-  }
-
-  // Add non-child_of relation edges
-  if (extraEdges) {
-    const nodeSet = new Set(nodes.map((n) => n.id));
-    for (const e of extraEdges) {
-      if (!nodeSet.has(e.from) || !nodeSet.has(e.to) || (relationFilter.size > 0 && !relationFilter.has(e.relation))) continue;
-      const style = RELATION_EDGE_STYLES[e.relation] || { stroke: "#888", strokeWidth: 1 };
-      const dash = RELATION_DASH[e.relation];
-      edges.push({
-        id: `rel-${e.id}`,
-        source: e.from,
-        target: e.to,
-        style: {
-          ...style,
-          ...(dash ? { strokeDasharray: dash } : {}),
-        } as React.CSSProperties,
-        label: e.relation,
-        labelStyle: { fontSize: 10, fill: "#666" },
-      });
-    }
-  }
-
-  return { nodes, edges };
-}
-
-function findInTree(root: GNode, id: string): GNode | null {
-  if (root.id === id) return root;
-  for (const c of root.children || []) {
-    const f = findInTree(c, id);
-    if (f) return f;
-  }
-  return null;
-}
 
 function FitViewTrigger({ trigger }: { trigger: number }) {
   const { fitView } = useReactFlow();
@@ -275,6 +45,16 @@ export function MindMap() {
   const selectNode = useStore((s) => s.selectNode);
   const reparentNode = useStore((s) => s.reparentNode);
   const highlightedNodeIds = useStore((s) => s.highlightedNodeIds);
+
+  // Dev-only, content-free diagnostics for event-loop stalls in the renderer.
+  useEffect(() => {
+    if (process.env.NODE_ENV === "production" || typeof PerformanceObserver === "undefined") return;
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) if (entry.duration > 50) console.debug("[GrowthMap] renderer long task", { durationMs: Math.round(entry.duration) });
+    });
+    try { observer.observe({ type: "longtask", buffered: true }); } catch { return; }
+    return () => observer.disconnect();
+  }, []);
 
   const [heatmapMode, setHeatmapMode] = useState(false);
   const [graphMode, setGraphMode] = useState(false);
@@ -338,18 +118,22 @@ export function MindMap() {
     }
   }, [rootNode?.project_id]);
 
-  const { flowNodes, flowEdges } = useMemo(() => {
-    if (!rootNode) return { flowNodes: [], flowEdges: [] };
-    const { nodes, edges } = treeToFlow(rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId, relations.filter((edge) => edge.relation_type !== "child_of" && edge.weight >= minWeight).map((edge) => ({ id: edge.id, from: edge.from_node_id, to: edge.to_node_id, relation: edge.relation_type })), graphMode, activeRelations, graphVisibleIds);
-    return { flowNodes: nodes, flowEdges: edges };
-  }, [rootNode, selectedNodeId, highlightedNodeIds, heatmapMode, focusNodeId, relations, graphMode, activeRelations, graphVisibleIds, minWeight]);
+  const { structuralNodes, flowEdges } = useMemo(() => {
+    if (!rootNode) return { structuralNodes: [], flowEdges: [] };
+    const report = (diagnostics: LayoutDiagnostics) => {
+      if (process.env.NODE_ENV !== "production" && diagnostics.durationMs > 16) console.debug("[GrowthMap] tree layout", diagnostics);
+    };
+    const { nodes, edges } = layoutTreeToFlow(rootNode, { highlightedIds: highlightedNodeIds, heatmapMode, focusNodeId, extraEdges: relations.filter((edge) => edge.relation_type !== "child_of" && edge.weight >= minWeight).map((edge) => ({ id: edge.id, from: edge.from_node_id, to: edge.to_node_id, relation: edge.relation_type })), graphMode, relationFilter: activeRelations, graphVisibleIds, report });
+    return { structuralNodes: nodes, flowEdges: edges };
+  }, [rootNode, highlightedNodeIds, heatmapMode, focusNodeId, relations, graphMode, activeRelations, graphVisibleIds, minWeight]);
+  // Selection is decoration only: it must not re-run structural layout.
+  const flowNodes = useMemo(() => decorateSelection(structuralNodes, selectedNodeId), [structuralNodes, selectedNodeId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowEdges);
 
   useEffect(() => {
-    setNodes(flowNodes);
-    setEdges(flowEdges);
+    syncFlowState(setNodes, setEdges, flowNodes, flowEdges);
   }, [flowNodes, flowEdges, setNodes, setEdges]);
 
   const onNodeClick = useCallback(
