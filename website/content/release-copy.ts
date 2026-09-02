@@ -14,7 +14,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
   'zh-TW':{
     eyebrow:'WINDOWS 下載',
     title:'下載 GrowthMap Personal',
-    lead:'適用於 Windows x64。下載安裝程式後，即可開始建立你的本機專案地圖。',
+    lead:'適用於 Windows x64。下載安裝程式後，即可開始建立你的本機專案地圖；此版本改善大型地圖的 renderer 回應。',
     cta:'下載 Windows 安裝程式',
     platformSuffix:'Windows x64',
     fields:{version:'目前版本',filename:'檔案名稱',bytes:'精確大小',sha256:'SHA-256',platform:'適用系統'},
@@ -23,7 +23,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
     requirementsTitle:'使用前請確認',
     requirements:'目前支援 Windows x64，不支援 Windows ARM。專案資料預設保存在你的電腦上。',
     warningTitle:'Windows 安全提示',
-    warning:'目前安裝程式尚未簽章，因此 Windows 可能顯示「未知的發行者」或 SmartScreen 提示。請核對檔名、145385238 bytes 與本頁 SHA‑256；任何警示或 hash 不符就停止，不要關閉或繞過 Windows 安全功能。',
+    warning:'目前安裝程式尚未簽章，因此 Windows 可能顯示「未知的發行者」或 SmartScreen 提示。請核對檔名、145384654 bytes 與本頁 SHA‑256；任何警示或 hash 不符就停止，不要關閉或繞過 Windows 安全功能。',
     updateTitle:'日後如何更新',
     updateBody:'新版發布後，回到本頁下載新版安裝程式並直接覆蓋安裝。既有 Personal 授權、裝置身分與本機專案資料的保留是設計預期；更新前請先備份。',
     license:'查看 Personal 授權與購買'
@@ -31,7 +31,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
   'zh-CN':{
     eyebrow:'WINDOWS 下载',
     title:'下载 GrowthMap Personal',
-    lead:'适用于 Windows x64。下载安装程序后，即可开始建立你的本地项目地图。',
+    lead:'适用于 Windows x64。下载安装程序后，即可开始建立你的本地项目地图；此版本改善大型地图的 renderer 响应。',
     cta:'下载 Windows 安装程序',
     platformSuffix:'Windows x64',
     fields:{version:'当前版本',filename:'文件名',bytes:'精确大小',sha256:'SHA-256',platform:'适用系统'},
@@ -40,7 +40,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
     requirementsTitle:'使用前请确认',
     requirements:'目前支持 Windows x64，不支持 Windows ARM。项目数据默认保存在你的电脑上。',
     warningTitle:'Windows 安全提示',
-    warning:'目前安装程序尚未签名，因此 Windows 可能显示“未知发布者”或 SmartScreen 提示。请核对文件名、145385238 bytes 与本页 SHA‑256；任何警告或 hash 不符就停止，不要关闭或绕过 Windows 安全功能。',
+    warning:'目前安装程序尚未签名，因此 Windows 可能显示“未知发布者”或 SmartScreen 提示。请核对文件名、145384654 bytes 与本页 SHA‑256；任何警告或 hash 不符就停止，不要关闭或绕过 Windows 安全功能。',
     updateTitle:'以后如何更新',
     updateBody:'新版本发布后，回到本页下载新版安装程序并直接覆盖安装。现有 Personal 授权、设备身份和本地项目数据的保留是设计预期；更新前请先备份。',
     license:'查看 Personal 授权与购买'
@@ -48,7 +48,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
   en:{
     eyebrow:'WINDOWS DOWNLOAD',
     title:'Download GrowthMap Personal',
-    lead:'For Windows x64. Download the installer and start building your local project map.',
+    lead:'For Windows x64. Download the installer and start building your local project map. This release improves renderer responsiveness for larger maps.',
     cta:'Download the Windows installer',
     platformSuffix:'Windows x64',
     fields:{version:'Current version',filename:'Filename',bytes:'Exact size',sha256:'SHA-256',platform:'System'},
@@ -57,7 +57,7 @@ export const releaseCopy:Record<Locale,ReleaseCopy>={
     requirementsTitle:'Before you begin',
     requirements:'Windows x64 is currently supported; Windows ARM is not. Project data stays on your computer by default.',
     warningTitle:'Windows security notice',
-    warning:'The installer is currently unsigned, so Windows may show “Unknown Publisher” or a SmartScreen notice. Verify the filename, 145385238 bytes, and this page’s SHA‑256. Stop on any warning or hash mismatch; do not disable or bypass Windows security features.',
+    warning:'The installer is currently unsigned, so Windows may show “Unknown Publisher” or a SmartScreen notice. Verify the filename, 145384654 bytes, and this page’s SHA‑256. Stop on any warning or hash mismatch; do not disable or bypass Windows security features.',
     updateTitle:'How future updates work',
     updateBody:'When a new version is released, return to this page and install the new version over the existing app. Retention of your Personal license, device identity, and local project data is a design expectation; back up first.',
     license:'View Personal licensing and purchase'
