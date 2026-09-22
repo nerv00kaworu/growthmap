@@ -37,6 +37,7 @@ def effective_entitlement():
  base=peek_current_entitlement()
  # Paid is accepted only after the launch MAC and private-key possession proof validate.
  if mode=="paid" and base.state=="paid" and base.valid and base.mutations_allowed:return base
+ if mode=="paid" and base.reason=="check_in_required":return base
  if base.state=="paid_legacy" and base.valid and not base.mutations_allowed:return base
  if mode in {"free","fresh"} and base.state=="free" and base.valid and base.mutations_allowed:return base
  if mode=="fresh" and os.getenv("GROWTHMAP_FRESH_INSTALL")=="1" and base.reason=="no_free_state":return Entitlement(state="free",edition="free",max_active_projects=1,valid=True,mutations_allowed=True,reason="authenticated_fresh_install")

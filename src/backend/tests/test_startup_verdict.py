@@ -26,6 +26,16 @@ def test_paid_requires_paid_policy_after_valid_proof(monkeypatch):
  apply(monkeypatch,signed_env('paid'));assert verdict.effective_entitlement().state=='paid'
  apply(monkeypatch,signed_env('extraction'));assert verdict.effective_entitlement().state=='extraction'
 
+def test_authenticated_paid_policy_preserves_check_in_required_for_refresh(monkeypatch):
+ import desktop.startup_verdict as verdict
+ from desktop.entitlements import Entitlement
+ expired=Entitlement(reason='check_in_required',license_id='gm_'+'a'*32,major_version=1)
+ monkeypatch.setattr(verdict,'peek_current_entitlement',lambda:expired)
+ apply(monkeypatch,signed_env('paid'))
+ value=verdict.effective_entitlement()
+ assert value.state=='extraction' and value.valid is False and value.mutations_allowed is False
+ assert value.reason=='check_in_required' and value.license_id==expired.license_id and value.major_version==1
+
 def test_legacy_trial_transport_maps_to_permanent_free(monkeypatch):
  import desktop.startup_verdict as verdict
  from desktop.entitlements import Entitlement

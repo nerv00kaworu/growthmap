@@ -18,17 +18,20 @@
     "renderer:e2e": "node scripts/renderer-e2e.js"
   },
   "overrides": {
-    "brace-expansion": "5.0.8",
-    "minimatch": "10.2.5",
+    "brace-expansion": "5.0.9",
+    "minimatch": "10.2.6",
     "glob": "11.1.0",
     "ejs": "3.1.10",
     "filelist": "2.0.2",
-    "rimraf": "6.1.2"
+    "rimraf": "6.1.2",
+    "js-yaml": "4.3.2",
+    "fast-uri": "4.2.1"
   },
   "devDependencies": {
     "electron": "43.2.0",
-    "electron-builder": "26.15.3",
-    "playwright-core": "1.62.0"
+    "electron-builder": "26.16.1",
+    "playwright-core": "1.62.0",
+    "@electron/asar": "4.0.1"
   },
   "build": {
     "appId": "com.growthmap.desktop",

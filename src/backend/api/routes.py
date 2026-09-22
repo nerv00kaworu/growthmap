@@ -1,7 +1,6 @@
 """Project & Node API routes"""
 import uuid
 import json
-import shutil
 import os
 import re
 import tempfile
@@ -17,7 +16,9 @@ from sqlalchemy.exc import StatementError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from db import database as database_config
 from db.database import get_db
+from api.database_backup import backup_configured_database
 from models.models import Project, Node, Edge, ContentBlock, ActionLog, Branch, ProviderConfig, AgentSession, AgentArtifact
 from desktop.entitlements import peek_current_entitlement
 from desktop.secrets import desktop_mode, put as put_memory_secret
@@ -48,15 +49,6 @@ async def _require_active_project_seat(db: AsyncSession, *, conflict_status: int
         active=await db.scalar(select(func.count(Project.id)).where(Project.status == "active"))
         if active >= entitlement.max_active_projects:
             raise HTTPException(conflict_status, f"Active project limit reached ({active}/{entitlement.max_active_projects}); archive a project or import a matching-major license")
-
-
-def backup_db():
-    """Backup growthmap.db before destructive operations."""
-    try:
-        if os.path.exists("growthmap.db"):
-            shutil.copy2("growthmap.db", "growthmap.db.bak")
-    except Exception:
-        pass  # Don't fail operations due to backup issues
 
 
 def touch_project(project: Project | None):
@@ -471,7 +463,7 @@ async def update_project(project_id: str, data: ProjectUpdate, db: AsyncSession 
 
 @router.delete("/projects/{project_id}", status_code=204)
 async def delete_project(project_id: str, data: ProjectRevisionRequest, db: AsyncSession = Depends(get_db)):
-    backup_db()
+    await backup_configured_database(database_config.DATABASE_URL)
     project = await db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
@@ -610,7 +602,7 @@ async def update_node(node_id: str, data: NodeUpdate, db: AsyncSession = Depends
 
 @router.delete("/nodes/{node_id}", status_code=204)
 async def delete_node(node_id: str, data: EntityRevisionRequest, db: AsyncSession = Depends(get_db)):
-    backup_db()
+    await backup_configured_database(database_config.DATABASE_URL)
     node = await db.get(Node, node_id)
     if not node:
         raise HTTPException(404, "Node not found")
